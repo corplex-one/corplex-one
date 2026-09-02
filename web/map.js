@@ -63,8 +63,15 @@ export function buildData(db, meId){
     // stay so the app finds an empty list rather than undefined.
     loans:[], advances:[], letters:[], exits:[], docs:{}, files:{}, eid:{},
     companyDocs:[], docTypes:[], letterTypes:[], uploadTypes:[], mail:{},
-    partners:[], noGratuity:[], loanThreshold: 0, phones:{},
-    orgTree:{}, revDept:{}, salesExtra:{}, salesSecond:{}
+    orgTree:{}, loanThreshold: 0,
+    // the rules that decide who counts as sales. Empty here reads as "nobody
+    // qualifies", which is why these must come from settings, not a placeholder.
+    revDept:     S.rev_dept     || {},
+    salesExtra:  S.sales_extra  || {},
+    salesSecond: S.sales_second || {},
+    partners:    S.partners     || [],
+    noGratuity:  S.no_gratuity  || [],
+    phones:{}
   };
 
   const active = emp.filter(e => e.active);
@@ -77,6 +84,7 @@ export function buildData(db, meId){
     set(hr.emails, n, e.work_email);
     set(hr.assign, n, e.shift_id);
     set(hr.legalName, n, e.legal_name);
+    set(hr.phones, n, e.work_phone);
     if(e.manager_id) hr.managers[n] = name(e.manager_id);
     else if(e.active) hr.managers[n] = '';
     if(e.birthday) hr.birthdays[n] = {d: e.birthday, sample:false};
@@ -236,7 +244,8 @@ export function buildData(db, meId){
       dept: e.department || '', title: e.title || '',
       doj: longDate(e.doj), email: e.work_email || '', dummy: false
     })),
-    companies: Object.keys(companies), channels: []
+    // the register groups by code — CorpLex, POA, Lex — not by the key
+    companies: Object.values(companies).map(c => c.code), channels: []
   };
 
   // ---------------------------------------------------- pay, if it is there
