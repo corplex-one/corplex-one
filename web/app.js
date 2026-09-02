@@ -444,8 +444,13 @@ function shiftOf(u){
 }
 const shiftText = u => { const s=shiftOf(u); return `${s.label} · ${s.start}–${s.end}`; };
 const shiftMins = u => { const s=shiftOf(u); return mins(s.end)-mins(s.start); };
-function segMins(a){ if(!a||!a.segs) return 0;
-  return a.segs.reduce((s,g)=> s + (g.out ? mins(g.out)-mins(g.in) : 0), 0); }
+function segMins(a, running){ if(!a||!a.segs) return 0;
+  const now = mins(nowHM());
+  return a.segs.reduce((s,g)=>{
+    if(g.out) return s + (mins(g.out) - mins(g.in));
+    if(!running || a.d !== HDATE()) return s;      // an open segment on a past day counts nothing
+    return s + Math.max(0, now - mins(g.in));
+  }, 0); }
 function openSeg(u){ const a=attOf(u, HDATE()); if(!a) return null;
   return a.segs.find(g=>!g.out) || null; }
 const REQTYPES = [
@@ -836,9 +841,9 @@ function vAttend(){
         : !canCheckIn(u) ? `<p style="margin:0;color:var(--ink2);font-size:14.5px">You check in and out under <b>${esc(companyOf(u).name)}</b>. Switch the company at the top to record your own day.</p>`
         : `<div class="ciwrap">
         <div class="cibox">
-          <span class="cik">${open?'Checked in since':'Not checked in'}</span>
-          <b>${open?esc(open.in):'—'}</b>
-          <span class="cin">${open?esc(open.loc):'press a button below to start the day'}</span>
+          <span class="cik">${open?'On the clock':'Not checked in'}</span>
+          ${open ? ciClock(open) : '<b>—</b>'}
+          <span class="cin">${open?esc(open.loc)+' · since '+esc(open.in):'press a button below to start the day'}</span>
         </div>
         <div class="cibtns">
           ${open
@@ -2623,9 +2628,9 @@ function vHome(){
           : LEAVEONLY().some(t=>t.id===st.k)
           ? `<p style="margin:0;color:var(--ink2);font-size:14px">You are on <b>${esc(st.label)}</b> today. Enjoy it.</p>`
           : `<div class="cibox">
-            <span class="cik">${open?'Checked in since':'Not checked in'}</span>
-            <b>${open?esc(open.in):'—'}</b>
-            <span class="cin">${open?esc(open.loc==='Office'?'Office':'Work from home')+(mins(nowHM())>mins(open.in)?' · '+hhmm(mins(nowHM())-mins(open.in))+' so far':''):esc(shiftText(u))}</span>
+            <span class="cik">${open?'On the clock':'Not checked in'}</span>
+            ${open ? ciClock(open) : '<b>—</b>'}
+            <span class="cin">${open?esc(open.loc==='Office'?'Office':'Work from home')+' · since '+esc(open.in):esc(shiftText(u))}</span>
           </div>
           <div class="cistack">
             ${open
@@ -2636,7 +2641,7 @@ function vHome(){
                  <button class="btn ghost" data-ci="Home" type="button">Home</button></div>
                  <span class="cihint">${onNet?'You are on the office network.':'You are not on the office network — use off-site or home.'}</span>`}
           </div>`}
-        ${aTod && aTod.segs.length ? `<p class="hfoot">${aTod.segs.map(g=>`${esc(g.loc)} ${esc(g.in)}${g.out?'–'+esc(g.out):' (open)'}`).join(' &middot; ')} &mdash; <b>${hhmm(segMins(aTod))}</b> today</p>`:''}
+        ${aTod && aTod.segs.length ? `<p class="hfoot">${aTod.segs.map(g=>`${esc(g.loc)} ${esc(g.in)}${g.out?'–'+esc(g.out):' (open)'}`).join(' &middot; ')} &mdash; <b>${hhmm(segMins(aTod, true))}</b> today</p>`:''}
       </div>
     </section>
 
@@ -4578,6 +4583,9 @@ function slipHTML(s, printable){
     </div>
   </article>`;
 }
+function ciClock(open){
+  return `<b class="ciclock" data-since="${esc(open.in)}"><span class="cidot"></span><span class="citime">0:00:00</span></b>`;
+}
 function payrollRowFor(user){
   const rows = DATA.payroll.rows.filter(r=>!r.dummy);
   let hit = rows.find(r=>r.name===user);
@@ -5913,6 +5921,23 @@ function render(){
       pb.textContent='Published to 15 staff ✓'; pb.disabled=true; pb.style.background='var(--good)'; pb.style.borderColor='var(--good)';};
   }
 }
+
+/* the running clock */
+setInterval(() => {
+  document.querySelectorAll('.ciclock[data-since]').forEach(el => {
+    const [h, m] = (el.dataset.since || '').split(':').map(Number);
+    if(isNaN(h) || isNaN(m)) return;
+    const now = new Date();
+    const start = new Date(now); start.setHours(h, m, 0, 0);
+    let s = Math.floor((now - start) / 1000);
+    if(s < 0) s = 0;                                  // checked in after midnight
+    const out = el.querySelector('.citime');
+    const txt = Math.floor(s/3600) + ':'
+      + String(Math.floor(s/60) % 60).padStart(2,'0') + ':'
+      + String(s % 60).padStart(2,'0');
+    if(out && out.textContent !== txt) out.textContent = txt;
+  });
+}, 1000);
 
 /* the save button */
 document.addEventListener('click', async ev => {
