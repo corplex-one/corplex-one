@@ -2358,7 +2358,7 @@ function vProfile(){
         const state2 = !exp ? 'none' : n<0 ? 'expired' : n<=(DOCTYPES().find(x=>x.k===t.k)||{warn:60}).warn ? 'soon' : 'ok';
         return `<tr>
           <td class="nw">${esc(t.label)}${t.need?'':' <span class="pill mute">optional</span>'}</td>
-          <td class="nw">${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <a href="${f.url}" target="_blank" rel="noopener">view</a>`:''}</span>`
+          <td class="nw">${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <button class="lookbtn" data-look="${esc(t.k)}" type="button">View</button>`:''}</span>`
             :'<span style="color:var(--ink3)">not uploaded</span>'}
             <label class="pfup">${state.upBusy===t.k ? 'Uploading…' : f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="${esc(t.k)}" hidden${state.upBusy?' disabled':''}></label></td>
           <td><input class="ff pfdate" type="date" data-docexp="${esc(t.k)}" value="${esc(exp)}"></td>
@@ -5498,11 +5498,22 @@ function renderChrome(){
   const ttl = MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;
   document.getElementById('pageTitle').innerHTML = `${esc(ttl)}${(periodic && !MOBILE())?`<small>${esc(PLABEL[state.period]+' · '+state.year)}</small>`:''}`;
 }
+function tabHash(){ return (state.mode === 'console' ? 'c/' : '') + state.tab; }
+function readHash(){
+  const h = (location.hash || '').replace(/^#/, '');
+  if(!h) return;
+  const con = h.startsWith('c/');
+  const id  = con ? h.slice(2) : h;
+  if(!TABS.some(t => t.id === id)) return;
+  state.tab = id;
+  state.mode = con ? 'console' : 'staff';
+}
 function render(){
   // Letters lives inside Advances & letters now - old links land on the right section
   if(state.tab === 'letters'){ state.tab = 'loans'; state.askTab = 'letters'; }
   if(state.mode==='console' && !canAdmin(state.user)){ state.mode='staff'; state.tab='home'; }
   if(state.mode!=='console' && (TABS.find(t=>t.id===state.tab)||{}).con) state.tab='home';
+  const keepY = window.scrollY;
   applyTheme();
   renderNav(); renderChrome(); renderTabbar();
   const mk = document.querySelector('.rail .mark');
@@ -5533,7 +5544,14 @@ function render(){
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
                   profile:vProfile, docsadmin:vDocsAdmin, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
                   people:vPeople, digest:vDigest, admin:vAdmin}[state.tab])();
-  window.scrollTo({top:0,behavior:'instant'});
+  const here = tabHash();
+  if(state._at !== here){
+    state._at = here;
+    window.scrollTo({top:0, behavior:'instant'});
+    if(location.hash.slice(1) !== here) history.replaceState(null, '', '#' + here);
+  } else if(window.scrollY !== keepY){
+    window.scrollTo({top:keepY, behavior:'instant'});
+  }
   drawCharts();
   document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });
   document.querySelectorAll('[data-dexp]').forEach(el=>el.onchange=()=>{
@@ -5542,6 +5560,7 @@ function render(){
     const rec = D[n] || (D[n] = {});
     if(el.value) rec[k] = el.value; else delete rec[k];
     if(!Object.keys(rec).length) delete D[n];
+    window.__db.saveDocDateFor(n, k, el.value);
     render();
   });
   document.querySelectorAll('[data-deid]').forEach(el=>el.onchange=()=>{
@@ -5677,7 +5696,8 @@ function render(){
     state.pfSaved = ''; render(); });
   document.querySelectorAll('[data-docexp]').forEach(el=>el.onchange=()=>{
     const d = HR().docs[state.user] || (HR().docs[state.user]={});
-    d[el.dataset.docexp] = el.value; d.sample = false; touchProf(); render(); });
+    d[el.dataset.docexp] = el.value;
+    window.__db.saveDocDate(el.dataset.docexp, el.value); d.sample = false; touchProf(); render(); });
   document.querySelectorAll('[data-doc]').forEach(el=>el.onchange=()=>{
     const f = el.files && el.files[0]; if(!f) return;
     if(f.size > 6*1024*1024){ state.pfErr = `${f.name} is ${kb(f.size)} — too big. Keep it under about 5 MB.`; render(); return; }
@@ -5922,6 +5942,38 @@ function render(){
   }
 }
 
+/* looking at a document without leaving the page */
+function showDoc(kind){
+  const f = ((HR().files || {})[state.user] || {})[kind];
+  if(!f || !f.url) return;
+  const label = (UPLOADS().find(t => t.k === kind) || {label: kind}).label;
+  const pdf = /pdf/i.test(f.name || '');
+  const box = document.getElementById('lookWrap');
+  box.innerHTML = '<div class="lookbg" data-lookclose="1"></div>'
+    + '<div class="look" role="dialog" aria-modal="true">'
+    +   '<header><b>' + esc(label) + '</b><span>' + esc(f.name) + '</span>'
+    +     '<a class="btn ghost" href="' + f.url + '" download="' + esc(f.name) + '">Download</a>'
+    +     '<button class="btn ghost" data-lookclose="1" type="button">Close</button></header>'
+    +   '<div class="lookbody">'
+    +     (pdf ? '<iframe src="' + f.url + '#toolbar=0" title="' + esc(label) + '"></iframe>'
+                : '<img src="' + f.url + '" alt="' + esc(label) + '">')
+    +   '</div></div>';
+  box.classList.remove('hidden');
+  box.querySelectorAll('[data-lookclose]').forEach(b => b.onclick = hideDoc);
+  document.body.style.overflow = 'hidden';
+}
+function hideDoc(){
+  const box = document.getElementById('lookWrap');
+  if(!box) return;
+  box.classList.add('hidden'); box.innerHTML = '';
+  document.body.style.overflow = '';
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest && ev.target.closest('[data-look]');
+  if(b) showDoc(b.dataset.look);
+});
+document.addEventListener('keydown', ev => { if(ev.key === 'Escape') hideDoc(); });
+
 /* the running clock */
 setInterval(() => {
   document.querySelectorAll('.ciclock[data-since]').forEach(el => {
@@ -5973,6 +6025,8 @@ document.querySelectorAll('#themeSeg button').forEach(b=>b.onclick=()=>setTheme(
 })();
 document.getElementById('signout').onclick = ()=>window.__db.signOut();
 window.render = render;
+window.addEventListener('hashchange', () => { readHash(); render(); });
+readHash();
 render();
 
 let _rt, _wasPhone = MOBILE();

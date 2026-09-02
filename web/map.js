@@ -118,7 +118,12 @@ export function buildData(db, meId){
       updated: p.updated_at ? String(p.updated_at).slice(0,10) : ''
     });
     if(p.emirates_id) hr.eid[n] = p.emirates_id;
-    if(p.eid_expiry)  hr.docs[n] = {eid: String(p.eid_expiry).slice(0,10)};
+  });
+
+  // when each document runs out — one table, every kind
+  (db.document_dates || []).forEach(d => {
+    const n = name(d.employee_id); if(!n || !d.expires_on) return;
+    (hr.docs[n] || (hr.docs[n] = {}))[d.kind] = String(d.expires_on).slice(0,10);
   });
 
   // ------------------------------------------------------------------ leave

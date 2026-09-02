@@ -55,6 +55,7 @@ const TABLES = {
   loans:            ['loans'],
   letters:          ['letters'],
   employee_files:   ['employee_files'],
+  document_dates:   ['document_dates'],
   company_docs:     ['company_docs'],
   exits:            ['exits'],
   tickets:          ['ticket_entitlements'],
@@ -383,6 +384,31 @@ window.__db = {
       await signPhotos(window.__DATA);
       return path;
     }catch(e){ oops(e, file.name); return null; }
+  },
+
+  async saveDocDate(kind, value){
+    try{
+      const {error} = value
+        ? await sb.from('document_dates').upsert(
+            {employee_id: ME.id, kind, expires_on: value, updated_at: new Date().toISOString()},
+            {onConflict: 'employee_id,kind'})
+        : await sb.from('document_dates').delete().eq('employee_id', ME.id).eq('kind', kind);
+      if(error) throw error;
+    }catch(e){ oops(e, 'That expiry date'); await reload(); }
+  },
+
+  // accounts recording an expiry against somebody else
+  async saveDocDateFor(who, kind, value){
+    const id  = (DB.employees.find(e => e.full_name === who) || {}).id;
+    if(!id) return;
+    try{
+      const {error} = value
+        ? await sb.from('document_dates').upsert(
+            {employee_id: id, kind, expires_on: value, updated_at: new Date().toISOString()},
+            {onConflict: 'employee_id,kind'})
+        : await sb.from('document_dates').delete().eq('employee_id', id).eq('kind', kind);
+      if(error) throw error;
+    }catch(e){ oops(e, 'That expiry date'); await reload(); }
   },
 
   async signOut(){ await sb.auth.signOut(); location.reload(); }
