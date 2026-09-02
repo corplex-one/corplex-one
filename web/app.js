@@ -3518,13 +3518,17 @@ function vTools(){
     <div class="pad" style="display:flex;flex-direction:column;gap:16px">
       <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
         <div class="field" style="margin:0;min-width:220px">
-          <label for="cfInv">Invoice value including VAT</label>
+          <label for="cfInv">Service fee in AED, including VAT</label>
           <input id="cfInv" class="num" type="number" value="1316.25" step="0.01">
         </div>
         <div class="field" style="margin:0">
-          <label for="cfCur">Currency</label>
+          <label for="cfCur">Client pays in</label>
           <select id="cfCur" style="width:auto"><option value="AED">AED</option><option value="USD">USD</option></select>
         </div>
+        <div class="field fxf" style="margin:0"><label for="cfFxS">Stripe rate</label>
+          <input id="cfFxS" class="num" type="number" value="3.63" step="0.0001"></div>
+        <div class="field fxf" style="margin:0"><label for="cfFxP">POS rate</label>
+          <input id="cfFxP" class="num" type="number" value="3.65" step="0.0001"></div>
         <p id="cfFx" style="margin:0 0 4px;color:var(--ink3);font-size:12.5px"></p>
       </div>
       <div id="cfOut"></div>
@@ -3537,16 +3541,23 @@ function vTools(){
 function calcCard(){
   const raw = parseFloat(document.getElementById('cfInv').value)||0;
   const cur = document.getElementById('cfCur').value;
-  const invOf = g => cur==='USD' ? raw*FX[g] : raw;
+  const fxEl = {stripe: document.getElementById('cfFxS'), pos: document.getElementById('cfFxP')};
+  const rate = g => { const v = parseFloat(fxEl[g] && fxEl[g].value); return v > 0 ? v : FX[g]; };
+  document.querySelectorAll('.fxf').forEach(el => el.classList.toggle('hidden', cur !== 'USD'));
+
+  // the amount typed in is AED; the client's currency divides it
+  const invOf = g => cur === 'USD' ? raw / rate(g) : raw;
 
   document.getElementById('cfFx').innerHTML = cur==='USD'
-    ? `USD ${money(raw,2)} converted at <b>3.63</b> for Stripe (AED ${money(invOf('stripe'),2)}) and <b>3.65</b> for the POS machine (AED ${money(invOf('pos'),2)}).`
+    ? `AED ${money(raw,2)} is <b>USD ${money(invOf('stripe'),2)}</b> on Stripe at ${rate('stripe')}, and <b>USD ${money(invOf('pos'),2)}</b> on the POS machine at ${rate('pos')}. Every figure below is in USD.`
     : '';
 
-  const rows = CHANNELS.map(ch => ({ch, r: cardCalc(invOf(ch.group), ch)}));
+  const rows = CHANNELS.map(ch => ({ch, r: cardCalc(invOf(ch.group),
+    cur === 'USD' ? Object.assign({}, ch, {fixed: ch.fixed / rate(ch.group)}) : ch)}));
   const byKind = k => rows.filter(x=>x.ch.kind===k).sort((a,b)=>a.r.cost-b.r.cost);
   const best = {}; ['International','Domestic'].forEach(k=>{ const s=byKind(k); best[k]={win:s[0], lose:s[1]}; });
 
+  const CUR = cur;
   const block = ({ch,r}) => {
     const isPos = ch.group==='pos';
     const isBest = best[ch.kind] && best[ch.kind].win.ch.id===ch.id;
@@ -3557,10 +3568,10 @@ function calcCard(){
         ${isBest?'<span class="pill" style="background:rgba(255,255,255,.22);color:#fff"><span class="dt"></span>Cheaper for this card type</span>':''}
       </div>
       <table>
-        <thead><tr><th></th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
+        <thead><tr><th>${esc(CUR)}</th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
         <tbody>
           <tr><td>Service fee</td><td></td><td></td><td class="n r">${money(r.inv,2)}</td></tr>
-          <tr><td>${esc(ch.line)}</td>
+          <tr><td>${esc(cur === 'USD' && ch.fixed ? ch.line.replace(/\+ 2 AED/, '+ ' + money(2/rate(ch.group), 2) + ' USD') : ch.line)}</td>
               <td class="n r">${isPos?money(r.amountCol,2):''}</td>
               <td class="n r">${isPos?money(r.vatCol,2):''}</td>
               <td class="n r">${money(isPos ? r.charges+r.vat : r.charges,2)}</td></tr>
@@ -5821,7 +5832,7 @@ function render(){
   }
   if(state.tab==='tools'){
     if(document.getElementById('cfInv')){
-      ['cfInv','cfCur'].forEach(id=>{const el=document.getElementById(id);
+      ['cfInv','cfCur','cfFxS','cfFxP'].forEach(id=>{const el=document.getElementById(id); if(!el) return;
         el.addEventListener('input',calcCard); el.addEventListener('change',calcCard);});
       calcCard();
     }

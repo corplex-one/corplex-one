@@ -1063,6 +1063,8 @@ select:disabled,select option:disabled{color:var(--ink3)}
 /* ---------- the running clock ----------
    b.ciclock, not .ciclock: the shell already styles a b inside .cibox, and a
    bare class loses to it on specificity. */
+.fxf{width:104px}
+.fxf.hidden{display:none}
 .lookbtn{border:1px solid var(--line);background:var(--panel);color:var(--ink2);
   border-radius:7px;padding:2px 9px;font:inherit;font-size:12px;cursor:pointer}
 .lookbtn:hover{border-color:var(--accent);color:var(--accent2)}
@@ -1197,7 +1199,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
 <div class="tip" id="tip"></div>
 <div id="lookWrap" class="hidden"></div>
 
-<script src="config.js?v=202609021558"></script>
-<script type="module" src="boot.js?v=202609021558"></script>
+<script src="config.js?v=202609021624"></script>
+<script type="module" src="boot.js?v=202609021624"></script>
 </body>
 </html>
