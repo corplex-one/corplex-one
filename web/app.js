@@ -106,6 +106,7 @@ const state = {
   revForm: null, revSent: '', noteDone: [], who: null, peopleQ: '', askTab: 'loans',
   askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: 'all', invRaw: null, invPrint: false,
   payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
+  pfDirty: null, pfSaved: '',
   payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',
   payInternal: false,
   payFilter: {ch:'all', visa:'all', text:''},
@@ -2355,11 +2356,17 @@ function vProfile(){
           <td class="nw">${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <a href="${f.url}" target="_blank" rel="noopener">view</a>`:''}</span>`
             :'<span style="color:var(--ink3)">not uploaded</span>'}
             <label class="pfup">${f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="${esc(t.k)}" hidden></label></td>
-          <td><input class="ff pfdate" type="date" data-exp="${esc(t.k)}" value="${esc(exp)}"></td>
+          <td><input class="ff pfdate" type="date" data-docexp="${esc(t.k)}" value="${esc(exp)}"></td>
           <td class="nw" style="color:var(--ink2)">${exp?esc(inWord(n)):'—'}</td>
           <td>${exp?DOCPILL(state2):'<span class="pill mute">Nothing yet</span>'}</td></tr>`;
       }).join('')}
       </tbody></table></div>
+    <div class="pfsave${state.pfDirty ? ' on' : state.pfSaved ? ' just' : ''}">
+      <span>${state.pfDirty
+        ? Object.keys(state.pfDirty).length + ' change' + (Object.keys(state.pfDirty).length===1?'':'s') + ' not saved yet'
+        : 'Your changes are saved'}</span>
+      <button class="btn" id="pfSave" type="button"${state.pfDirty ? '' : ' disabled'}>Save changes</button>
+    </div>
     <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. <b>Only your Emirates ID number is held, by accounts, because payroll and insurance need it. Your passport and visa numbers are not typed or stored anywhere</b> &mdash; the copy is the record, and only the expiry date is used, to warn accounts before it runs out. Your documents are visible to you and to accounts, nobody else.</p>
   </section>`;
 }
@@ -5607,7 +5614,8 @@ function render(){
     let tm; el.oninput=()=>{ clearTimeout(tm); tm=setTimeout(()=>{
       const p=PROF(state.user); if(!p) return;
       p[el.dataset.pf]=el.value; touchProf();
-      window.__db.saveProfile(el.dataset.pf, el.value); render();
+      state.pfDirty = Object.assign(state.pfDirty||{}, {[el.dataset.pf]: el.value});
+      state.pfSaved = ''; render();
       const e2=document.querySelector(`[data-pf="${el.dataset.pf}"]`);
       if(e2){ e2.focus(); try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(_){}}
     }, 320); };
@@ -5652,12 +5660,16 @@ function render(){
     document.querySelectorAll('[data-eid]').forEach(el=>{ el.textContent = on ? maskEID(el.dataset.eid) : el.dataset.eid; });
     ea.dataset.on = on ? '' : '1'; ea.textContent = on ? 'Show all' : 'Hide all'; };
   const qEl = document.getElementById('pf_quiet');
-  if(qEl) qEl.onchange = ()=>{ const p=PROF(state.user); if(p){ p.quietBday = qEl.checked; p.updated=HDATE(); } render(); };
+  if(qEl) qEl.onchange = ()=>{ const p=PROF(state.user); if(p){ p.quietBday = qEl.checked; p.updated=HDATE(); }
+    state.pfDirty = Object.assign(state.pfDirty||{}, {quietBday: qEl.checked});
+    state.pfSaved = ''; render(); };
   document.querySelectorAll('[data-pfs]').forEach(el=>el.onchange=()=>{
-    const p=PROF(state.user); if(!p) return; p[el.dataset.pfs]=el.value; p.updated=HDATE(); render(); });
-  document.querySelectorAll('[data-exp]').forEach(el=>el.onchange=()=>{
+    const p=PROF(state.user); if(!p) return; p[el.dataset.pfs]=el.value; p.updated=HDATE();
+    state.pfDirty = Object.assign(state.pfDirty||{}, {[el.dataset.pfs]: el.value});
+    state.pfSaved = ''; render(); });
+  document.querySelectorAll('[data-docexp]').forEach(el=>el.onchange=()=>{
     const d = HR().docs[state.user] || (HR().docs[state.user]={});
-    d[el.dataset.exp] = el.value; d.sample = false; touchProf(); render(); });
+    d[el.dataset.docexp] = el.value; d.sample = false; touchProf(); render(); });
   document.querySelectorAll('[data-doc]').forEach(el=>el.onchange=()=>{
     const f = el.files && el.files[0]; if(!f) return;
     if(f.size > 6*1024*1024){ state.pfErr = `${f.name} is ${kb(f.size)} — too big. Keep it under about 5 MB.`; render(); return; }
@@ -5900,6 +5912,28 @@ function render(){
       pb.textContent='Published to 15 staff ✓'; pb.disabled=true; pb.style.background='var(--good)'; pb.style.borderColor='var(--good)';};
   }
 }
+
+/* the save button */
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest && ev.target.closest('#pfSave');
+  if(!b || !state.pfDirty) return;
+  const changes = state.pfDirty;
+  b.disabled = true; b.textContent = 'Saving…';
+  const ok = await window.__db.saveProfileAll(changes);
+  if(ok){
+    state.pfDirty = null;
+    state.pfSaved = 'Saved';
+    clearTimeout(window.__pfT);
+    window.__pfT = setTimeout(() => { state.pfSaved = ''; render(); }, 4000);
+  }
+  render();
+});
+
+// leaving with something unsaved should cost a click, not a shrug
+window.addEventListener('beforeunload', ev => {
+  if(!state.pfDirty) return;
+  ev.preventDefault(); ev.returnValue = '';
+});
 
 /* theme + login */
 function setTheme(t){

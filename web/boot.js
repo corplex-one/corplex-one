@@ -202,12 +202,37 @@ window.__db = {
   // The four fields anyone may change about themselves live on the staff row;
   // everything else personal lives in the private table. The database enforces
   // that split — this only routes to the right one.
-  SELF: new Set(['callMe','photo','quietBday','homeCountry']),
+  SELF: new Set(['callMe','photo','quietBday','homeCountry']),   // the staff row; the rest is private
   COL:  {callMe:'call_me', photo:'photo_url', quietBday:'quiet_bday', homeCountry:'home_country',
          mobile:'mobile', pemail:'personal_email', uaeAddr:'uae_address',
          homeAddr:'home_address', homeContact:'home_contact', homePhone:'home_phone',
          ecName:'ec_name', ecRel:'ec_relation', ecPhone:'ec_phone', ecAlt:'ec_alt',
          gender:'gender', marital:'marital'},
+
+  // Everything the person changed, in one go, when they press Save. The two
+  // tables are split by who may read them, so a save may touch either or both.
+  async saveProfileAll(changes){
+    const mine = {}, priv = {};
+    for(const [f, v] of Object.entries(changes || {})){
+      const col = this.COL[f]; if(!col) continue;
+      (this.SELF.has(f) ? mine : priv)[col] = v;
+    }
+    try{
+      if(Object.keys(mine).length){
+        const {error} = await sb.from('employees').update(mine).eq('id', ME.id);
+        if(error) throw error;
+      }
+      if(Object.keys(priv).length){
+        const {error} = await sb.from('employee_private')
+          .upsert(Object.assign({employee_id: ME.id}, priv), {onConflict: 'employee_id'});
+        if(error) throw error;
+      }
+      DB = await loadAll();
+      const d = buildData(DB, ME.id);
+      Object.keys(d).forEach(k => { window.__DATA[k] = d[k]; });
+      return true;
+    }catch(e){ oops(e, 'Your profile'); return false; }
+  },
 
   async saveProfile(field, value){
     const col = this.COL[field]; if(!col) return;

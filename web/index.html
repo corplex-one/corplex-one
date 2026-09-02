@@ -1059,6 +1059,25 @@ select:disabled,select option:disabled{color:var(--ink3)}
 .lgsmall a:hover{color:var(--accent2)}
 #lgGo[disabled]{opacity:.6;cursor:default}
 .toast.bad{background:var(--bad);color:#fff}
+
+/* ---------- saving your profile ----------
+   It follows you down the page: a Save button you have to go looking for is
+   a Save button people do not press. */
+.pfsave{position:fixed;left:50%;bottom:20px;transform:translate(-50%,140%);
+  display:flex;align-items:center;gap:18px;padding:12px 14px 12px 20px;
+  background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  box-shadow:0 2px 6px rgba(30,21,35,.06), 0 16px 40px -18px rgba(30,21,35,.45);
+  z-index:60;transition:transform .22s ease, opacity .22s ease;opacity:0;
+  pointer-events:none;max-width:calc(100vw - 32px)}
+.pfsave.on,.pfsave.just{transform:translate(-50%,0);opacity:1;pointer-events:auto}
+.pfsave.on{border-color:var(--accent)}
+.pfsave span{font-size:13.5px;color:var(--ink2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.pfsave.on span{color:var(--ink);font-weight:600}
+.pfsave.just span{color:var(--good);font-weight:600}
+.pfsave button[disabled]{display:none}
+@media(prefers-reduced-motion:reduce){ .pfsave{transition:none} }
+@media(max-width:720px){ .pfsave{bottom:78px} }   /* clear of the tab bar */
 </style>
 
 <div id="login" class="hidden">
@@ -1138,7 +1157,7 @@ select:disabled,select option:disabled{color:var(--ink3)}
   <div class="sheet" id="moreSheet" role="dialog" aria-label="More"></div></div>
 <div class="tip" id="tip"></div>
 
-<script src="config.js?v=202609021511"></script>
-<script type="module" src="boot.js?v=202609021511"></script>
+<script src="config.js?v=202609021527"></script>
+<script type="module" src="boot.js?v=202609021527"></script>
 </body>
 </html>
