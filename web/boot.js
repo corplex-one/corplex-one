@@ -5,9 +5,17 @@
  * are. This is the part that makes the app pleasant; that part makes it safe.
  */
 import {createClient} from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-import {buildData}    from './map.js';
 
 const CFG = window.CORPLEX_ONE || {};
+
+// map.js was imported by a plain name while _headers tells the browser to keep
+// it for a year — so once a browser had a copy it could never be given a new
+// one, however many times the file was deployed. app.js carried a build number
+// in its address and map.js did not, which is the worst of both: a new app
+// asking an old mapper for fields it has never heard of. The address carries
+// the build now, like everything else.
+const BUILD = window.__BUILD || CFG.build || '1';
+const {buildData} = await import('./map.js?v=' + BUILD);
 const sb = createClient(CFG.url, CFG.key, {
   auth: {persistSession: true, autoRefreshToken: true, detectSessionInUrl: true}
 });

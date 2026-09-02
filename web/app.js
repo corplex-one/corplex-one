@@ -438,6 +438,12 @@ const attOf = (u, ds) => HR().attendance.find(a=>a.who===u && a.d===ds);
 const SHIFTS = () => HR().shifts || [];
 const tracksAtt = u => !(HR().noAttendance||[]).includes(u);
 const WHERE = () => window.__WHERE || {};
+// A screen must never go blank because one settings block is missing. If an
+// older mapper is in the browser's cache these come back undefined, and a
+// thrown error looks exactly like a menu item that does nothing.
+const OFFICE = () => HR().office || {ips:[], geo:{}, set:false};
+const REG = () => HR().regular ||
+  {max:2, graceDays:5, rows:[], mine:[], left:2, from:'', used:{}};
 const officeRules = () => !!WHERE().rules_on;
 const onOfficeNet = () => WHERE().ip_ok === true;
 
@@ -5228,7 +5234,7 @@ function vDigest(){
 function vAdmin(){
   const staff = USERS.map(u=>u.name).concat(FORMER);
   const upl = canUpload(state.user);
-  const W = WHERE(), O = HR().office;
+  const W = WHERE(), O = OFFICE();
   return `
   <section class="panel">
     <header><h3>Where the office is</h3>
@@ -5765,10 +5771,11 @@ function render(){
       const made = await window.__db.fileRegularization(
         {date:f.d, in:f.in||null, out:f.out||null, reason:f.reason.trim()});
       if(made){
-        HR().regular.rows.unshift({id:made.ref||made.id, uid:made.id, who:state.user, d:f.d,
+        const RR = HR().regular || (HR().regular = REG());
+        RR.rows.unshift({id:made.ref||made.id, uid:made.id, who:state.user, d:f.d,
           in:f.in||'', out:f.out||'', reason:f.reason.trim(), status:'Pending',
           by:'', note:'', sent:HDATE(), decided:''});
-        HR().regular.mine = HR().regular.rows.filter(r=>r.who===state.user);
+        RR.mine = RR.rows.filter(r=>r.who===state.user);
         state.rgForm={d:'',in:'',out:'',reason:''}; state.rgSent=true;
       }
       render(); };
@@ -6247,7 +6254,7 @@ function whereMark(g){
 function regularDays(u){
   // Days this month, and the tail of last month while it is still open, with
   // something missing. A weekend or a holiday has nothing to miss.
-  const R = HR().regular, out = [], today = HDATE();
+  const R = REG(), out = [], today = HDATE();
   const from = R.from || today.slice(0,8) + '01';
   const filed = new Set(R.mine.filter(r => ['Pending','Approved'].includes(r.status)).map(r => r.d));
   for(let d = new Date(from + 'T00:00:00Z'); ; d.setUTCDate(d.getUTCDate() + 1)){
@@ -6266,7 +6273,7 @@ function regularDays(u){
 }
 
 function regularPanel(u){
-  const R = HR().regular, missing = regularDays(u), mine = R.mine;
+  const R = REG(), missing = regularDays(u), mine = R.mine;
   if(!missing.length && !mine.length) return '';
   const f = state.rgForm || (state.rgForm = {d:'', in:'', out:'', reason:''});
   const none = R.left <= 0;
@@ -6319,7 +6326,7 @@ function adminName(){
 
 /* --- the console: every request, and who is at their limit --- */
 function vRegular(){
-  const R = HR().regular;
+  const R = REG();
   const rows = R.rows, pend = rows.filter(r => r.status === 'Pending');
   const month = HDATE().slice(0,7);
   const approvedThis = rows.filter(r => r.status === 'Approved' && r.d.slice(0,7) === month);
