@@ -106,7 +106,7 @@ const state = {
   revForm: null, revSent: '', noteDone: [], who: null, peopleQ: '', askTab: 'loans',
   askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: 'all', invRaw: null, invPrint: false,
   payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
-  pfDirty: null, pfSaved: '',
+  pfDirty: null, pfSaved: '', upBusy: null,
   payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',
   payInternal: false,
   payFilter: {ch:'all', visa:'all', text:''},
@@ -2289,7 +2289,7 @@ function vProfile(){
     <div class="pfhead">
       <div class="pfpic">
         ${p.photo ? `<img src="${p.photo.url}" alt="${nm(u)}">` : `<span>${esc(NM(u).split(' ').map(x=>x[0]).slice(0,2).join(''))}</span>`}
-        <label class="pfpicbtn">${p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden></label>
+        <label class="pfpicbtn">${state.upBusy==='photo' ? 'Uploading…' : p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden${state.upBusy?' disabled':''}></label>
       </div>
       <div class="pfwho">
         <h2>${nm(u)}</h2>${goesBy(u)?`<p class="pfleg">${esc(legalOf(u))} on record &mdash; payslips and letters use this</p>`:''}
@@ -2355,7 +2355,7 @@ function vProfile(){
           <td class="nw">${esc(t.label)}${t.need?'':' <span class="pill mute">optional</span>'}</td>
           <td class="nw">${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <a href="${f.url}" target="_blank" rel="noopener">view</a>`:''}</span>`
             :'<span style="color:var(--ink3)">not uploaded</span>'}
-            <label class="pfup">${f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="${esc(t.k)}" hidden></label></td>
+            <label class="pfup">${state.upBusy===t.k ? 'Uploading…' : f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="${esc(t.k)}" hidden${state.upBusy?' disabled':''}></label></td>
           <td><input class="ff pfdate" type="date" data-docexp="${esc(t.k)}" value="${esc(exp)}"></td>
           <td class="nw" style="color:var(--ink2)">${exp?esc(inWord(n)):'—'}</td>
           <td>${exp?DOCPILL(state2):'<span class="pill mute">Nothing yet</span>'}</td></tr>`;
@@ -5673,19 +5673,20 @@ function render(){
   document.querySelectorAll('[data-doc]').forEach(el=>el.onchange=()=>{
     const f = el.files && el.files[0]; if(!f) return;
     if(f.size > 6*1024*1024){ state.pfErr = `${f.name} is ${kb(f.size)} — too big. Keep it under about 5 MB.`; render(); return; }
-    const rd = new FileReader();
-    rd.onload = () => {
-      const files = HR().files || (HR().files={});
-      const mine = files[state.user] || (files[state.user]={});
-      mine[el.dataset.doc] = {name:f.name, size:f.size, at:HDATE(), url:rd.result};
-      state.pfErr=''; touchProf(); render();
-    };
-    rd.readAsDataURL(f); });
+    state.pfErr = ''; state.upBusy = el.dataset.doc; render();
+    window.__db.uploadDoc(el.dataset.doc, f).then(path => {
+      state.upBusy = null;
+      if(!path) state.pfErr = `${f.name} did not upload. Try again, or tell accounts.`;
+      render();
+    }); });
   document.querySelectorAll('[data-photo]').forEach(el=>el.onchange=()=>{
     const f = el.files && el.files[0]; if(!f) return;
-    const rd = new FileReader();
-    rd.onload = () => { const p=PROF(state.user); if(p){ p.photo={name:f.name, size:f.size, url:rd.result}; touchProf(); } render(); };
-    rd.readAsDataURL(f); });
+    state.upBusy = 'photo'; render();
+    window.__db.uploadPhoto(f).then(path => {
+      state.upBusy = null;
+      if(!path) state.pfErr = `${f.name} did not upload. Try again, or tell accounts.`;
+      render();
+    }); });
   const bindF = (id, obj, key, after) => { const el=document.getElementById(id); if(!el) return;
     const h=()=>{ state[obj][key]=el.value; if(after) after(); render();
       const e2=document.getElementById(id); if(e2 && el.tagName==='INPUT' && el.type!=='date'){ e2.focus(); try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(_){} } };

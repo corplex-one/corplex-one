@@ -99,7 +99,8 @@ export function buildData(db, meId){
     // database only sends it to them.
     hr.profile[n] = {
       homeCountry: e.home_country || '',
-      photo: e.photo_url || null,
+      // a path into the photos bucket; the link is signed when the page loads
+      photo: e.photo_url ? {path: e.photo_url, url: '', name: 'photo'} : null,
       quietBday: !!e.quiet_bday,
       callMe: e.call_me || ''
     };
@@ -332,8 +333,12 @@ export function buildData(db, meId){
 
   (db.employee_files || []).forEach(f => {
     const n = name(f.employee_id); if(!n) return;
-    (hr.files[n] || (hr.files[n] = {}))[f.kind] =
-      {name: f.file_name, size: Number(f.size_bytes), at: String(f.uploaded_at).slice(0,10)};
+    (hr.files[n] || (hr.files[n] = {}))[f.kind] = {
+      name: f.file_name, size: Number(f.size_bytes),
+      at: String(f.uploaded_at).slice(0,10),
+      path: f.storage_path || '',   // the link is signed when the page loads
+      url: ''
+    };
   });
 
   hr.companyDocs = (db.company_docs || []).map(d => ({

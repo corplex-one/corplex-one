@@ -91,6 +91,37 @@ async function loadAll(){
 let ME = null;          // my employees row
 let DB  = null;         // the rows the app was built from
 
+/* A document in a private bucket needs a signed link to be opened. One batch
+   call covers everything the person is allowed to see, and the links last an
+   hour, which is about as long as anyone stays on the page. */
+async function signDocuments(DATA){
+  const paths = [];
+  Object.values(DATA.hr.files || {}).forEach(kinds =>
+    Object.values(kinds || {}).forEach(f => { if(f.path) paths.push(f.path); }));
+  if(!paths.length) return;
+  const {data, error} = await sb.storage.from('documents').createSignedUrls(paths, 3600);
+  if(!error && data){
+    const byPath = Object.fromEntries(data.map(d => [d.path, d.signedUrl]));
+    Object.values(DATA.hr.files || {}).forEach(kinds =>
+      Object.values(kinds || {}).forEach(f => { if(f.path && byPath[f.path]) f.url = byPath[f.path]; }));
+  }
+}
+
+/* Everyone's photograph, because the directory shows them all. */
+async function signPhotos(DATA){
+  const want = [];
+  Object.values(DATA.hr.profile || {}).forEach(p => {
+    if(p && p.photo && p.photo.path) want.push(p.photo.path);
+  });
+  if(!want.length) return;
+  const {data, error} = await sb.storage.from('photos').createSignedUrls(want, 3600);
+  if(error || !data) return;
+  const byPath = Object.fromEntries(data.map(d => [d.path, d.signedUrl]));
+  Object.values(DATA.hr.profile || {}).forEach(p => {
+    if(p && p.photo && byPath[p.photo.path]) p.photo.url = byPath[p.photo.path];
+  });
+}
+
 async function start(session){
   const {data: mine, error} = await sb.from('employees')
     .select('*').eq('auth_user_id', session.user.id).maybeSingle();
@@ -109,6 +140,8 @@ async function start(session){
   DB = await loadAll();
   const DATA = buildData(DB, ME.id);
   DATA._session = {email: session.user.email, employeeId: ME.id};
+  await signDocuments(DATA);
+  await signPhotos(DATA);
   window.__DATA = DATA;
   window.__ME   = ME.full_name;
   window.__ROLES = DATA._roles[ME.full_name] || ['staff'];
@@ -292,6 +325,64 @@ window.__db = {
       });
       if(error) throw error;
     }catch(e){ oops(e, 'Your announcement'); await reload(); }
+  },
+
+  // ---- documents ------------------------------------------------------
+  // The file goes to a private bucket under the person's own id; the row is
+  // the record of it. Both, or neither — a row with no file behind it is how
+  // this went wrong the first time.
+  async uploadDoc(kind, file){
+    const MAX = 6 * 1024 * 1024;
+    if(file.size > MAX){
+      oops(new Error('Keep it under about 5 MB.'), `${file.name}`);
+      return null;
+    }
+    const ext  = (file.name.match(/\.[a-z0-9]+$/i) || ['.bin'])[0].toLowerCase();
+    const path = `${ME.id}/${kind}${ext}`;
+    try{
+      const {error: upErr} = await sb.storage.from('documents')
+        .upload(path, file, {upsert: true, contentType: file.type || undefined});
+      if(upErr) throw upErr;
+
+      // a replacement with a different extension leaves the old file behind
+      const {data: had} = await sb.from('employee_files')
+        .select('storage_path').eq('employee_id', ME.id).eq('kind', kind).maybeSingle();
+      if(had && had.storage_path && had.storage_path !== path)
+        await sb.storage.from('documents').remove([had.storage_path]);
+
+      const {error} = await sb.from('employee_files').upsert({
+        employee_id: ME.id, kind, file_name: file.name, size_bytes: file.size,
+        mime_type: file.type || null, storage_path: path,
+        uploaded_at: new Date().toISOString().slice(0,10)
+      }, {onConflict: 'employee_id,kind'});
+      if(error) throw error;
+
+      DB = await loadAll();
+      const d = buildData(DB, ME.id);
+      Object.keys(d).forEach(k => { window.__DATA[k] = d[k]; });
+      await signDocuments(window.__DATA);
+      return path;
+    }catch(e){ oops(e, `${file.name}`); return null; }
+  },
+
+  async uploadPhoto(file){
+    if(file.size > 3 * 1024 * 1024){
+      oops(new Error('Keep it under about 3 MB.'), file.name); return null;
+    }
+    const ext  = (file.name.match(/\.[a-z0-9]+$/i) || ['.jpg'])[0].toLowerCase();
+    const path = `${ME.id}/photo${ext}`;
+    try{
+      const {error: upErr} = await sb.storage.from('photos')
+        .upload(path, file, {upsert: true, contentType: file.type || undefined});
+      if(upErr) throw upErr;
+      const {error} = await sb.from('employees').update({photo_url: path}).eq('id', ME.id);
+      if(error) throw error;
+      DB = await loadAll();
+      const d = buildData(DB, ME.id);
+      Object.keys(d).forEach(k => { window.__DATA[k] = d[k]; });
+      await signPhotos(window.__DATA);
+      return path;
+    }catch(e){ oops(e, file.name); return null; }
   },
 
   async signOut(){ await sb.auth.signOut(); location.reload(); }
