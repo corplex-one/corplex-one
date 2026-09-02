@@ -2237,22 +2237,24 @@ const UPLOADS = () => HR().uploadTypes || [];
 const fileOf = (u,k) => ((HR().files||{})[u]||{})[k] || null;
 const kb = n => n>=1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)+' KB';
 const PICKS = {gender:['Female','Male'], marital:['Single','Married']};
+/* row groups the fields into lines; the numbers are what the page reads across */
 const PFIELDS = [
-  {k:'callMe',      label:'Name you go by',         group:'you',   req:false, ph:'Leave blank to use your full name'},
-  {k:'bday',        label:'Birthday (day and month)', group:'you', req:true,  bday:true},
-  {k:'gender',      label:'Gender',                 group:'you',   req:true,  pick:'gender'},
-  {k:'marital',     label:'Marital status',         group:'you',   req:true,  pick:'marital'},
-  {k:'mobile',      label:'Mobile',                 group:'you',   req:true,  ph:'+971 50 000 0000'},
-  {k:'pemail',      label:'Personal email',         group:'you',   req:true,  ph:'you@example.com'},
-  {k:'uaeAddr',     label:'Address in the UAE',     group:'you',   req:true,  ph:'Flat, building, area, emirate'},
-  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  ph:'Country'},
-  {k:'homeAddr',    label:'Permanent address',      group:'home',  req:true,  ph:'Address back home'},
-  {k:'homeContact', label:'Contact there',          group:'home',  req:false, ph:'Name of someone at that address'},
-  {k:'homePhone',   label:'Their phone',            group:'home',  req:false, ph:'+00 00 000 0000'},
-  {k:'ecName',      label:'Name',                   group:'emg',   req:true,  ph:'Who we call first'},
-  {k:'ecRel',       label:'Relationship',           group:'emg',   req:true,  ph:'Father, spouse, friend'},
-  {k:'ecPhone',     label:'Phone',                  group:'emg',   req:true,  ph:'+971 50 000 0000'},
-  {k:'ecAlt',       label:'Alternate phone',        group:'emg',   req:false, ph:'Optional'}
+  {k:'callMe',      label:'Name you go by',         group:'you',   req:false, ph:'Leave blank to use your full name', row:1},
+  {k:'bday',        label:'Birthday (day and month)', group:'you', req:true,  bday:true, row:1},
+  {k:'gender',      label:'Gender',                 group:'you',   req:true,  pick:'gender', row:2},
+  {k:'marital',     label:'Marital status',         group:'you',   req:true,  pick:'marital', row:2},
+  {k:'mobile',      label:'Personal mobile',        group:'you',   req:true,  ph:'+971 50 000 0000',
+   note:'Only you and accounts see this. Colleagues get the work number.', row:2},
+  {k:'pemail',      label:'Personal email',         group:'you',   req:true,  ph:'you@example.com', row:3},
+  {k:'uaeAddr',     label:'Address in the UAE',     group:'you',   req:true,  ph:'Flat, building, area, emirate', row:3},
+  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  ph:'Country', row:1},
+  {k:'homeAddr',    label:'Permanent address',      group:'home',  req:true,  ph:'Address back home', row:1},
+  {k:'homeContact', label:'Contact there',          group:'home',  req:false, ph:'Name of someone at that address', row:2},
+  {k:'homePhone',   label:'Their phone',            group:'home',  req:false, ph:'+00 00 000 0000', row:2},
+  {k:'ecName',      label:'Name',                   group:'emg',   req:true,  ph:'Who we call first', row:1},
+  {k:'ecRel',       label:'Relationship',           group:'emg',   req:true,  ph:'Father, spouse, friend', row:1},
+  {k:'ecPhone',     label:'Phone',                  group:'emg',   req:true,  ph:'+971 50 000 0000', row:2},
+  {k:'ecAlt',       label:'Alternate phone',        group:'emg',   req:false, ph:'Optional', row:2}
 ];
 function profDone(u){
   const p = PROF(u); if(!p) return {pct:0, missing:[], done:0, total:0};
@@ -2279,14 +2281,29 @@ function vProfile(){
   const D = profDone(u), docs = docsOf(u) || {};
   const fld = f => `<div class="field"><label for="pf_${f.k}">${esc(f.label)}${f.req?'':' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(optional)</span>'}</label>
     ${f.bday
-      ? `<input id="pf_bday" data-bday="1" type="date" value="${esc(bdayISO(u))}">
-         <span class="pfhint">${bdayOf(u)?'On file as <b>'+esc(bdayOf(u))+'</b> — only the day and month are kept, never the year.':'Only the day and month are kept, never the year.'}</span>
-         <label class="pfchk"><input type="checkbox" id="pf_quiet"${p.quietBday?' checked':''}><span>Keep it to yourself &mdash; do not announce my birthday</span></label>
-         <span class="pfhint">${p.quietBday?'Nothing goes to the team &mdash; not the home page, not the bell, not an email. You still get your own wish and your half-day.':'On the day you appear on the home page, in the bell, and in a short note to the team.'}</span>`
+      ? (() => { const on = bdayOf(u).split(' ');
+          const dd = on[0] || '', mo = on[1] || '';
+          const MON = Object.keys(MIDX);
+          return `<div class="bdrow">
+            <select id="pf_bdayD" data-bday="1"><option value="">Day</option>${
+              Array.from({length:31},(_,i)=>String(i+1).padStart(2,'0')).map(d=>
+                `<option value="${d}"${d===dd?' selected':''}>${+d}</option>`).join('')}</select>
+            <select id="pf_bdayM" data-bday="1"><option value="">Month</option>${
+              MON.map(m=>`<option value="${m}"${m===mo?' selected':''}>${m}</option>`).join('')}</select>
+          </div>
+          <span class="pfhint">Only the day and month are kept &mdash; never the year.</span>`; })()
       : f.pick
       ? `<select id="pf_${f.k}" data-pfs="${f.k}"><option value="">Not said</option>${PICKS[f.pick].map(o=>`<option value="${esc(o)}"${p[f.k]===o?' selected':''}>${esc(o)}</option>`).join('')}</select>`
-      : `<input id="pf_${f.k}" data-pf="${f.k}" value="${esc(p[f.k]||'')}" placeholder="${esc(f.ph||'')}">`}</div>`;
-  const grp = g => PFIELDS.filter(f=>f.group===g).map(fld).join('');
+      : `<input id="pf_${f.k}" data-pf="${f.k}" value="${esc(p[f.k]||'')}" placeholder="${esc(f.ph||'')}">`}${
+      f.note ? `<span class="pfhint">${esc(f.note)}</span>` : ''}</div>`;
+  const grp = g => {
+    const fs = PFIELDS.filter(f=>f.group===g);
+    const rows = [...new Set(fs.map(f=>f.row||0))];
+    return rows.map(r => {
+      const line = fs.filter(f=>(f.row||0)===r);
+      return `<div class="frow c${line.length}">${line.map(fld).join('')}</div>`;
+    }).join('');
+  };
   const ro = (l,v) => `<dt>${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">${esc(v||'—')}</dd>`;
 
   return `
@@ -2295,6 +2312,7 @@ function vProfile(){
       <div class="pfpic">
         ${p.photo ? `<img src="${p.photo.url}" alt="${nm(u)}">` : `<span>${esc(NM(u).split(' ').map(x=>x[0]).slice(0,2).join(''))}</span>`}
         <label class="pfpicbtn">${state.upBusy==='photo' ? 'Uploading…' : p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden${state.upBusy?' disabled':''}></label>
+        ${p.photo && !state.upBusy ? '<button class="pfpicdel" id="pfPhotoOff" type="button">Remove</button>' : ''}
       </div>
       <div class="pfwho">
         <h2>${nm(u)}</h2>${goesBy(u)?`<p class="pfleg">${esc(legalOf(u))} on record &mdash; payslips and letters use this</p>`:''}
@@ -2310,18 +2328,11 @@ function vProfile(){
     ${D.missing.length?`<div class="pad" style="padding-top:0"><p class="note" style="margin:0"><b>Still needed:</b> ${esc(D.missing.slice(0,6).join(', '))}${D.missing.length>6?' and '+(D.missing.length-6)+' more':''}.</p></div>`:''}
   </section>
 
-  <div class="grid g2 gtop" style="align-items:start">
-    <div class="col">
+  <div class="grid g2 gtop pfgrid">
     <section class="panel">
       <header><h3>Your details</h3><span class="hint">yours to change any time</span></header>
       <div class="pad">${grp('you')}</div>
     </section>
-    <section class="panel">
-      <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>
-      <div class="pad">${grp('home')}</div>
-    </section>
-    </div>
-    <div class="col">
     <section class="panel">
       <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span></header>
       <div class="pad"><dl class="kv">
@@ -2341,10 +2352,13 @@ function vProfile(){
       <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID</b> is held because payroll, insurance and MOHRE filings need it &mdash; only you and accounts can see it, it is never in an email, and it is masked until you press Show. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
     </section>
     <section class="panel">
+      <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>
+      <div class="pad">${grp('home')}</div>
+    </section>
+    <section class="panel">
       <header><h3>Emergency contact</h3><span class="hint">who we call if something happens</span></header>
       <div class="pad">${grp('emg')}</div>
     </section>
-    </div>
   </div>
 
   <section class="panel">
@@ -5658,15 +5672,15 @@ function render(){
       if(e2){ e2.focus(); try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(_){}}
     }, 320); };
   });
-  const bdEl = document.getElementById('pf_bday');
-  if(bdEl) bdEl.onchange = ()=>{
-    const v = bdEl.value;
+  document.querySelectorAll('[data-bday]').forEach(el => el.onchange = ()=>{
+    const d = (document.getElementById('pf_bdayD')||{}).value || '';
+    const m = (document.getElementById('pf_bdayM')||{}).value || '';
     const B = HR().birthdays || (HR().birthdays={});
-    if(!v){ delete B[state.user]; }
-    else { const mm = +v.slice(5,7), dd = +v.slice(8,10);
-      B[state.user] = {d: String(dd).padStart(2,'0')+' '+Object.keys(MIDX)[mm-1], sample:false}; }
+    const v = (d && m) ? d + ' ' + m : '';
+    if(v) B[state.user] = {d: v, sample:false}; else delete B[state.user];
     const p=PROF(state.user); if(p) p.updated=HDATE();
-    render(); };
+    state.pfDirty = Object.assign(state.pfDirty||{}, {birthday: v});
+    state.pfSaved = ''; render(); });
   document.querySelectorAll('[data-dd]').forEach(b=>b.onclick=()=>{ state.mailWeek=b.dataset.dd; render(); });
   document.querySelectorAll('[data-mail]').forEach(b=>b.onclick=()=>{ state.mailPick=b.dataset.mail; render(); });
   document.querySelectorAll('[data-who]').forEach(b=>b.onclick=()=>{
@@ -5718,6 +5732,9 @@ function render(){
       if(!path) state.pfErr = `${f.name} did not upload. Try again, or tell accounts.`;
       render();
     }); });
+  const poff = document.getElementById('pfPhotoOff');
+  if(poff) poff.onclick = ()=>{ state.upBusy='photo'; render();
+    window.__db.removePhoto().then(()=>{ state.upBusy=null; render(); }); };
   document.querySelectorAll('[data-photo]').forEach(el=>el.onchange=()=>{
     const f = el.files && el.files[0]; if(!f) return;
     state.upBusy = 'photo'; render();
@@ -5952,6 +5969,9 @@ function render(){
       pb.textContent='Published to 15 staff ✓'; pb.disabled=true; pb.style.background='var(--good)'; pb.style.borderColor='var(--good)';};
   }
 }
+
+{ const bn = document.getElementById('buildNo');
+  if(bn) bn.textContent = 'build ' + ((window.CORPLEX_ONE || {}).build || '?'); }
 
 /* looking at a document without leaving the page */
 function showDoc(kind){

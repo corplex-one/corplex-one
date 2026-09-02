@@ -15,6 +15,8 @@ const sb = createClient(CFG.url, CFG.key, {
 const $  = id => document.getElementById(id);
 const show = el => el && el.classList.remove('hidden');
 const hide = el => el && el.classList.add('hidden');
+// the opening screen stays up until there is either a portal or a way in
+const settled = () => hide($('boot'));
 
 function say(msg, kind){
   const box = $('lgMsg'); if(!box) return;
@@ -132,6 +134,7 @@ async function start(session){
     // Signed in, but not on the staff list. The database is already giving
     // them nothing; this only explains why.
     await sb.auth.signOut();
+    show($('login')); settled();
     say('That address is not on the staff list. Ask Avin in Accounts to add you.', 'bad');
     busy(false);
     return;
@@ -149,6 +152,7 @@ async function start(session){
 
   hide($('login'));
   show($('app'));
+  settled();
 
   // app.js is loaded only once there is something for it to render
   if(!window.__appLoaded){
@@ -236,8 +240,9 @@ window.__db = {
   // The four fields anyone may change about themselves live on the staff row;
   // everything else personal lives in the private table. The database enforces
   // that split — this only routes to the right one.
-  SELF: new Set(['callMe','photo','quietBday','homeCountry']),   // the staff row; the rest is private
+  SELF: new Set(['callMe','photo','quietBday','homeCountry','birthday']),   // the staff row; the rest is private
   COL:  {callMe:'call_me', photo:'photo_url', quietBday:'quiet_bday', homeCountry:'home_country',
+         birthday:'birthday',
          mobile:'mobile', pemail:'personal_email', uaeAddr:'uae_address',
          homeAddr:'home_address', homeContact:'home_contact', homePhone:'home_phone',
          ecName:'ec_name', ecRel:'ec_relation', ecPhone:'ec_phone', ecAlt:'ec_alt',
@@ -411,6 +416,19 @@ window.__db = {
     }catch(e){ oops(e, 'That expiry date'); await reload(); }
   },
 
+  async removePhoto(){
+    try{
+      const path = (window.__DATA.hr.profile[ME.full_name] || {}).photo;
+      const {error} = await sb.from('employees').update({photo_url: null}).eq('id', ME.id);
+      if(error) throw error;
+      if(path && path.path) await sb.storage.from('photos').remove([path.path]);
+      DB = await loadAll();
+      const d = buildData(DB, ME.id);
+      Object.keys(d).forEach(k => { window.__DATA[k] = d[k]; });
+      return true;
+    }catch(e){ oops(e, 'Removing your photograph'); return false; }
+  },
+
   async signOut(){ await sb.auth.signOut(); location.reload(); }
 };
 
@@ -457,6 +475,7 @@ function wireLogin(){
     if(a !== b){ say('The two passwords are not the same.'); return; }
     const {error} = await sb.auth.updateUser({password: a});
     if(error){ say(error.message); return; }
+    hide($('setForm')); show($('signinBox'));
     const {data} = await sb.auth.getSession();
     if(data.session) await start(data.session);
   };
@@ -468,7 +487,7 @@ function wireLogin(){
   wireLogin();
 
   if(!CFG.url || !CFG.key){
-    show($('login'));
+    show($('login')); settled();
     say('This copy is not connected to the database yet.', 'bad');
     return;
   }
@@ -482,7 +501,7 @@ function wireLogin(){
 
   if(session && (flow === 'invite' || flow === 'recovery')){
     history.replaceState(null, '', location.pathname);
-    show($('login')); hide($('signinBox')); show($('setBox'));
+    show($('login')); settled(); hide($('signinBox')); show($('setForm'));
     say(flow === 'invite'
       ? 'Welcome. Choose a password and you are in.'
       : 'Choose a new password.', 'good');
@@ -495,4 +514,5 @@ function wireLogin(){
   }
 
   show($('login'));
+  settled();
 })();
