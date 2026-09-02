@@ -4355,7 +4355,7 @@ function vTickets(){
     <div class="stat"><span class="k">Annual entitlement</span><span class="v"><span class="cur">AED</span>${money(annual,2)}</span>
       <span class="n">${active.length} eligible staff, one ticket a year each</span></div>
     <div class="stat"><span class="k">Paid since 2020</span><span class="v"><span class="cur">AED</span>${money(paidAll,2)}</span>
-      <span class="n">${Object.values(T.history).reduce((s,h)=>s+h.rows.length,0)} tickets taken</span></div>
+      <span class="n">${Object.values(T.history).reduce((s,h)=>s+h.rows.length,0)} tickets, staff still with us</span></div>
   </div>
 
   ${due.length ? `
@@ -4741,7 +4741,7 @@ function vMyTicket(){
     <h3 style="font-size:20px;margin-bottom:8px">No air ticket record</h3>
     <p style="color:var(--ink2);max-width:52ch;margin:0 auto">You are not on the air ticket scheme, so nothing accrues here. If you think that is wrong, speak to accounts.</p>
   </div></section>`;
-  const h = T.history[me.id] || {rows:[], totalPaid:0, cycles:0, first:''};
+  const h = T.history[me.id] || T.history[me.name] || {rows:[], totalPaid:0, cycles:0, first:''};
   const air = (DATA.payroll.rows.find(p=>p.name===me.name)||{}).air || 0;
   const isDue = me.status==='Due This Month';
   const left = !!me.lwd;
@@ -4759,7 +4759,7 @@ function vMyTicket(){
       <span class="v" style="font-size:22px;color:var(--${isDue?'accent2':'ink'})">${esc(me.next)||'—'}</span>
       <span class="n">${me.proc?'processed in the '+esc(me.proc)+' run':esc(me.status)}</span></div>
     <div class="stat"><span class="k">Tickets taken</span><span class="v">${h.rows.length}</span>
-      <span class="n">since you joined on ${esc(me.doj)}</span></div>
+      <span class="n">${me.doj?'since you joined on '+esc(me.doj):'since you joined'}</span></div>
     <div class="stat"><span class="k">Not yet taken</span>
       <span class="v" style="color:var(--${me.pending?'bad':'good'})">${me.pending}</span>
       <span class="n">${me.pending?'worth AED '+money(me.backlog,0)+', still owed to you':'you are up to date'}</span></div>

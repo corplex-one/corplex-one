@@ -61,6 +61,7 @@ const TABLES = {
   company_docs:     ['company_docs'],
   exits:            ['exits'],
   tickets:          ['ticket_entitlements'],
+  ticket_history:   ['ticket_history'],
   sales_invoices:   ['sales_invoices'],
   sales_commission: ['sales_commission'],
   sales_company:    ['sales_company'],

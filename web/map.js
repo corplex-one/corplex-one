@@ -367,8 +367,45 @@ export function buildData(db, meId){
   const tickets = {
     asOf: tp.asOf || '', procMonth: tp.procMonth || '', policyNote: tp.note || '',
     rates: tp.rates || {}, ratesArePlaceholder: !!tp.placeholder,
-    paid: [], due: [], upcoming: [], excluded: [], history: [], backlogLapses: [],
-    lastRun: '',
+    paid: [], due: [], upcoming: [], backlogLapses: [], lastRun: '',
+    excluded: S.ticket_excluded || [],
+    // what each person has already had, keyed by staff number the way the
+    // screen reads it
+    history: (() => {
+      // Keyed by staff number, which is how the screens ask for it. A few
+      // people have no staff number yet, so they are filed under their name
+      // rather than dropped — the screen tries both.
+      const byId = {}, out = {};
+      emp.forEach(e => { byId[e.id] = e.staff_no || e.full_name; });
+      // Everyone on the scheme gets an entry, even at nil — someone who has
+      // never taken a ticket still needs the date theirs started counting.
+      (db.tickets || []).forEach(t => {
+        const sn = byId[t.employee_id]; if(!sn) return;
+        out[sn] = {first: t.first_due ? longDate(t.first_due) : '',
+                   _first: t.first_due ? String(t.first_due).slice(0,10) : '',
+                   rows: [], cycles: 0, totalPaid: 0};
+      });
+      (db.ticket_history || []).forEach(h => {
+        const sn = byId[h.employee_id]; if(!sn) return;
+        (out[sn] || (out[sn] = {first:'', _first:'', rows:[], cycles:0, totalPaid:0}))
+          .rows.push([h.cycle_year, h.paid_on ? longDate(h.paid_on) : '', +h.amount]);
+      });
+      const today = new Date();
+      Object.values(out).forEach(h => {
+        h.rows.sort((a,b) => a[0] - b[0]);
+        // Cycles that have fallen due, not cycles taken — the gap between the
+        // two is the backlog somebody is still owed.
+        if(h._first){
+          const d = new Date(h._first + 'T00:00:00Z');
+          let n = 0;
+          while(d <= today && n < 60){ n++; d.setUTCFullYear(d.getUTCFullYear() + 1); }
+          h.cycles = n;
+        }
+        delete h._first;
+        h.totalPaid = Math.round(h.rows.reduce((s,r) => s + r[2], 0) * 100) / 100;
+      });
+      return out;
+    })(),
     employees: (db.tickets || []).map(t => {
       const e = byId.get(t.employee_id) || {};
       return {id: e.staff_no || '', name: e.full_name || '', portalName: e.full_name || '',
