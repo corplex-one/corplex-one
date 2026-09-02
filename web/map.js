@@ -239,15 +239,186 @@ export function buildData(db, meId){
     companies: Object.keys(companies), channels: []
   };
 
+  // ---------------------------------------------------- pay, if it is there
+  // Everything below arrives only for people the database is willing to show
+  // it to. A consultant's copy of this object simply has fewer rows in it.
+  const co = k => (companies[k] || {}).code || '';
+  const master = {parts:{}, people:{}, basicPct: S.basic_pct ?? 0.6, payDate: ''};
+
+  (db.salary_parts || []).forEach(p => {
+    const n = name(p.employee_id); if(!n) return;
+    master.parts[n] = {salary:+p.salary, basic:+p.basic, allow:+p.allowance,
+                       from: p.effective_from ? longDate(p.effective_from) : '',
+                       src: p.source || ''};
+  });
+  (db.payroll_identity || []).forEach(p => {
+    const e = byId.get(p.employee_id); if(!e || !e.staff_no) return;
+    master.people[e.staff_no] = {mol: p.mol_number || '', acct4: p.account_last4 || ''};
+  });
+
+  const run = (db.payroll_runs || []).slice().sort((a,b) =>
+    a.month_key < b.month_key ? 1 : -1)[0];
+  if(run){
+    master.payDate = run.pay_date ? longDate(run.pay_date) : '';
+    Object.assign(payroll, {
+      month: run.label, monthKey: run.month_key, status: run.status,
+      preparedBy: name(run.prepared_by), approver: name(run.approver),
+      label: Object.fromEntries(Object.values(companies).map(c => [c.code, c.name])),
+      channels: S.payroll_channels || [],
+      vatOn: (db.payroll_lines || []).filter(l => l.vat).map(l => name(l.employee_id) || l.name)
+    });
+    const lines = (db.payroll_lines || []).filter(l => l.run_id === run.id);
+    if(lines.length) payroll.rows = lines.map(l => ({
+      name: l.name, portalName: name(l.employee_id) || l.name, id: l.staff_no || '',
+      company: co(l.company), visa: l.visa || '',
+      paidBy: co(l.paid_by), chargedTo: co(l.charged_to),
+      dept: l.department || '', title: l.title || '', doj: longDate(l.doj),
+      days: l.days, salary:+l.salary, claims:+l.claims, air:+l.air_ticket,
+      inc:+l.incentive, comm:+l.commission, ref:+l.referral, other:+l.other_add,
+      gross:+l.gross, adv:+l.advance, don:+l.donation, ins:+l.insurance,
+      mob:+l.mobile, oth:+l.other_ded, ded:+l.deductions, net:+l.net,
+      email: (byId.get(l.employee_id) || {}).work_email || '',
+      note: l.note || '', dummy: l.non_staff
+    }));
+  }
+
+  // -------------------------------------------------------------- gratuity
+  const gratuity = {policy: S.gratuity_policy || {}, openingAt: '', rows: []};
+  const gById = new Map();
+  (db.gratuity_rows || []).forEach(r => {
+    const row = {n: r.name, co: co(r.company), doj: String(r.doj).slice(0,10),
+                 left: r.left_on ? String(r.left_on).slice(0,10) : '', paid:+r.paid, basic:{}};
+    gById.set(r.id, row); gratuity.rows.push(row);
+  });
+  (db.gratuity_basic || []).forEach(c => {
+    const row = gById.get(c.row_id); if(!row) return;
+    row.basic[String(c.month_end).slice(0,10)] = +c.basic;
+  });
+
+  // ------------------------------------------------- advances and letters
+  hr.loans = (db.loans || []).map(l => ({
+    id: l.ref, who: name(l.employee_id), amount:+l.amount, months: l.months,
+    monthly:+l.monthly, why: l.why || '', plan: l.plan || '', status: l.status,
+    approver: name(l.approver), asked: l.asked_on ? String(l.asked_on).slice(0,10) : '',
+    decided: l.decided_on ? String(l.decided_on).slice(0,10) : '',
+    start: l.start_month || '', paid:+l.paid
+  })).filter(l => l.who);
+
+  const revByLetter = {};
+  (db.salary_revisions || []).forEach(r => {
+    if(r.letter_ref) revByLetter[r.letter_ref] = r;
+  });
+  hr.letters = (db.letters || []).map(l => Object.assign({
+    id: l.ref, who: name(l.employee_id), type: l.kind, to: l.addressee || '',
+    why: l.why || '', status: l.status,
+    asked: l.asked_on ? String(l.asked_on).slice(0,10) : '',
+    decided: l.decided_on ? String(l.decided_on).slice(0,10) : ''
+  }, revByLetter[l.ref] ? {
+    by: name(revByLetter[l.ref].issued_by),
+    eff: String(revByLetter[l.ref].effective_from).slice(0,10),
+    salary: +revByLetter[l.ref].new_salary,
+    basic:  +revByLetter[l.ref].new_basic,
+    allow:  +revByLetter[l.ref].new_allowance
+  } : {})).filter(l => l.who);
+
+  (db.employee_files || []).forEach(f => {
+    const n = name(f.employee_id); if(!n) return;
+    (hr.files[n] || (hr.files[n] = {}))[f.kind] =
+      {name: f.file_name, size: Number(f.size_bytes), at: String(f.uploaded_at).slice(0,10)};
+  });
+
+  hr.companyDocs = (db.company_docs || []).map(d => ({
+    co: co(d.company), name: d.name,
+    expiry: d.expiry ? String(d.expiry).slice(0,10) : ''
+  }));
+
+  hr.exits = (db.exits || []).map(x => ({
+    who: name(x.employee_id), lastDay: String(x.last_day).slice(0,10),
+    reason: x.reason || '', status: x.status, notes: x.notes || ''
+  })).filter(x => x.who);
+
+  hr.letterTypes   = S.letter_types   || [];
+  hr.docTypes      = S.doc_types      || [];
+  hr.uploadTypes   = S.upload_types   || [];
+  hr.mail          = S.mail_settings  || {};
+  hr.loanThreshold = S.loan_threshold ?? 0;
+
+  // ----------------------------------------------------------- air tickets
+  const tp = S.ticket_policy || {};
+  const tickets = {
+    asOf: tp.asOf || '', procMonth: tp.procMonth || '', policyNote: tp.note || '',
+    rates: tp.rates || {}, ratesArePlaceholder: !!tp.placeholder,
+    paid: [], due: [], upcoming: [], excluded: [], history: [], backlogLapses: [],
+    lastRun: '',
+    employees: (db.tickets || []).map(t => {
+      const e = byId.get(t.employee_id) || {};
+      return {id: e.staff_no || '', name: e.full_name || '', portalName: e.full_name || '',
+        country: t.country || '', doj: longDate(e.doj), dojS: e.doj ? String(e.doj).slice(0,10) : '',
+        rate:+t.rate, lastPaid: t.last_paid ? longDate(t.last_paid) : '',
+        next: t.next_due ? longDate(t.next_due) : '',
+        nextS: t.next_due ? String(t.next_due).slice(0,10) : '',
+        proc: t.proc_month || '', status: t.status || '',
+        taken: t.taken, pending: t.pending, backlog:+t.backlog,
+        lwd: t.last_working_day ? longDate(t.last_working_day) : '', note: t.note || ''};
+    }).filter(t => t.name)
+  };
+
+  // ---------------------------------------------------------------- sales
+  const sales = buildSales(db, byId, name, companies);
+
   return {
-    companies, hr, payroll,
-    master: {parts:{}, people:{}, basicPct: null, payDate: ''},
-    // sales and everything built on it is absent from this build
-    engine:{}, inv:{}, invCols:[], monthly:{}, typeMonthly:{}, topClients:[],
-    clients:{}, clientCount:0, bands:[], partners:[], managers:{}, target:0,
-    totals:{inv:0,net:0,elig:0,outstanding:0,count:0}, statusMix:{}, years:[],
-    quarters:[], department:'', dept:{}, deptOf:{}, tickets:{employees:[]},
-    entities:[], atDept:null, gratuity:{policy:{},rows:[]},
+    companies, hr, payroll, master, gratuity, tickets, ...sales,
+    entities: [],
     _me: meId ? name(meId) : '', _roles: roles
   };
+}
+
+/* The sales screens are drawn from three things: the invoices you are allowed
+ * to see, your own commission, and the company-wide totals — each of which the
+ * database hands over separately, or not at all. */
+function buildSales(db, byId, name, companies){
+  const out = {
+    engine:{}, inv:{},
+    invCols:['q','date','no','client','type','amt','exp','pc','net','elig','status',
+             'bal','shared','cn','ontime','forfeit','pr','sp','pm','recd','sort','role'],
+    monthly:{}, typeMonthly:{}, topClients:[], clients:{}, clientCount:0,
+    statusMix:{}, totals:{inv:0,net:0,elig:0,outstanding:0,count:0},
+    target:0, partners:[], managers:{}, bands:[], years:[], quarters:[],
+    department:'', dept:{}, deptOf:{}, atDept:null
+  };
+
+  (db.sales_bands || []).sort((a,b) => a.band - b.band).forEach(b =>
+    out.bands.push([b.band, +b.low, +b.high, +b.new_rate, +b.ex_rate, +b.pm_rate]));
+
+  (db.sales_commission || []).forEach(c => {
+    const n = name(c.employee_id); if(!n) return;
+    (out.engine[n] || (out.engine[n] = {}))[c.quarter] = c.figures;
+    if(!out.years.includes(String(c.year))) out.years.push(String(c.year));
+  });
+
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  (db.sales_invoices || []).forEach(r => {
+    const who = name(r.filed_under) || name(r.consultant); if(!who) return;
+    const d = r.inv_date ? String(r.inv_date).slice(0,10) : '';
+    const nice = d ? `${d.slice(8,10)} ${MONTHS[+d.slice(5,7)-1]} ${d.slice(0,4)}` : '';
+    (out.inv[who] || (out.inv[who] = [])).push([
+      r.quarter, nice, r.inv_no, r.client, r.kind, +r.amount, +r.expense, +r.pass_cost,
+      +r.net, +r.eligible, r.status, +r.balance, r.shared, +r.credit_note, r.on_time,
+      +r.forfeit, r.pr_ref, name(r.consultant) || who, name(r.manager), +r.received, d, r.role
+    ]);
+    if(!out.years.includes(String(r.year))) out.years.push(String(r.year));
+  });
+
+  // one row per company per year, and only for a company you may see
+  const agg = (db.sales_company || []).slice().sort((a,b) => b.year - a.year)[0];
+  if(agg) Object.assign(out, agg.figures || {});
+
+  Object.values(companies).forEach(c => { c.sales = false; });
+  (db.sales_company || []).forEach(a => {
+    if(companies[a.company]) companies[a.company].sales = true;
+  });
+
+  out.years.sort();
+  if(!out.quarters.length) out.quarters = ['Q1','Q2','Q3','Q4'];
+  return out;
 }

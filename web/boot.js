@@ -190,6 +190,55 @@ window.__db = {
     }catch(e){ oops(e, 'That change'); }
   },
 
+  // ---- the accounts console -------------------------------------------
+
+  async setRunStatus(monthKey, status, note){
+    try{
+      const patch = {status, note: note || null};
+      if(status === 'approved') patch.approved_at = new Date().toISOString();
+      if(status === 'closed')   patch.closed_at   = new Date().toISOString();
+      const {error} = await sb.from('payroll_runs').update(patch).eq('month_key', monthKey);
+      if(error) throw error;
+    }catch(e){ oops(e, 'The payroll status'); await reload(); }
+  },
+
+  async newLoan(l){
+    try{
+      const {data, error} = await sb.from('loans').insert({
+        employee_id: ME.id, amount: l.amount, months: l.months, monthly: l.monthly,
+        why: l.why, plan: l.plan, start_month: l.start
+      }).select('id,ref').single();
+      if(error) throw error;
+      l.id = data.ref || data.id;
+    }catch(e){ oops(e, 'Your advance request'); await reload(); }
+  },
+
+  async decideLoan(ref, status){
+    try{
+      const {error} = await sb.from('loans')
+        .update({status, decided_on: new Date().toISOString().slice(0,10)}).eq('ref', ref);
+      if(error) throw error;
+    }catch(e){ oops(e, 'The decision'); await reload(); }
+  },
+
+  async decideLetter(ref, status){
+    try{
+      const {error} = await sb.from('letters')
+        .update({status, decided_on: new Date().toISOString().slice(0,10), issued_by: ME.id})
+        .eq('ref', ref);
+      if(error) throw error;
+    }catch(e){ oops(e, 'The decision'); await reload(); }
+  },
+
+  async postAnnouncement(a){
+    try{
+      const {error} = await sb.from('announcements').insert({
+        title: a.title, body: a.body, posted_by: ME.id, pinned: !!a.pinned
+      });
+      if(error) throw error;
+    }catch(e){ oops(e, 'Your announcement'); await reload(); }
+  },
+
   async signOut(){ await sb.auth.signOut(); location.reload(); }
 };
 

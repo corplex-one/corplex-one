@@ -38,7 +38,11 @@ const USERS = [
   {name:'Ruel Tolentino',                    role:'staff'},
   {name:'Miraziz Makhamatzhanov',            role:'owner'}
 ];
-const ROLE = Object.fromEntries(USERS.map(u=>[u.name,u.role]));
+const APPROLE = {owner:'owner', accounts:'admin', manager:'manager', staff:'staff'};
+const RANK = ['staff','manager','admin','owner'];
+const ROLE = Object.fromEntries(Object.entries(DATA._roles || {}).map(([n, rs]) =>
+  [n, (rs || []).map(r => APPROLE[r] || 'staff')
+        .sort((a,b) => RANK.indexOf(b) - RANK.indexOf(a))[0] || 'staff']));
 const COMPANIES = ['CorpLex','POA','Lex Estates'];
 const ROLELABEL = {staff:'Consultant', manager:'Department manager', admin:'Accounts manager', owner:'Owner', former:'Left the firm'};
 const roleOf = u => ROLE[u] || 'former';
@@ -2658,7 +2662,7 @@ function vHome(){
   <div class="grid g3 hrow">
     <section class="panel">
       <header><h3>Announcements</h3>
-        ${false?'<button class="btn ghost" id="annNew" type="button" style="margin-left:auto;padding:3px 10px;font-size:12px">Post one</button>':'<span class="hint">from accounts</span>'}</header>
+        ${adm?'<button class="btn ghost" id="annNew" type="button" style="margin-left:auto;padding:3px 10px;font-size:12px">Post one</button>':'<span class="hint">from accounts</span>'}</header>
       ${adm && state.annNew ? `<div class="pad" style="padding-bottom:4px">
         <div class="field"><label for="annT">Title</label><input id="annT" value="${esc(state.annT||'')}" placeholder="Short and plain"></div>
         <div class="field"><label for="annB">Message</label><input id="annB" value="${esc(state.annB||'')}" placeholder="A sentence or two"></div>
@@ -5228,10 +5232,9 @@ const TABS = [
   {id:'admin',       group:'con',   label:'Rules & staff',    title:'Rules & staff', gate:canAdmin, con:true}
 ];
 const PERIODTABS = ['dashboard','commission','invoices','team','leaderboard','company'];
-const CUT1 = new Set(['home','tools','profile','attend','people','requests']);
-const ALLOWED = () => TABS.filter(t=>!t.con && CUT1.has(t.id) && (!t.gate || t.gate(state.user)));
+const ALLOWED = () => TABS.filter(t=>!t.con && (!t.gate || t.gate(state.user)));
 const STAFFTABS = () => ALLOWED().filter(t=>!t.hide && onPhone(t));
-const CONTABS = () => [];   // the accounts console is not part of this build
+const CONTABS = () => TABS.filter(t=>t.con && (!t.gate || t.gate(state.user)));
 function visibleTabs(){ return state.mode==='console' ? CONTABS() : STAFFTABS(); }
 function reachable(){ return state.mode==='console' ? CONTABS() : ALLOWED().filter(onPhone); }
 function conBar(){
@@ -5421,7 +5424,7 @@ function renderChrome(){
     } else mp.classList.add('hidden');
   }
   const cbtn = document.getElementById('consoleBtn');
-  if(false){
+  if(canAdmin(state.user)){
     cbtn.classList.remove('hidden');
     cbtn.classList.toggle('on', state.mode==='console');
     cbtn.querySelector('span').textContent = state.mode==='console' ? 'Leave console' : 'Console';
@@ -5702,9 +5705,9 @@ function render(){
     state.revForm = {who:'', eff:'', basic:'', allow:''};
     render(); };
   document.querySelectorAll('[data-lt-ok]').forEach(b=>b.onclick=()=>{
-    const x=HR().letters.find(y=>y.id===b.dataset.ltOk); if(x){x.status='Issued'; x.decided=HDATE(); state.ltOpen=x.id;} render(); });
+    const x=HR().letters.find(y=>y.id===b.dataset.ltOk); if(x){x.status='Issued'; x.decided=HDATE(); window.__db.decideLetter(x.id,'Issued'); state.ltOpen=x.id;} render(); });
   document.querySelectorAll('[data-lt-no]').forEach(b=>b.onclick=()=>{
-    const x=HR().letters.find(y=>y.id===b.dataset.ltNo); if(x){x.status='Declined'; x.decided=HDATE();} render(); });
+    const x=HR().letters.find(y=>y.id===b.dataset.ltNo); if(x){x.status='Declined'; x.decided=HDATE(); window.__db.decideLetter(x.id,'Declined');} render(); });
   document.querySelectorAll('[data-lt-view]').forEach(b=>b.onclick=()=>{
     state.ltOpen = state.ltOpen===b.dataset.ltView ? null : b.dataset.ltView; render(); });
   ['lnAmt','lnMon','lnWhy','lnPlan'].forEach(id=>{
@@ -5715,11 +5718,12 @@ function render(){
     L.unshift({id:'LN-'+(5004+L.length), who:myLoanName(state.user), amount:amt, months:mth,
       monthly:Math.round(amt/mth*100)/100, why:f.why, plan:f.plan, status:'Pending',
       approver:loanApprover(amt), asked:HDATE(), decided:'', start:HDATE().slice(0,7), paid:0});
+    window.__db.newLoan(L[0]);
     state.lnForm={amount:'',months:'',why:'',plan:''}; state.lnSent=true; render(); };
   document.querySelectorAll('[data-ln-ok]').forEach(b=>b.onclick=()=>{
-    const x=HR().loans.find(y=>y.id===b.dataset.lnOk); if(x){x.status='Approved'; x.decided=HDATE();} render(); });
+    const x=HR().loans.find(y=>y.id===b.dataset.lnOk); if(x){x.status='Approved'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Approved');} render(); });
   document.querySelectorAll('[data-ln-no]').forEach(b=>b.onclick=()=>{
-    const x=HR().loans.find(y=>y.id===b.dataset.lnNo); if(x){x.status='Declined'; x.decided=HDATE();} render(); });
+    const x=HR().loans.find(y=>y.id===b.dataset.lnNo); if(x){x.status='Declined'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Declined');} render(); });
   const exw=document.getElementById('exWho'); if(exw) exw.onchange=()=>{ state.exitWho=exw.value; render(); };
   const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; render(); };
   const an=document.getElementById('annNew'); if(an) an.onclick=()=>{ state.annNew=true; render(); };
@@ -5729,8 +5733,10 @@ function render(){
       const e2=document.getElementById(id); if(e2){ e2.focus(); e2.setSelectionRange(e2.value.length,e2.value.length); } },260); }; });
   const ap=document.getElementById('annPost'); if(ap) ap.onclick=()=>{
     if(!(state.annT&&state.annB)) return;
-    HR().announcements.unshift({id:'AN-'+(HR().announcements.length+5), title:state.annT, body:state.annB,
-      by:state.user, date:HDATE(), pinned:false});
+    const ANN = {id:'AN-'+(HR().announcements.length+5), title:state.annT, body:state.annB,
+      by:state.user, date:HDATE(), pinned:false};
+    HR().announcements.unshift(ANN);
+    window.__db.postAnnouncement(ANN);
     state.annNew=false; state.annT=''; state.annB=''; render(); };
   document.querySelectorAll('[data-carry]').forEach(el=>el.onchange=()=>{
     const b = HR().balances[el.dataset.carry] || (HR().balances[el.dataset.carry]={carried:0,carriedSet:false,doj:''});
@@ -5830,16 +5836,18 @@ function render(){
     on('sepUpload',()=>{state.sepStage=1;render();});
     on('sepReset',()=>{state.sepStage=0;render();});
     on('sepSubmit',()=>{state.sepStage=2;render();});
-    on('payInit',()=>{state.payStatus='initiated';render();});
-    on('payBack',()=>{state.payStatus='approved';render();});
-    on('payClose',()=>{state.payStatus='closed';render();});
+    const setRun = s => { state.payStatus = s;
+      window.__db.setRunStatus(DATA.payroll.monthKey, s === 'returned' ? 'returned' : s, state.payNote); };
+    on('payInit',()=>{setRun('initiated');render();});
+    on('payBack',()=>{setRun('approved');render();});
+    on('payClose',()=>{setRun('closed');render();});
     on('paySlips',()=>{state.tab='payslips';render();});
     on('payNext',()=>{state.payRun='sep';render();});
-    on('paySubmit',()=>{state.payStatus='submitted';state.payNote='';render();});
-    on('payApprove',()=>{state.payStatus='approved';render();});
-    on('payReturn',()=>{state.payStatus='returned';
+    on('paySubmit',()=>{setRun('submitted');state.payNote='';render();});
+    on('payApprove',()=>{setRun('approved');render();});
+    on('payReturn',()=>{setRun('returned');
       state.payNote='Confirm the CorpLex–POA recharge before I approve.';render();});
-    on('payReset',()=>{state.payStatus=({closed:'initiated',initiated:'approved',approved:'submitted'})[state.payStatus]||'draft';state.payNote='';render();});
+    on('payReset',()=>{setRun(({closed:'initiated',initiated:'approved',approved:'submitted'})[state.payStatus]||'draft');state.payNote='';render();});
     on('payInt',()=>{state.payInternal=!state.payInternal;render();});
     const pb=(id,key)=>{const el=document.getElementById(id); if(el) el.onchange=()=>{state.payFilter[key]=el.value;render();};};
     pb('pfch','ch'); pb('pfvisa','visa');
