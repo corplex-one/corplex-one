@@ -170,7 +170,7 @@ async function start(session){
     window.__appLoaded = true;
     await new Promise((ok, fail) => {
       const s = document.createElement('script');
-      s.src = 'app.js?v=' + (CFG.build || '1');
+      s.src = 'app.js?v=' + (window.__BUILD || CFG.build || '1');
       s.onload = ok; s.onerror = () => fail(new Error('could not load the app'));
       document.body.appendChild(s);
     });

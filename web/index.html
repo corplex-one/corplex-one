@@ -1285,7 +1285,13 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
 <div class="tip" id="tip"></div>
 <div id="lookWrap" class="hidden"></div>
 
-<script src="config.js?v=202609021757"></script>
-<script type="module" src="boot.js?v=202609021757"></script>
+<!-- The build number lives here, in the one file that is never cached, so a
+     new index.html is on its own enough to pull a new app.js. It used to live
+     only in config.js — which meant that forgetting to upload config.js left
+     app.js?v=1 pointing at a year-cached copy, and a deploy that changed
+     nothing. That is a mistake worth making unrepeatable. -->
+<script>window.__BUILD = '202609021810';</script>
+<script src="config.js?v=202609021810"></script>
+<script type="module" src="boot.js?v=202609021810"></script>
 </body>
 </html>
