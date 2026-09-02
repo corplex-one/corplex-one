@@ -28,32 +28,62 @@ function busy(on, label){
 
 // ------------------------------------------------------------------- load
 
+// Every table the app draws from. What comes back is whatever the rules allow
+// this person — for most of them, several of these arrive empty, which is the
+// point. Keep this list in step with map.js: a table missing here is not a
+// permission failure, it is a screen with nothing on it.
 const TABLES = {
-  companies:    'companies?select=*&order=sort',
-  employees:    'employees?select=*',
-  private:      'employee_private?select=*',
-  roles:        'employee_roles?select=*',
-  opening:      'leave_opening?select=*',
-  requests:     'leave_requests?select=*',
-  away:         'away_board?select=*',
-  attendance:   'attendance?select=*',
-  holidays:     'holidays?select=*&order=on_date',
-  shifts:       'shifts?select=*&order=id',
-  announcements:'announcements?select=*',
-  settings:     'settings?select=key,value'
+  companies:    ['companies', 'sort'],
+  employees:    ['employees'],
+  private:      ['employee_private'],
+  roles:        ['employee_roles'],
+  opening:      ['leave_opening'],
+  requests:     ['leave_requests'],
+  away:         ['away_board'],
+  attendance:   ['attendance'],
+  holidays:     ['holidays', 'on_date'],
+  shifts:       ['shifts', 'id'],
+  announcements:['announcements'],
+  settings:     ['settings'],
+  salary_parts:     ['salary_parts'],
+  payroll_identity: ['payroll_identity'],
+  payroll_runs:     ['payroll_runs'],
+  payroll_lines:    ['payroll_lines'],
+  salary_revisions: ['salary_revisions'],
+  gratuity_rows:    ['gratuity_rows'],
+  gratuity_basic:   ['gratuity_basic'],
+  loans:            ['loans'],
+  letters:          ['letters'],
+  employee_files:   ['employee_files'],
+  company_docs:     ['company_docs'],
+  exits:            ['exits'],
+  tickets:          ['ticket_entitlements'],
+  sales_invoices:   ['sales_invoices'],
+  sales_commission: ['sales_commission'],
+  sales_company:    ['sales_company'],
+  sales_bands:      ['sales_bands']
 };
+
+// PostgREST caps a request at a thousand rows; the invoices alone are more
+// than that, so read every table in pages until it stops giving.
+async function readAll(table, order){
+  const PAGE = 1000;
+  let from = 0, out = [];
+  for(;;){
+    let sel = sb.from(table).select('*').range(from, from + PAGE - 1);
+    if(order) sel = sel.order(order);
+    const {data, error} = await sel;
+    if(error) throw new Error(`${table}: ${error.message}`);
+    out = out.concat(data || []);
+    if(!data || data.length < PAGE) return out;
+    from += PAGE;
+  }
+}
 
 async function loadAll(){
   const out = {};
-  await Promise.all(Object.entries(TABLES).map(async ([k, q]) => {
-    const [table, params] = q.split('?');
-    let sel = sb.from(table).select('*');
-    if(/order=on_date/.test(params)) sel = sel.order('on_date');
-    if(/order=sort/.test(params))    sel = sel.order('sort');
-    if(/order=id/.test(params))      sel = sel.order('id');
-    const {data, error} = await sel;
-    if(error) throw new Error(`${table}: ${error.message}`);
-    out[k] = data || [];
+  await Promise.all(Object.entries(TABLES).map(async ([k, [table, order]]) => {
+    out[k] = await readAll(table, order);
   }));
   return out;
 }
