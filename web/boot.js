@@ -43,6 +43,8 @@ const TABLES = {
   requests:     ['leave_requests'],
   away:         ['away_board'],
   attendance:   ['attendance'],
+  attendance_where: ['attendance_where'],
+  regularizations:  ['regularizations'],
   holidays:     ['holidays', 'on_date'],
   shifts:       ['shifts', 'id'],
   announcements:['announcements'],
@@ -151,6 +153,14 @@ async function start(session){
   window.__ME   = ME.full_name;
   window.__ROLES = DATA._roles[ME.full_name] || ['staff'];
 
+  // Only the server can say whether this is the office network — the browser
+  // cannot see its own public address. Failing quietly is right: an unanswered
+  // question must never keep somebody off the check-in screen.
+  try{
+    const {data} = await sb.rpc('where_am_i');
+    window.__WHERE = data || null;
+  }catch(e){ window.__WHERE = null; }
+
   hide($('login'));
   show($('app'));
   settled();
@@ -167,6 +177,27 @@ async function start(session){
   } else if(typeof window.render === 'function'){
     window.render();
   }
+}
+
+// ------------------------------------------------------- where the browser is
+//
+// The browser will tell us, if the person allows it and the device can work it
+// out. On a phone that is a satellite fix and worth having; on a desktop it is
+// guessed from nearby networks and can be a kilometre out, which is why the
+// accuracy comes back with it and why nothing rests on this alone. Refusal is
+// a perfectly good answer and costs nobody their check-in.
+function hereIAm(){
+  return new Promise(done => {
+    if(!navigator.geolocation) return done({lat:null, lng:null, acc:null});
+    let over = false;
+    const stop = setTimeout(() => { over = true; done({lat:null, lng:null, acc:null}); }, 6000);
+    navigator.geolocation.getCurrentPosition(
+      p => { if(over) return; clearTimeout(stop);
+             done({lat: p.coords.latitude, lng: p.coords.longitude,
+                   acc: Math.round(p.coords.accuracy)}); },
+      () => { if(over) return; clearTimeout(stop); done({lat:null, lng:null, acc:null}); },
+      {enableHighAccuracy: true, timeout: 5500, maximumAge: 60000});
+  });
 }
 
 // ------------------------------------------------------------- write path
@@ -219,23 +250,96 @@ window.__db = {
     }catch(e){ oops(e, 'The decision'); await reload(); }
   },
 
+  // The address is read by the database, not sent by us — a browser that could
+  // name its own address could name the office's. Coordinates are asked for
+  // here and offered as corroboration; the database decides what they are
+  // worth. What comes back is what was actually recorded.
   async checkIn(row){
     try{
-      const {error} = await sb.from('attendance').insert({
-        employee_id: ME.id, on_date: row.date, kind: row.kind,
-        in_at: row.in, location: row.loc, note: row.note || null
+      const at = await hereIAm();
+      const {data, error} = await sb.rpc('check_in', {
+        p_loc: row.loc, p_lat: at.lat, p_lng: at.lng,
+        p_accuracy: at.acc, p_note: row.note || null
       });
       if(error) throw error;
+      return data;
     }catch(e){ oops(e, 'Your check-in'); await reload(); }
   },
 
-  async checkOut(row){
+  async checkOut(){
     try{
-      const {error} = await sb.from('attendance')
-        .update({out_at: row.out})
-        .eq('employee_id', ME.id).eq('on_date', row.date).is('out_at', null);
+      const {data, error} = await sb.rpc('check_out');
       if(error) throw error;
+      return data;
     }catch(e){ oops(e, 'Your check-out'); await reload(); }
+  },
+
+  async whereAmI(){
+    try{
+      const {data, error} = await sb.rpc('where_am_i');
+      if(error) throw error;
+      window.__WHERE = data;
+      return data;
+    }catch(e){ return window.__WHERE || null; }
+  },
+
+  async segmentNote(id, note){
+    try{
+      const {error} = await sb.rpc('set_segment_note', {p_id: id, p_note: note});
+      if(error) throw error;
+    }catch(e){ oops(e, 'The note'); }
+  },
+
+  // ------------------------------------------------------- regularization
+  async fileRegularization(r){
+    try{
+      const {data, error} = await sb.from('regularizations').insert({
+        employee_id: ME.id, on_date: r.date,
+        want_in: r.in || null, want_out: r.out || null, reason: r.reason
+      }).select().single();
+      if(error) throw error;
+      return data;
+    }catch(e){ oops(e, 'Your request'); await reload(); }
+  },
+
+  async decideRegularization(id, approve, note){
+    try{
+      const {error} = await sb.rpc('decide_regularization',
+        {p_id: id, p_approve: !!approve, p_note: note || null});
+      if(error) throw error;
+      await reload();
+    }catch(e){ oops(e, 'The decision'); await reload(); }
+  },
+
+  async withdrawRegularization(id){
+    try{
+      const {error} = await sb.rpc('withdraw_regularization', {p_id: id});
+      if(error) throw error;
+      await reload();
+    }catch(e){ oops(e, 'Withdrawing it'); await reload(); }
+  },
+
+  // --------------------------------------------------------- the office
+  // Whoever presses this is sitting in the office, so what the server sees of
+  // them is what the office is. No guessing at coordinates, and no ringing the
+  // provider to ask what the address is this week.
+  async setOfficeHere(radius){
+    try{
+      const at = await hereIAm();
+      const {data, error} = await sb.rpc('set_office_here',
+        {p_lat: at.lat, p_lng: at.lng, p_radius: radius || 150});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Setting the office'); }
+  },
+
+  async forgetOfficeIp(ip){
+    try{
+      const {error} = await sb.rpc('forget_office_ip', {p_ip: ip});
+      if(error) throw error;
+      await reload();
+    }catch(e){ oops(e, 'Removing the address'); }
   },
 
   // The four fields anyone may change about themselves live on the staff row;

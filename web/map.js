@@ -52,6 +52,14 @@ export function buildData(db, meId){
     sample: false,
     week: S.working_week || 'Monday to Friday',
     hours: {grace: S.grace_minutes ?? 15},
+    // How long past your own shift before the app says something, and before
+    // it says something to your manager.
+    nudgeMin:    S.attend_grace_min    ?? 15,
+    escalateMin: S.attend_escalate_min ?? 30,
+    office: {ips: S.office_ips || [], geo: S.office_geo || {},
+             set: !!((S.office_ips || []).length || (S.office_geo || {}).lat)},
+    regular: {max: S.regular_max_month ?? 2, graceDays: S.regular_grace_days ?? 5,
+              rows: [], mine: [], left: 0, from: ''},
     officeNet: S.office_network || 'not set',
     leavePolicy: S.leave_policy || {},
     titles:{}, managers:{}, orgCo:{}, orgDept:{}, emails:{}, birthdays:{},
@@ -181,17 +189,70 @@ export function buildData(db, meId){
 
   // ------------------------------------------------------------- attendance
   const days = new Map();
+  // Where a check-in came from arrives only for the people allowed to see it —
+  // yourself, your reports and accounts. For everybody else the segment simply
+  // has no evidence attached, which is the rule doing its job, not a gap.
+  const whereOf = {};
+  (db.attendance_where || []).forEach(w => { whereOf[w.attendance_id] = w; });
   (db.attendance || []).forEach(a => {
     const who = name(a.employee_id); if(!who) return;
     const d = String(a.on_date).slice(0,10), k = `${who}|${d}`;
     if(!days.has(k)) days.set(k, {who, d, kind: a.kind || 'Office', segs: []});
+    const w = whereOf[a.id] || null;
     days.get(k).segs.push({
+      id: a.id,
       in: (a.in_at || '').slice(0,5),
       out: (a.out_at || '').slice(0,5),
       loc: a.location || a.kind || 'Office',
-      ok: true, note: a.note || ''
+      ok: !(w && w.flagged), note: a.note || '',
+      fixed: !!a.regularized,
+      where: w ? {ip: w.ip || '', ipOk: w.ip_ok, geoOk: w.geo_ok,
+                  away: w.distance_m == null ? null : Math.round(+w.distance_m),
+                  acc: w.accuracy_m == null ? null : Math.round(+w.accuracy_m),
+                  flagged: !!w.flagged} : null
     });
   });
+  // ------------------------------------------------------- regularization
+  // A person sees their own; a manager sees their reports'; accounts sees all.
+  // The list is simply whatever the database sent, so what shows on screen and
+  // what a person may actually see cannot drift apart.
+  {
+    const cap = hr.regular.max, grace = hr.regular.graceDays;
+    const today = new Date(hr.today + 'T00:00:00Z');
+    const first = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1));
+    if(today.getUTCDate() <= grace) first.setUTCMonth(first.getUTCMonth() - 1);
+    hr.regular.from = first.toISOString().slice(0,10);
+
+    hr.regular.rows = (db.regularizations || []).map(r => ({
+      id: r.ref || r.id, uid: r.id,
+      who: name(r.employee_id),
+      d: String(r.on_date).slice(0,10),
+      in:  (r.want_in  || '').slice(0,5),
+      out: (r.want_out || '').slice(0,5),
+      reason: r.reason || '',
+      status: r.status || 'Pending',
+      by: r.decided_by ? name(r.decided_by) : '',
+      note: r.decision_note || '',
+      sent: r.created_at ? String(r.created_at).slice(0,10) : '',
+      decided: r.decided_at ? String(r.decided_at).slice(0,10) : ''
+    })).filter(r => r.who)
+      .sort((a,b) => b.d.localeCompare(a.d) || b.sent.localeCompare(a.sent));
+
+    const meName = meId ? name(meId) : '';
+    hr.regular.mine = hr.regular.rows.filter(r => r.who === meName);
+    // What is left this month, counted the way the database counts it: only
+    // approved ones spend the allowance.
+    const thisMonth = hr.today.slice(0,7);
+    hr.regular.left = Math.max(0, cap - hr.regular.mine.filter(
+      r => r.status === 'Approved' && r.d.slice(0,7) === thisMonth).length);
+    // and per person per month, for the console
+    hr.regular.used = {};
+    hr.regular.rows.filter(r => r.status === 'Approved').forEach(r => {
+      const k = r.who + '|' + r.d.slice(0,7);
+      hr.regular.used[k] = (hr.regular.used[k] || 0) + 1;
+    });
+  }
+
   // A day someone was on leave has no check-in, but the calendar should still
   // say why they were not there. Rather than store that twice, derive it from
   // the approved leave — then the two can never disagree.

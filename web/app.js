@@ -437,6 +437,53 @@ const isMgr = u => reportsTo(u).length > 0;
 const attOf = (u, ds) => HR().attendance.find(a=>a.who===u && a.d===ds);
 const SHIFTS = () => HR().shifts || [];
 const tracksAtt = u => !(HR().noAttendance||[]).includes(u);
+const WHERE = () => window.__WHERE || {};
+const officeRules = () => !!WHERE().rules_on;
+const onOfficeNet = () => WHERE().ip_ok === true;
+
+/* --- the nudge ---
+ * Fifteen minutes past your own shift with nothing recorded, and the app
+ * says so. Thirty, and it is your manager's to know. Weekends, public
+ * holidays and approved leave are quiet; a day working from home is not,
+ * because that day still wants a check-in.
+ */
+function nowMins(){ const d=new Date(); return d.getHours()*60 + d.getMinutes(); }
+function nudgeFor(u){
+  if(!tracksAtt(u) || !canCheckIn(u)) return null;
+  const d = HDATE(), st = dayStatus(u, d);
+  if(['Weekend','Holiday','Annual','Sick','Unpaid','Bereavement','Birthday',
+      'Maternity','Paternity','Hajj','Umrah'].includes(st.k)) return null;
+  const s = shiftOf(u), a = attOf(u, d), open = openSeg(u);
+  const late  = HR().nudgeMin ?? 15, shout = HR().escalateMin ?? 30;
+  const n = nowMins();
+  if(!a || !a.segs.length){
+    const over = n - (mins(s.start) + late);
+    if(over < 0) return null;
+    return {kind:'in', by: n - mins(s.start), escalated: n - mins(s.start) >= shout, shift:s};
+  }
+  if(open && n >= mins(s.end) + late)
+    return {kind:'out', by: n - mins(s.end), escalated:false, shift:s};
+  return null;
+}
+// Reports of mine who are past the shout line with nothing recorded. This is
+// the in-app half of the escalation; the email half needs a sender.
+function lateReports(u){
+  return reportsTo(u).filter(n => {
+    const g = nudgeFor(n); return g && g.kind === 'in' && g.escalated;
+  }).map(n => ({who:n, by: nudgeFor(n).by}));
+}
+function nudgeBanner(u){
+  const g = nudgeFor(u); if(!g) return '';
+  const mLabel = m => m >= 60 ? Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m' : m+' minutes';
+  return `<div class="nudge${g.escalated?' loud':''}">
+    <span class="ndot"></span>
+    <div><b>${g.kind==='in'?'You have not checked in':'You are still checked in'}</b>
+      <span>${g.kind==='in'
+        ? 'Your shift started at '+esc(g.shift.start)+', '+mLabel(g.by)+' ago.'
+          + (g.escalated ? ' Your manager can see this.' : '')
+        : 'Your shift ended at '+esc(g.shift.end)+', '+mLabel(g.by)+' ago. Check out to close the day.'}</span></div>
+  </div>`;
+}
 const canCheckIn = u => tracksAtt(u) && (!canAdmin(u) || activeCo().key === companyOf(u).key);
 function shiftOf(u){
   const id = (HR().assign||{})[u] || 'S2';
@@ -810,14 +857,15 @@ function vAttend(){
   const st = dayStatus(u, today);
   const S = monthSummary(u, ym);
   const days = monthDays(ym).filter(d=>d<=today).reverse();
-  const onNet = state.onOfficeNet !== false;
+  const onNet = onOfficeNet();
   const H = HR();
 
   const segRow = g => `<tr><td class="n">${esc(g.in)}</td><td class="n">${g.out?esc(g.out):'<span class="pill warn"><span class="dt"></span>open</span>'}</td>
-    <td>${esc(g.loc)}</td><td class="n r">${g.out?hhmm(mins(g.out)-mins(g.in)):'—'}</td>
+    <td>${esc(g.loc)}${whereMark(g)}</td><td class="n r">${g.out?hhmm(mins(g.out)-mins(g.in)):'—'}</td>
     <td style="color:var(--ink2);font-size:12.5px">${esc(g.note||'')}</td></tr>`;
 
   return `
+  ${nudgeBanner(u)}
   <div class="strip">
     <div class="stat"><span class="k">Today &middot; ${esc(dayName(today))} ${esc(dayLabel(today))}</span>
       <span class="v" style="font-size:19px;font-family:'IBM Plex Sans',sans-serif">${open?'<span class="pill good"><span class="dt"></span>Checked in</span>':(a&&a.segs.length?'<span class="pill mute">Checked out</span>':'<span class="pill warn"><span class="dt"></span>Not checked in</span>')}</span>
@@ -832,7 +880,8 @@ function vAttend(){
 
   <section class="panel">
     <header><h3>Check in and out</h3>
-      <span class="pill ${onNet?'good':'mute'}">${onNet?'<span class="dt"></span>On the office network':'Off the office network'}</span>
+      <span class="pill ${onNet?'good':'mute'}">${!officeRules()?'Office network not set yet'
+        :onNet?'<span class="dt"></span>On the office network':'Off the office network'}</span>
       <span class="pill mute">${esc(shiftText(u))}</span>
       <span class="hint">${esc(H.week)}</span></header>
     <div class="pad">
@@ -849,12 +898,21 @@ function vAttend(){
           ${open
             ? `<button class="btn" id="ciOut" type="button">Check out</button>
                <span class="cihint">Leaving the ${esc(open.loc.toLowerCase())}? Check out, then check in again when you arrive somewhere else.</span>`
-            : `<button class="btn" data-ci="Office" type="button"${onNet?'':' disabled title="You are not on the office network"'}>Check in &mdash; office</button>
+            : `<button class="btn" data-ci="Office" type="button">Check in &mdash; office</button>
                <button class="btn ghost" data-ci="Client site" type="button">Check in &mdash; off-site</button>
                <button class="btn ghost" data-ci="Home" type="button">Check in &mdash; home</button>`}
         </div>
       </div>
-      <p class="note" style="margin-top:16px">An office check-in is accepted only on the office network and at the office location. Going straight to a client is fine &mdash; check in as <b>off-site</b>, then check out and check in again as <b>office</b> when you arrive. Every segment of the day is kept.</p>`}
+      ${state.ciSaid ? `<div class="ciwarn">
+        <b>Recorded as off-site.</b> We could not confirm you were at the office \u2014
+        ${state.ciSaid.ip_ok===false?'you are not on the office network':'the office network did not answer'}${
+          state.ciSaid.distance_m!=null?' and your phone put you '+money(state.ciSaid.distance_m,0)+'\u2009m away':
+          ', and your device did not share where it is'}.
+        Say where you are and it goes on the record.
+        <div class="ciwrow"><input id="ciNote" type="text" maxlength="120"
+          placeholder="At the Al Barsha client, back after lunch" value="${esc(state.ciNote||'')}">
+          <button class="btn" id="ciNoteGo" type="button">Save</button></div></div>` : ''}
+      <p class="note" style="margin-top:16px">An office check-in is confirmed by the office network or by where your device says you are. Neither is a barrier: if we cannot confirm it the day is still recorded, as off-site, and you are asked where you were. Going straight to a client is fine &mdash; check in as <b>off-site</b>, then check out and check in again as <b>office</b> when you arrive. Every segment of the day is kept.</p>`}
     </div>
     ${a && a.segs.length ? `<div class="tw"><table>
       <thead><tr><th>In</th><th>Out</th><th>Where</th><th class="r">Hours</th><th>Note</th></tr></thead>
@@ -863,6 +921,8 @@ function vAttend(){
           <td class="n r">${hhmm(segMins(a))}</td><td></td></tr>
       </tbody></table></div>`:''}
   </section>
+
+  ${regularPanel(u)}
 
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>${esc(MONTHNAME[+ym.slice(5)-1])} ${ym.slice(0,4)}</h3>
@@ -2514,7 +2574,7 @@ function vHome(){
 
   // --- check in / out
   const aTod = attOf(u, today), open = openSeg(u), st = dayStatus(u, today);
-  const onNet = state.onOfficeNet !== false;
+  const onNet = onOfficeNet();
 
   // --- birthdays (day and month only)
   const MI = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
@@ -2604,6 +2664,14 @@ function vHome(){
   const me = PROF(u) || {};
   const initials = u.split(' ').map(x=>x[0]).slice(0,2).join('');
   return `
+  ${nudgeBanner(u)}
+  ${(() => { const late = lateReports(u);
+    if(!late.length) return '';
+    return `<div class="nudge loud"><span class="ndot"></span>
+      <div><b>${late.length === 1 ? esc(NM(late[0].who)) + ' has not checked in'
+                                  : late.length + ' of your team have not checked in'}</b>
+      <span>${esc(late.map(l => NM(l.who) + ' (' + l.by + ' minutes past)').join(', '))}. They have been told.</span></div></div>`;
+  })()}
   ${celebStrip}
   <section class="panel hhero${MOBILE()?' slim':' withme'}">
     <div class="pad">
@@ -2650,10 +2718,10 @@ function vHome(){
             ${open
               ? `<button class="btn wide" id="ciOut" type="button">Check out</button>
                  <span class="cihint">Moving on? Check out, then check in again when you get there.</span>`
-              : `<button class="btn wide" data-ci="Office" type="button"${onNet?'':' disabled title="You are not on the office network"'}>Check in &mdash; office</button>
+              : `<button class="btn wide" data-ci="Office" type="button">Check in &mdash; office</button>
                  <div class="cirow"><button class="btn ghost" data-ci="Client site" type="button">Off-site</button>
                  <button class="btn ghost" data-ci="Home" type="button">Home</button></div>
-                 <span class="cihint">${onNet?'You are on the office network.':'You are not on the office network — use off-site or home.'}</span>`}
+                 <span class="cihint">${!officeRules()?'The office network has not been set yet.':onNet?'You are on the office network.':'You are not on the office network \u2014 an office check-in will be recorded as off-site.'}</span>`}
           </div>`}
         ${aTod && aTod.segs.length ? `<p class="hfoot">${aTod.segs.map(g=>`${esc(g.loc)} ${esc(g.in)}${g.out?'–'+esc(g.out):' (open)'}`).join(' &middot; ')} &mdash; <b>${hhmm(segMins(aTod, true))}</b> today</p>`:''}
       </div>
@@ -5160,7 +5228,39 @@ function vDigest(){
 function vAdmin(){
   const staff = USERS.map(u=>u.name).concat(FORMER);
   const upl = canUpload(state.user);
+  const W = WHERE(), O = HR().office;
   return `
+  <section class="panel">
+    <header><h3>Where the office is</h3>
+      <span class="pill ${O.set?'good':'warn'}"><span class="dt"></span>${O.set?'set':'not set yet'}</span>
+      <span class="hint" style="margin-left:auto">press this while sitting in the office</span></header>
+    <div class="pad">
+      <p style="margin:0 0 16px;color:var(--ink2);font-size:14.5px;max-width:70ch">
+        A check-in is confirmed two ways: the network it came from, which the
+        server reads for itself and nobody can fake, and where the device says
+        it is, which is corroboration rather than proof. Until this is set,
+        both are recorded and neither is enforced &mdash; every check-in is taken
+        at its word.</p>
+      <div class="offrow">
+        <div><span class="k">The server sees you at</span>
+          <b class="n">${esc(W.ip || 'no address')}</b>
+          <span class="n">${W.ip_ok ? 'already on the list' : 'not on the list'}</span></div>
+        <div><span class="k">How far around still counts</span>
+          <select id="offRad">${[100,150,250,500].map(r =>
+            `<option value="${r}"${(+((O.geo||{}).radius_m||150))===r?' selected':''}>${r} metres</option>`).join('')}</select></div>
+        <button class="btn" id="offHere" type="button">This is the office</button>
+      </div>
+      ${(O.geo||{}).lat ? `<p class="note" style="margin-top:16px"><b>The office is at
+        ${(+O.geo.lat).toFixed(5)}, ${(+O.geo.lng).toFixed(5)}</b>, and anyone within
+        ${esc(String(O.geo.radius_m||150))} metres of it counts as being there.</p>` : ''}
+      ${(O.ips||[]).length ? `<div class="tw" style="margin-top:16px"><table>
+        <thead><tr><th>Address that counts as the office</th><th></th></tr></thead>
+        <tbody>${O.ips.map(ip => `<tr><td class="n">${esc(ip)}${ip===W.ip?' <span class="wmark">you, now</span>':''}</td>
+          <td class="r"><button class="btn ghost sm" data-offdrop="${esc(ip)}" type="button">Remove</button></td></tr>`).join('')}
+        </tbody></table></div>
+        <p class="cap">A line whose address changes will drop off this list on its own one morning, and everybody in the office will be recorded as off-site until it is added again. If that keeps happening, the office needs a fixed address from the provider.</p>` : ''}
+    </div>
+  </section>
   ${upl?`
   <section class="panel">
     <header><h3>Weekly upload</h3><span class="hint">accounts-manager accounts only &middot; Sales_Report_Management_2026.xlsx</span></header>
@@ -5266,6 +5366,7 @@ const TABS = [
   {id:'revisions',   group:'con',   label:'Salary revisions', title:'Salary revisions', gate:canUpload, con:true},
   {id:'gratuity',    group:'con',   label:'Gratuity',         title:'Gratuity provision', gate:canAdmin, con:true},
   {id:'hradmin',     group:'con',   label:'Attendance',       title:'Attendance & leave', gate:canAdmin, con:true},
+  {id:'regular',     group:'con',   label:'Regularization',   title:'Regularization', gate:canAdmin, con:true},
   {id:'docsadmin',   group:'con',   label:'Documents',        title:'Document expiry', gate:canAdmin, con:true},
   {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},
   {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
@@ -5568,7 +5669,7 @@ function render(){
                   leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
                   profile:vProfile, docsadmin:vDocsAdmin, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
-                  people:vPeople, digest:vDigest, admin:vAdmin}[state.tab])();
+                  people:vPeople, digest:vDigest, admin:vAdmin, regular:vRegular}[state.tab])();
   const here = tabHash();
   if(state._at !== here){
     state._at = here;
@@ -5614,20 +5715,82 @@ function render(){
   document.querySelectorAll('#askSeg button').forEach(b=>b.onclick=()=>{ state.askTab=b.dataset.ask; state.ltOpen=null; render(); });
   document.querySelectorAll('#deptSeg button').forEach(b=>b.onclick=()=>{ state.deptView=b.dataset.dv; render(); });
   document.querySelectorAll('#attMonthSeg button').forEach(b=>b.onclick=()=>{ state.attMonth=b.dataset.am; render(); });
-  document.querySelectorAll('[data-ci]').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('[data-ci]').forEach(b=>b.onclick=async ()=>{
     const d=HDATE(); let a=attOf(state.user,d);
     if(!a){ a={who:state.user,d,kind:b.dataset.ci==='Home'?'WFH':'Office',segs:[]}; HR().attendance.push(a); }
     const now=new Date(); const hm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-    const seg={in:hm,out:'',loc:b.dataset.ci,ok:b.dataset.ci==='Office',
-      note:b.dataset.ci==='Client site'?'Off-site — checked in away from the office':''};
+    const seg={in:hm,out:'',loc:b.dataset.ci,ok:true,note:''};
     a.segs.push(seg);
-    window.__db.checkIn({date:d, kind:a.kind, in:hm, loc:seg.loc, note:seg.note});
+    b.disabled = true;
+    state.ciSaid = null; state.ciNote = '';
+    render();
+    // The database reads the address, weighs it against where the device says
+    // it is, and answers with what it wrote down.
+    const said = await window.__db.checkIn({loc: b.dataset.ci});
+    if(said){
+      seg.loc = said.loc; seg.id = said.id; seg.ok = !said.downgraded;
+      a.kind = said.kind;
+      if(said.downgraded) state.ciSaid = said;
+    }
     render(); });
-  const co=document.getElementById('ciOut'); if(co) co.onclick=()=>{
+  const co=document.getElementById('ciOut'); if(co) co.onclick=async ()=>{
     const g=openSeg(state.user); if(!g) return;
     const now=new Date(); g.out=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-    window.__db.checkOut({date:HDATE(), out:g.out});
+    co.disabled = true; state.ciSaid = null; render();
+    const said = await window.__db.checkOut();
+    if(said && said.out) g.out = said.out;
     render(); };
+  { const cn=document.getElementById('ciNote'), cg=document.getElementById('ciNoteGo');
+    if(cn) cn.oninput = ()=>{ state.ciNote = cn.value; if(cg) cg.disabled = !cn.value.trim(); };
+    if(cg){ cg.disabled = !(state.ciNote||'').trim();
+      cg.onclick = ()=>{
+        const g = openSeg(state.user); const id = (state.ciSaid||{}).id || (g&&g.id);
+        if(!id) return;
+        if(g) g.note = state.ciNote;
+        window.__db.segmentNote(id, state.ciNote);
+        state.ciSaid = null; state.ciNote = ''; render(); }; } }
+
+  /* --- fixing a missed day --- */
+  { const bind = (id, key, ev) => { const el=document.getElementById(id); if(!el) return;
+      const h = ()=>{ (state.rgForm||(state.rgForm={d:'',in:'',out:'',reason:''}))[key]=el.value;
+        state.rgSent=false; render();
+        const e2=document.getElementById(id);
+        if(e2 && el.tagName==='INPUT' && el.type==='text'){ e2.focus(); e2.setSelectionRange(e2.value.length,e2.value.length); } };
+      if(ev==='input'){ let t; el.oninput=()=>{clearTimeout(t);t=setTimeout(h,260);}; } else el.onchange=h; };
+    bind('rgDay','d'); bind('rgIn','in'); bind('rgOut','out'); bind('rgWhy','reason','input');
+    const go=document.getElementById('rgGo');
+    if(go) go.onclick=async ()=>{
+      const f=state.rgForm||{}; if(!(f.d && f.reason && (f.in||f.out))) return;
+      go.disabled=true;
+      const made = await window.__db.fileRegularization(
+        {date:f.d, in:f.in||null, out:f.out||null, reason:f.reason.trim()});
+      if(made){
+        HR().regular.rows.unshift({id:made.ref||made.id, uid:made.id, who:state.user, d:f.d,
+          in:f.in||'', out:f.out||'', reason:f.reason.trim(), status:'Pending',
+          by:'', note:'', sent:HDATE(), decided:''});
+        HR().regular.mine = HR().regular.rows.filter(r=>r.who===state.user);
+        state.rgForm={d:'',in:'',out:'',reason:''}; state.rgSent=true;
+      }
+      render(); };
+    document.querySelectorAll('[data-rgdrop]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.withdrawRegularization(b.dataset.rgdrop); });
+    document.querySelectorAll('[data-rgok]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.decideRegularization(b.dataset.rgok, true); });
+    document.querySelectorAll('[data-rgno]').forEach(b=>b.onclick=()=>{
+      const why = (prompt('Why is it declined? The person sees this.')||'').trim();
+      if(why === '') return;
+      b.disabled=true; window.__db.decideRegularization(b.dataset.rgno, false, why); }); }
+
+  /* --- setting the office --- */
+  { const so=document.getElementById('offHere');
+    if(so) so.onclick=async ()=>{
+      so.disabled=true; so.textContent='Reading\u2026';
+      const r = await window.__db.setOfficeHere(
+        +((document.getElementById('offRad')||{}).value || 150));
+      if(r) await window.__db.whereAmI();
+      render(); };
+    document.querySelectorAll('[data-offdrop]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.forgetOfficeIp(b.dataset.offdrop); }); }
   ['rqType','rqFrom','rqTo','rqReason'].forEach(id=>{
     const el=document.getElementById(id); if(!el) return;
     const key=id.slice(2).toLowerCase();
@@ -6064,3 +6227,167 @@ let _rt, _wasPhone = MOBILE();
 window.addEventListener('resize',()=>{clearTimeout(_rt);_rt=setTimeout(()=>{
   if(MOBILE() !== _wasPhone){ _wasPhone = MOBILE(); closeSheet(); render(); } else drawCharts();
 },160);});
+
+
+/* Where a segment came from, marked only for the people the database lets
+ * see it. A colleague gets no evidence at all, so there is nothing to mark. */
+function whereMark(g){
+  if(!g.where) return '';
+  const w = g.where, bits = [];
+  if(w.ip)   bits.push('from ' + w.ip);
+  if(w.away != null) bits.push(w.away + ' m from the office' + (w.acc ? ' (\u00b1' + w.acc + ' m)' : ''));
+  if(!bits.length) return '';
+  const t = esc(bits.join(' \u00b7 '));
+  return g.where.flagged
+    ? `<span class="wmark bad" title="${t}">could not confirm</span>`
+    : `<span class="wmark" title="${t}">${w.ipOk ? 'office network' : (w.away != null ? 'at the office' : '')}</span>`;
+}
+
+/* --- fixing a day you missed --- */
+function regularDays(u){
+  // Days this month, and the tail of last month while it is still open, with
+  // something missing. A weekend or a holiday has nothing to miss.
+  const R = HR().regular, out = [], today = HDATE();
+  const from = R.from || today.slice(0,8) + '01';
+  const filed = new Set(R.mine.filter(r => ['Pending','Approved'].includes(r.status)).map(r => r.d));
+  for(let d = new Date(from + 'T00:00:00Z'); ; d.setUTCDate(d.getUTCDate() + 1)){
+    const ds = d.toISOString().slice(0,10);
+    if(ds > today) break;
+    const st = dayStatus(u, ds);
+    if(['Weekend','Holiday','Annual','Sick','Unpaid','Bereavement','Birthday',
+        'Maternity','Paternity','Hajj','Umrah'].includes(st.k)) continue;
+    if(filed.has(ds)) continue;
+    const a = attOf(u, ds);
+    if(!a || !a.segs.length){ out.push({d: ds, what: 'nothing recorded'}); continue; }
+    const last = a.segs[a.segs.length - 1];
+    if(!last.out && ds < today) out.push({d: ds, what: 'no check-out'});
+  }
+  return out.reverse();
+}
+
+function regularPanel(u){
+  const R = HR().regular, missing = regularDays(u), mine = R.mine;
+  if(!missing.length && !mine.length) return '';
+  const f = state.rgForm || (state.rgForm = {d:'', in:'', out:'', reason:''});
+  const none = R.left <= 0;
+  const pickable = missing.slice(0, 40);
+  const ok = f.d && f.reason.trim().length > 3 && (f.in || f.out) && !none;
+  return `
+  <section class="panel">
+    <header><h3>Fix a day you missed</h3>
+      <span class="pill ${none?'mute':'good'}">${none?'none left this month':R.left + ' of ' + R.max + ' left this month'}</span>
+      <span class="hint" style="margin-left:auto">decided by ${esc(NM(adminName()) || 'accounts')}</span></header>
+    <div class="pad">
+      ${missing.length ? `
+      <div class="rgform">
+        <label><span>Which day</span>
+          <select id="rgDay">
+            <option value="">Choose a day\u2026</option>
+            ${pickable.map(m => `<option value="${m.d}"${f.d===m.d?' selected':''}>${esc(dayName(m.d))} ${esc(dayLabel(m.d))} \u2014 ${esc(m.what)}</option>`).join('')}
+          </select></label>
+        <label><span>Checked in at</span><input id="rgIn" type="time" value="${esc(f.in)}"></label>
+        <label><span>Checked out at</span><input id="rgOut" type="time" value="${esc(f.out)}"></label>
+        <label class="wide"><span>What happened</span>
+          <input id="rgWhy" type="text" maxlength="160" value="${esc(f.reason)}"
+            placeholder="Went straight to the client in Deira and forgot to tap in"></label>
+      </div>
+      <button class="btn" id="rgGo" type="button"${ok?'':' disabled'}>Send to ${esc((adminName()||'accounts').split(' ')[0])}</button>
+      ${none ? '<p class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Both of this month\u2019s are used.</b> A declined request costs nothing, so this is two that were approved. The allowance comes back on the 1st.</p>' : ''}
+      ${state.rgSent ? '<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Sent.</b> Accounts has it, and you will see the answer here.</div>' : ''}
+      ` : '<p style="margin:0;color:var(--ink2)">Nothing is missing. Every working day this month has a check-in and a check-out.</p>'}
+    </div>
+    ${mine.length ? `<div class="tw"><table>
+      <thead><tr><th>Ref</th><th>Day</th><th class="n">In</th><th class="n">Out</th><th>Why</th><th>State</th><th></th></tr></thead>
+      <tbody>${mine.map(r => `<tr>
+        <td class="n">${esc(r.id)}</td>
+        <td class="nw">${esc(dayName(r.d))} ${esc(dayLabel(r.d))}</td>
+        <td class="n">${esc(r.in)||'\u2014'}</td><td class="n">${esc(r.out)||'\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">${esc(r.reason)}${r.note?' \u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:${RGCOL(r.status)}">${esc(r.status)}</span></td>
+        <td>${r.status==='Pending'?`<button class="btn ghost sm" data-rgdrop="${esc(r.uid)}" type="button">Withdraw</button>`:''}</td>
+      </tr>`).join('')}</tbody></table></div>` : ''}
+  </section>`;
+}
+// A function, not a const: this block is appended after the app has already
+// started drawing, and a const would not be initialised in time.
+function RGCOL(s){ return {Pending:'var(--warn)', Approved:'var(--good)',
+  Declined:'var(--bad)', Withdrawn:'var(--ink3)'}[s] || 'var(--line)'; }
+function adminName(){
+  const R = DATA._roles || {};
+  return Object.keys(R).find(n => (R[n]||[]).includes('accounts')) || '';
+}
+
+/* --- the console: every request, and who is at their limit --- */
+function vRegular(){
+  const R = HR().regular;
+  const rows = R.rows, pend = rows.filter(r => r.status === 'Pending');
+  const month = HDATE().slice(0,7);
+  const approvedThis = rows.filter(r => r.status === 'Approved' && r.d.slice(0,7) === month);
+  const atLimit = Object.entries(R.used || {})
+    .filter(([k, n]) => k.endsWith('|' + month) && n >= R.max)
+    .map(([k]) => k.split('|')[0]);
+  const late = USERS.map(x => x.name).filter(tracksAtt)
+    .filter(n => { const g = nudgeFor(n); return g && g.escalated; });
+
+  return `
+  <div class="strip">
+    <div class="stat"><span class="k">Waiting for you</span>
+      <span class="v" style="color:var(--${pend.length?'warn':'good'})">${pend.length}</span>
+      <span class="n">${pend.length?'to approve or decline':'nothing outstanding'}</span></div>
+    <div class="stat"><span class="k">Approved this month</span><span class="v">${approvedThis.length}</span>
+      <span class="n">${MONTHNAME[+month.slice(5)-1]} ${month.slice(0,4)}</span></div>
+    <div class="stat"><span class="k">At their limit</span>
+      <span class="v" style="color:var(--${atLimit.length?'warn':'ink'})">${atLimit.length}</span>
+      <span class="n">${atLimit.length?esc(atLimit.map(NM).join(', ')):'nobody has used both'}</span></div>
+    <div class="stat"><span class="k">Not checked in today</span>
+      <span class="v" style="color:var(--${late.length?'bad':'good'})">${late.length}</span>
+      <span class="n">${late.length?'past '+(HR().escalateMin??30)+' minutes':'everybody is in or accounted for'}</span></div>
+  </div>
+
+  ${pend.length ? `<section class="panel">
+    <header><h3>Waiting for a decision</h3><span class="hint">only you can decide these</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th class="n r">Left</th><th></th></tr></thead>
+      <tbody>${pend.map(r => {
+        const left = Math.max(0, R.max - (R.used[r.who + '|' + r.d.slice(0,7)] || 0));
+        return `<tr>
+        <td class="n">${esc(r.id)}</td><td class="nw">${esc(NM(r.who))}</td>
+        <td class="nw">${esc(dayName(r.d))} ${esc(dayLabel(r.d))}</td>
+        <td class="n">${esc(r.in)||'\u2014'}</td><td class="n">${esc(r.out)||'\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">${esc(r.reason)}</td>
+        <td class="n r"${left?'':' style="color:var(--bad)"'}>${left} of ${R.max}</td>
+        <td class="nw"><button class="btn sm" data-rgok="${esc(r.uid)}" type="button"${left?'':' disabled title="both are used"'}>Approve</button>
+          <button class="btn ghost sm" data-rgno="${esc(r.uid)}" type="button">Decline</button></td></tr>`;}).join('')}
+      </tbody></table></div>
+    <p class="cap">Approving writes the times onto that day\u2019s attendance and marks it as regularized, so the working-days figure that payroll sees moves with it.</p>
+  </section>` : ''}
+
+  ${late.length ? `<section class="panel">
+    <header><h3>Not checked in today</h3><span class="hint">more than ${HR().escalateMin??30} minutes past their shift</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Who</th><th>Shift</th><th>Manager</th><th class="r">Late by</th></tr></thead>
+      <tbody>${late.map(n => { const g = nudgeFor(n); return `<tr>
+        <td class="nw">${esc(NM(n))}</td><td class="n">${esc(shiftOf(n).start)}</td>
+        <td class="nw">${esc(NM(mgrName(n)) || '\u2014')}</td>
+        <td class="n r">${g.by} min</td></tr>`;}).join('')}
+      </tbody></table></div>
+  </section>` : ''}
+
+  <section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Every request</h3><span class="hint">${rows.length} in all</span></header>
+    <div class="tw"><table class="invtable">
+      <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th>State</th><th>Decided</th></tr></thead>
+      <tbody>${rows.length ? rows.map(r => `<tr>
+        <td class="n">${esc(r.id)}</td><td class="nw">${esc(NM(r.who))}</td>
+        <td class="nw">${esc(dayLabel(r.d))}</td>
+        <td class="n">${esc(r.in)||'\u2014'}</td><td class="n">${esc(r.out)||'\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">${esc(r.reason)}${r.note?' \u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:${RGCOL(r.status)}">${esc(r.status)}</span></td>
+        <td class="n">${esc(r.decided)?esc(dayLabel(r.decided)):'\u2014'}</td></tr>`).join('')
+        : '<tr><td colspan="8" style="color:var(--ink3)">Nobody has asked to fix a day yet.</td></tr>'}
+      </tbody></table></div>
+    <p class="cap">Two approved a month each, counted by the database rather than by this screen \u2014 a limit only the screen keeps is not a limit. A declined request costs nobody anything.</p>
+  </section>`;
+}

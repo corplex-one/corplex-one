@@ -1159,6 +1159,50 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
 .pfsave button[disabled]{display:none}
 @media(prefers-reduced-motion:reduce){ .pfsave{transition:none} }
 @media(max-width:720px){ .pfsave{bottom:78px} }   /* clear of the tab bar */
+
+  /* the nudge — a note, not an alarm, until it is your manager's business */
+  .nudge{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;margin-bottom:16px;
+    border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
+    background:var(--card)}
+  .nudge.loud{border-left-color:var(--bad)}
+  .nudge .ndot{width:8px;height:8px;border-radius:50%;background:var(--warn);
+    margin-top:6px;flex:none}
+  .nudge.loud .ndot{background:var(--bad)}
+  .nudge b{display:block;font-size:14.5px}
+  .nudge span:not(.ndot){display:block;color:var(--ink2);font-size:13.5px;margin-top:2px}
+
+  /* what the record says about where a check-in came from */
+  .wmark{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:20px;
+    font-size:11px;letter-spacing:.02em;color:var(--ink3);border:1px solid var(--line);
+    vertical-align:1px;white-space:nowrap}
+  .wmark.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
+
+  .ciwarn{margin-top:16px;padding:13px 16px;border:1px solid var(--line);
+    border-left:3px solid var(--warn);border-radius:10px;font-size:14px;color:var(--ink2)}
+  .ciwarn b{color:var(--ink)}
+  .ciwrow{display:flex;gap:10px;margin-top:11px}
+  .ciwrow input{flex:1;min-width:0}
+
+  /* fixing a missed day */
+  .rgform{display:grid;grid-template-columns:minmax(0,1.6fr) 130px 130px;gap:14px;
+    margin-bottom:16px}
+  .rgform label{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .rgform label.wide{grid-column:1/-1}
+  .rgform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .btn.sm{padding:5px 12px;font-size:12.5px}
+
+  /* where the office is */
+  .offrow{display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap}
+  .offrow>div{display:flex;flex-direction:column;gap:4px}
+  .offrow .k{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .offrow b{font-size:19px}
+  .offrow .n{font-size:12.5px;color:var(--ink3)}
+
+  @media (max-width:820px){
+    .rgform{grid-template-columns:1fr 1fr}
+    .rgform label:first-child{grid-column:1/-1}
+    .ciwrow{flex-direction:column}
+  }
 </style>
 
 <div id="login" class="hidden">
@@ -1241,7 +1285,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
 <div class="tip" id="tip"></div>
 <div id="lookWrap" class="hidden"></div>
 
-<script src="config.js?v=202609021736"></script>
-<script type="module" src="boot.js?v=202609021736"></script>
+<script src="config.js?v=202609021757"></script>
+<script type="module" src="boot.js?v=202609021757"></script>
 </body>
 </html>
