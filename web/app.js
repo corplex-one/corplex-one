@@ -105,7 +105,8 @@ const state = {
   lnForm: null, lnSent: false, exitWho: '', exitLwd: '', mailPick: 'weekly', mailWeek: null,
   revForm: null, revSent: '', noteDone: [], who: null, peopleQ: '', askTab: 'loans',
   askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: 'all', invRaw: null, invPrint: false,
-  payStatus: 'closed', payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',
+  payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
+  payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',
   payInternal: false,
   payFilter: {ch:'all', visa:'all', text:''},
   atFilter: {status:'all', country:'all', text:''},
@@ -4597,7 +4598,8 @@ function revNote(u){
 }
 function vMySlip(){
   const P = DATA.payroll, released = state.payStatus==='closed';
-  const row = payrollRowFor(state.user);
+  const row0 = payrollRowFor(state.user);
+  const row = (row0 && row0.net !== undefined) ? row0 : null;
   if(!row) return `<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
     <h3 style="font-size:20px;margin-bottom:8px">No payslip for you</h3>
     <p style="color:var(--ink2);max-width:52ch;margin:0 auto">You are not on this payroll run. If that looks wrong, speak to accounts.</p></div></section>`;
