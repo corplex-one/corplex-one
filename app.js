@@ -5970,6 +5970,9 @@ function render(){
   }
 }
 
+{ const bn = document.getElementById('buildNo');
+  if(bn) bn.textContent = 'build ' + ((window.CORPLEX_ONE || {}).build || '?'); }
+
 /* looking at a document without leaving the page */
 function showDoc(kind){
   const f = ((HR().files || {})[state.user] || {})[kind];
