@@ -363,7 +363,11 @@ export function buildData(db, meId){
   const gById = new Map();
   (db.gratuity_rows || []).forEach(r => {
     const row = {n: r.name, co: co(r.company), doj: String(r.doj).slice(0,10),
-                 left: r.left_on ? String(r.left_on).slice(0,10) : '', paid:+r.paid, basic:{}};
+                 left: r.left_on ? String(r.left_on).slice(0,10) : '', paid:+r.paid,
+                 paidOn: r.paid_on ? String(r.paid_on).slice(0,10) : '',
+                 // the entity that carries the liability, which is not always
+                 // the one the person works for
+                 visa: r.visa_company || '', basic:{}};
     gById.set(r.id, row); gratuity.rows.push(row);
   });
   (db.gratuity_basic || []).forEach(c => {

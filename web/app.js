@@ -1824,12 +1824,15 @@ function vGratuity(){
   const me = gMonthEnd(ym), prev = months[months.indexOf(ym)-1];
   const pe = prev ? gMonthEnd(prev) : '';
   const cos = ['CorpLex','POA','Lex'];
-  const gVisa = n => { const v = ((payrollRowFor(n)||{}).visa || '').trim();
+  const CoLabel = {corplex:'CorpLex', poa:'POA', lex:'Lex'};
+  const gVisa = r => {
+    if(r && r.visa) return CoLabel[r.visa] || 'Other';
+    const v = ((payrollRowFor(r && r.n)||{}).visa || '').trim();
     if(!v) return ''; if(/^CorpLex/.test(v)) return 'CorpLex';
     if(v==='POA') return 'POA'; if(v==='Lex') return 'Lex'; return 'Other'; };
   const rowsFor = co => GRAT().rows.filter(r=>r.co===co)
     .map(r=>{ const now = gratAt(r, me), was = pe ? gratAt(r, pe) : {v:0};
-      return {r, now, was, move: now.v - was.v, visa: gVisa(r.n)}; })
+      return {r, now, was, move: now.v - was.v, visa: gVisa(r)}; })
     .filter(x=>x.now.v > 0 || x.was.v > 0)
     .sort((a,b)=>b.now.v - a.now.v);
   const all = cos.map(rowsFor);
@@ -1902,19 +1905,47 @@ function vGratuity(){
         `<option value="${m}"${m===ym?' selected':''}>${esc(MONTHNAME[+m.slice(5)-1])} ${m.slice(0,4)}</option>`).join('')}</select>
     </header>
     ${cos.map((c,i)=>block(c, all[i])).join('')}
+    ${(() => {
+      const young = all.flat().filter(x => !x.r.left && x.now.days && x.now.days < 365);
+      if(!young.length) return '';
+      const v = young.reduce((s,x) => s + x.now.v, 0);
+      return `<p class="cap" style="border-left:2px solid var(--line2);padding-left:12px">
+        <b>${money(v,0)} of this is held for ${young.length} ${young.length===1?'person':'people'} who
+        ${young.length===1?'has':'have'} not completed a year</b> &mdash;
+        ${esc(young.sort((a,b)=>b.now.days-a.now.days).map(x=>nm(x.r.n)+' ('+Math.round(365-x.now.days)+'d)').join(', '))}.
+        Nothing is payable to them until they do, so it is provided against the likelihood they stay,
+        and written back if they do not.</p>`;
+    })()}
     <p class="cap">Straight from your workbook and recalculated here, not copied &mdash; every figure in the 2025 and 2026 sheets reproduces to the dirham. Service runs in calendar days from the joining date; a leaver is held to their last working day and released the following month. The POA table is split by <b>visa entity</b>, because the end-of-service liability sits with the company that sponsors the visa, not the one the person works for. A <b>payroll says</b> flag means the basic on the payroll file differs from the one in the workbook &mdash; one of the two is out of date.</p>
   </section>
 
   ${released.length?`<section class="panel">
     <header><h3>Released this month</h3><span class="hint">provision no longer held</span></header>
     <div class="tw"><table class="gtable2">
-      <thead><tr><th>Who</th><th>Company</th><th>Last day</th><th class="r">Provision released</th><th class="r">Paid</th><th class="r">Difference</th></tr></thead>
-      <tbody>${released.map(x=>`<tr><td class="nw">${nm(x.r.n)}</td><td class="nw">${esc(x.r.co==='Lex'?'Lex Estates':x.r.co)}</td>
+      <thead><tr><th>Who</th><th>Company</th><th>Last day</th><th class="r">Provision released</th><th class="r">Paid</th><th class="r">Over/(under)</th><th>Why</th></tr></thead>
+      <tbody>${released.map(x=>{
+        const served = Math.round((new Date(x.r.left) - new Date(x.r.doj))/86400000);
+        const short = served < 365 && !(x.r.paid > 0);
+        const d = (x.r.paid||0) - x.was.v;
+        return `<tr><td class="nw">${nm(x.r.n)}</td><td class="nw">${esc(x.r.co==='Lex'?'Lex Estates':x.r.co)}</td>
         <td class="n nw">${esc(dayLabel(x.r.left))} ${x.r.left.slice(0,4)}</td>
-        <td class="n r">${money(x.was.v,0)}</td><td class="n r">${money(x.r.paid||0,0)}</td>
-        <td class="n r"${Math.abs((x.r.paid||0)-x.was.v)>1?' style="color:var(--warn)"':''}>${money((x.r.paid||0)-x.was.v,0)}</td></tr>`).join('')}
+        <td class="n r">${money(x.was.v,0)}</td><td class="n r">${short?'—':money(x.r.paid||0,0)}</td>
+        <td class="n r"${short?' style="color:var(--good)"':(Math.abs(d)>1?' style="color:var(--warn)"':'')}>${short?'('+money(x.was.v,0)+')':money(d,0)}</td>
+        <td class="gnote">${short
+          ? '<span class="pill mute">'+served+' days &mdash; under a year, none payable</span>'
+          : !x.r.paid ? '<span class="pill warn"><span class="dt"></span>nothing recorded as paid</span>'
+          : !x.r.paidOn ? ''
+          : (() => {
+              // Paid on the last day and released the month after is the normal
+              // shape of things; only a real gap is worth flagging.
+              const gap = (+ym.slice(0,4)*12 + +ym.slice(5,7)) -
+                          (+x.r.paidOn.slice(0,4)*12 + +x.r.paidOn.slice(5,7));
+              return Math.abs(gap) <= 1
+                ? '<span class="pill good"><span class="dt"></span>paid '+esc(dayLabel(x.r.paidOn))+'</span>'
+                : '<span class="pill warn"><span class="dt"></span>cash paid '+esc(dayLabel(x.r.paidOn))+' '+x.r.paidOn.slice(0,4)+'</span>';
+            })()}</td></tr>`;}).join('')}
       </tbody></table></div>
-    <p class="cap">A difference here is an over or under provision, and goes through the P&amp;L in the month the person is paid.</p>
+    <p class="cap">A difference here is an over or under provision, and goes through the P&amp;L in the month the person is paid. Somebody who leaves before completing a year is owed nothing under the law, so their whole provision is written back &mdash; that is a credit, not a debt. Where the cash left in a different month from the release, the date it actually went out is shown.</p>
   </section>`:''}`;
 }
 
