@@ -376,6 +376,10 @@ export function buildData(db, meId){
     key: r.month_key, label: r.label, status: r.status, runId: r.id,
     payDate: r.pay_date ? longDate(r.pay_date) : '',
     preparedBy: name(r.prepared_by), approver: name(r.approver),
+    // Why a month came back belongs to the month. The screen used to hold it
+    // in a variable, which meant it survived exactly as long as the tab did.
+    note: r.note || '',
+    submittedBy: name(r.submitted_by), paidBy2: name(r.paid_by),
     rows: (db.payroll_lines || []).filter(l => l.run_id === r.id).map(lineOf)
   }));
 

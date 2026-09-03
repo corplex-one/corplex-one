@@ -231,6 +231,22 @@ const reload = async () => {
 const KIND = {Annual:'annual', Sick:'sick', Unpaid:'unpaid', Birthday:'birthday',
               WFH:'wfh', 'Off-site':'offsite'};
 
+/* One act of the payroll month.
+ *
+ * Every one of these can be refused — accounts approving its own work, a
+ * closed month being reopened, a submission with nobody on it — and a refusal
+ * is not an error to hide. It is the control doing its job, so it is shown,
+ * and then the data is reloaded either way so the screen goes back to
+ * describing what is actually true rather than what was attempted. */
+async function runStep(fn, args, what){
+  try{
+    const {data, error} = await sb.rpc(fn, args);
+    if(error) throw error;
+    await reload();
+    return data;
+  }catch(e){ oops(e, what); await reload(); return null; }
+}
+
 window.__db = {
   ready: () => !!ME,
 
@@ -399,15 +415,18 @@ window.__db = {
 
   // ---- the accounts console -------------------------------------------
 
-  async setRunStatus(monthKey, status, note){
-    try{
-      const patch = {status, note: note || null};
-      if(status === 'approved') patch.approved_at = new Date().toISOString();
-      if(status === 'closed')   patch.closed_at   = new Date().toISOString();
-      const {error} = await sb.from('payroll_runs').update(patch).eq('month_key', monthKey);
-      if(error) throw error;
-    }catch(e){ oops(e, 'The payroll status'); await reload(); }
-  },
+  // The month moves one act at a time, and each act is a function the database
+  // can refuse. There is deliberately no general "set the status to X" any
+  // more: that let the screen decide the transition, which is the same as
+  // having no rule at all.
+  async submitRun(monthKey){   return runStep('submit_run',   {p_month: monthKey}, 'Submitting the month'); },
+  async unsubmitRun(monthKey){ return runStep('unsubmit_run', {p_month: monthKey}, 'Withdrawing it'); },
+  async approveRun(monthKey){  return runStep('approve_run',  {p_month: monthKey}, 'Approving the month'); },
+  async returnRun(monthKey, why){
+    return runStep('return_run', {p_month: monthKey, p_why: why}, 'Sending it back'); },
+  async payRun(monthKey, on){
+    return runStep('pay_run', {p_month: monthKey, p_on: on || null}, 'Marking it paid'); },
+  async closeRun(monthKey){    return runStep('close_run',    {p_month: monthKey}, 'Closing the month'); },
 
   // ------------------------------------------------------------- payroll
   // Preparing a month here rather than in a spreadsheet. The database builds

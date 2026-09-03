@@ -2629,16 +2629,16 @@ function alertsFor(u){
 
   if(typeof DATA!=='undefined' && DATA.payroll){
     const net = DATA.payroll.rows.reduce((s,r)=>s+r.net,0);
-    if(role==='owner' && state.payStatus==='submitted')
+    if(role==='owner' && PAYST()==='submitted')
       add('pr-approve', `Payroll ${DATA.payroll.month} needs your approval`,
         `AED ${money(net,2)} net across ${DATA.payroll.rows.length} people`, 'payroll');
-    if(canUpload(u) && state.payStatus==='initiated')
+    if(canUpload(u) && PAYST()==='initiated')
       add('pr-release', `${DATA.payroll.month} payment is initiated`, 'Release it to publish payslips', 'payroll');
-    if(canUpload(u) && state.payStatus==='returned')
+    if(canUpload(u) && PAYST()==='returned')
       add('pr-back', `Miraziz sent the ${DATA.payroll.month} payroll back`, state.payNote || 'No note given', 'payroll', 'bad');
     if(role==='owner' && state.sepStage===2)
       add('pr-sep', `Payroll ${NEXTRUN.month} needs your approval`, 'Uploaded by Avin, waiting on you', 'payroll', 'warn', {run:'sep'});
-    if(state.payStatus==='closed' && !canAdmin(u) && payrollRowFor(u))
+    if(PAYST()==='closed' && !canAdmin(u) && payrollRowFor(u))
       add('slip', `Your ${DATA.payroll.month} payslip is ready`, 'Released by accounts — view or download it', 'myslip', 'good');
   }
 
@@ -2722,7 +2722,7 @@ function vHome(){
     const D = profDone(u);
     if(D.total && D.pct < 100) todo.push([D.pct===0 ? 'Fill in your profile' : `Your profile is ${D.pct}% done — ${D.missing.length} thing${D.missing.length===1?'':'s'} left`, 'profile', null]);
   }
-  if(!adm && payrollRowFor(u) && state.payStatus==='closed') todo.push([`Your ${DATA.payroll.month} payslip is ready`, 'myslip', null]);
+  if(!adm && payrollRowFor(u) && PAYST()==='closed') todo.push([`Your ${DATA.payroll.month} payslip is ready`, 'myslip', null]);
 
   const empty = t => `<p style="margin:0;color:var(--ink3);font-size:13.5px">${esc(t)}</p>`;
 
@@ -4239,6 +4239,10 @@ function vPayrollNext(){
     </section>
   </div>`;
 }
+// The newest run's status, read from the database every time rather than
+// from a copy kept on the page. See the note in mkweb.mjs.
+const PAYST = () => (DATA.payroll && DATA.payroll.status) || 'draft';
+
 function vPayroll(){
   const runs = DATA.payroll.runs || [];
   if(runs.length){
@@ -4277,7 +4281,14 @@ function vPayroll(){
   const S = k => rows.reduce((s,r)=>s+(r[k]||0),0);
   const SC = k => coRows.reduce((s,r)=>s+(r[k]||0),0);
   const L = c => P.label[c] || c;
-  const st = state.payStatus;
+  // The run whose figures are on this screen. Not the one the selector says:
+  // the mapper only works out gross, deductions and net for the newest run, so
+  // this panel always describes that one, and the status it shows has to be
+  // that run's or the buttons would act on a different month from the totals.
+  const HERE = (DATA.payroll.runs || []).find(r => r.key === DATA.payroll.monthKey)
+             || (DATA.payroll.runs || [])[0] || null;
+  const st = HERE ? HERE.status : PAYST();
+  const RUNNOTE = HERE ? (HERE.note || '') : '';
   const stPill = {draft:'<span class="pill mute">Draft</span>',
     submitted:'<span class="pill warn"><span class="dt"></span>Waiting for Miraziz</span>',
     approved:'<span class="pill good"><span class="dt"></span>Approved</span>',
@@ -4325,7 +4336,7 @@ function vPayroll(){
 
   <section class="panel">
     <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
-      ${runSeg()}
+      <span class="pill mute" style="margin-left:14px">${esc(HERE ? HERE.label : DATA.payroll.month)}</span>
       <div class="seg" id="coSeg" style="margin-left:auto">
         <button data-co="all" aria-pressed="${co==='all'}" type="button">All</button>
         ${P.companies.map(c=>`<button data-co="${esc(c)}" aria-pressed="${co===c}" type="button">${esc(L(c))}</button>`).join('')}
@@ -4339,16 +4350,21 @@ function vPayroll(){
         ${step(4,'Payment initiated', ['initiated','closed'].includes(st), st==='initiated')}
         ${step(5,'Paid &mdash; payslips released', st==='closed', false)}
       </div>
-      ${st==='returned'?`<div class="note" style="border-left-color:var(--bad);margin-top:16px"><b>Miraziz sent this back.</b> ${esc(state.payNote||'No note given.')}</div>`:''}
+      ${st==='returned'?`<div class="note" style="border-left-color:var(--bad);margin-top:16px"><b>Sent back.</b> ${esc(RUNNOTE || 'No reason was given.')} &mdash; the month is editable again, and submitting it clears this.</div>`:''}
+      ${isApprover && st==='submitted' && state.payAsk ? `<div class="ciwarn" style="border-left-color:var(--bad)">
+        <b>What is wrong with it?</b>
+        <div class="ciwrow"><input id="payWhy" placeholder="so Avin knows what to fix" value="${esc(state.payWhy||'')}">
+          <button class="btn" id="payWhyGo" type="button"${(state.payWhy||'').trim()?'':' disabled'}>Send it back</button>
+          <button class="btn ghost" id="payWhyNo" type="button">Cancel</button></div></div>`:''}
       <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;align-items:center">
         ${isPrep && (st==='draft'||st==='returned') ? '<button class="btn" id="paySubmit" type="button">Submit to Miraziz for approval</button>' : ''}
-        ${isApprover && st==='submitted' ? '<button class="btn" id="payApprove" type="button">Approve the run</button><button class="btn ghost" id="payReturn" type="button">Send back to Avin</button>' : ''}
-        ${isPrep && st==='approved' ? '<button class="btn" id="payInit" type="button">Initiate the payment</button><button class="btn ghost" id="payReset" type="button">Reopen</button><span style="color:var(--good);font-size:13px">Approved by Miraziz &mdash; AED '+money(staffNet,2)+' across three companies</span>' : ''}
-        ${isPrep && st==='initiated' ? '<button class="btn" id="payClose" type="button">Approve the payment and release payslips</button><button class="btn ghost" id="payBack" type="button">Back</button><span style="color:var(--warn);font-size:13px">Initiated &mdash; releasing publishes '+staff.length+' payslips to staff</span>' : ''}
-        ${!isPrep && ['approved','initiated'].includes(st) ? '<span style="color:var(--ink3);font-size:12.5px">With Avin &mdash; payment '+(st==='initiated'?'initiated, not yet released':'not yet initiated')+'.</span>' : ''}
-        ${st==='closed' ? `${isPrep?`<button class="btn" id="payNext" type="button">Start the ${esc(NEXTRUN.label)} run</button><button class="btn ghost" id="paySlips" type="button">Payslips</button><button class="btn ghost" id="payReset" type="button">Reopen August</button>`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED ${money(staffNet,2)} across three companies, and ${staff.length} payslips released to staff</span>` : ''}
+        ${isApprover && st==='submitted' ? '<button class="btn" id="payApprove" type="button">Approve the run</button><button class="btn ghost" id="payReturn" type="button">Send it back</button>' : ''}
+        ${isPrep && st==='approved' ? '<button class="btn" id="payInit" type="button">Mark it paid</button><span style="color:var(--good);font-size:13px">Approved by '+esc(HERE&&HERE.approver||'the owner')+' &mdash; AED '+money(staffNet,2)+'</span>' : ''}
+        ${isPrep && st==='initiated' ? '<button class="btn" id="payClose" type="button">Close the month and release payslips</button><span style="color:var(--warn);font-size:13px">Paid. Closing publishes '+staff.length+' payslips to staff.</span>' : ''}
+        ${!isPrep && ['approved','initiated'].includes(st) ? '<span style="color:var(--ink3);font-size:12.5px">With Avin &mdash; '+(st==='initiated'?'paid, not yet closed':'not yet paid')+'.</span>' : ''}
+        ${st==='closed' ? `${isPrep?`<button class="btn" id="payNext" type="button">Start the ${esc(NEXTRUN.label)} run</button><button class="btn ghost" id="paySlips" type="button">Payslips</button>`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED ${money(staffNet,2)}, and ${staff.length} payslips released to staff</span>` : ''}
         ${isApprover && st==='draft' ? '<span style="color:var(--ink3);font-size:12.5px">Avin has not submitted this month yet.</span>' : ''}
-        ${isPrep && st==='submitted' ? '<span style="color:var(--ink3);font-size:12.5px">With Miraziz. You will be notified when he approves.</span>' : ''}
+        ${isPrep && st==='submitted' ? '<button class="btn ghost" id="payWithdraw" type="button">Withdraw it</button><span style="color:var(--ink3);font-size:12.5px">With Miraziz. Withdrawing puts it back to a draft you can edit.</span>' : ''}
       </div>
     </div>
   </section>
@@ -4817,7 +4833,7 @@ function revNote(u){
   </button>`;
 }
 function vMySlip(){
-  const P = DATA.payroll, released = state.payStatus==='closed';
+  const P = DATA.payroll, released = PAYST()==='closed';
   const row0 = payrollRowFor(state.user);
   const row = (row0 && row0.net !== undefined) ? row0 : null;
   if(!row) return `<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
@@ -4903,7 +4919,7 @@ function vSlips(){
   const P = DATA.payroll;
   const runs = P.runs || [];
   const here = runs.find(r => r.key === state.payRun) || runs[0] || null;
-  const released = here ? here.status === 'closed' : state.payStatus === 'closed';
+  const released = here ? here.status === 'closed' : PAYST() === 'closed';
   const staff = (here ? here.rows : P.rows).filter(r=>!r.dummy);
   const co = state.payCompany;
   const rows = co==='all' ? staff : staff.filter(r=>r.company===co);
@@ -6600,18 +6616,32 @@ function render(){
     on('sepUpload',()=>{state.sepStage=1;render();});
     on('sepReset',()=>{state.sepStage=0;render();});
     on('sepSubmit',()=>{state.sepStage=2;render();});
-    const setRun = s => { state.payStatus = s;
-      window.__db.setRunStatus(DATA.payroll.monthKey, s === 'returned' ? 'returned' : s, state.payNote); };
-    on('payInit',()=>{setRun('initiated');render();});
-    on('payBack',()=>{setRun('approved');render();});
-    on('payClose',()=>{setRun('closed');render();});
+    // Every one of these can be refused by the database. None of them assumes
+    // it worked: the panel re-reads the run afterwards either way.
+    const RUNKEY = () => DATA.payroll.monthKey;
+    const act = (id, fn) => { const b = document.getElementById(id); if(!b) return;
+      b.onclick = async () => { b.disabled = true; await fn(RUNKEY()); render(); }; };
+    act('payInit',     k => window.__db.payRun(k));
+    act('payWithdraw', k => window.__db.unsubmitRun(k));
+    act('payClose',    k => window.__db.closeRun(k));
     on('paySlips',()=>{state.tab='payslips';render();});
     on('payNext',()=>{state.payRun='sep';render();});
-    on('paySubmit',()=>{setRun('submitted');state.payNote='';render();});
-    on('payApprove',()=>{setRun('approved');render();});
-    on('payReturn',()=>{setRun('returned');
-      state.payNote='Confirm the CorpLex–POA recharge before I approve.';render();});
-    on('payReset',()=>{setRun(({closed:'initiated',initiated:'approved',approved:'submitted'})[state.payStatus]||'draft');state.payNote='';render();});
+    act('paySubmit',   k => window.__db.submitRun(k));
+    act('payApprove',  k => window.__db.approveRun(k));
+    on('payReturn',()=>{ state.payAsk = true; render(); });
+    on('payWhyNo',()=>{ state.payAsk = false; state.payWhy = ''; render(); });
+    { const w = document.getElementById('payWhy');
+      if(w){ let tm; w.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(()=>{
+        state.payWhy = w.value; render();
+        const e2 = document.getElementById('payWhy');
+        if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+      }, 300); }; } }
+    { const g = document.getElementById('payWhyGo');
+      if(g) g.onclick = async ()=>{ g.disabled = true;
+        const r = await window.__db.returnRun(RUNKEY(), state.payWhy);
+        if(r){ state.payAsk = false; state.payWhy = ''; }
+        render(); }; }
+
     on('payInt',()=>{state.payInternal=!state.payInternal;render();});
     const pb=(id,key)=>{const el=document.getElementById(id); if(el) el.onchange=()=>{state.payFilter[key]=el.value;render();};};
     pb('pfch','ch'); pb('pfvisa','visa');
