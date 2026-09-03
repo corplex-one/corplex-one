@@ -1886,17 +1886,27 @@ function vGratuity(){
       <tbody>${body}${sumrow(rs, co==='Lex'?'Lex Estates':co, 'tot')}</tbody></table></div>`; };
 
   return `
-  <div class="strip">
-    <div class="stat"><span class="k">Provision at ${esc(dayLabel(me))} ${me.slice(0,4)}</span>
-      <span class="v"><span class="cur">AED</span>${money(tot,0)}</span>
-      <span class="n">${all.flat().filter(x=>x.now.v>0).length} people across the three companies</span></div>
-    <div class="stat"><span class="k">Movement in the month</span>
-      <span class="v" style="color:var(--${mv>=0?'warn':'good'})"><span class="cur">AED</span>${mv>=0?'':'('}${money(Math.abs(mv),0)}${mv>=0?'':')'}</span>
-      <span class="n">${mv>=0?'charge to the P&amp;L':'net release'}</span></div>
-    ${cos.map((c,i)=>`<div class="stat"><span class="k">${esc(c==='Lex'?'Lex Estates':c)}</span>
-      <span class="v"><span class="cur">AED</span>${money(all[i].reduce((s,x)=>s+x.now.v,0),0)}</span>
-      <span class="n">${all[i].filter(x=>x.now.v>0).length} ${all[i].filter(x=>x.now.v>0).length===1?'person':'people'}</span></div>`).join('')}
-  </div>
+  ${(() => {
+    // provision above, this month's movement below it, for the group and for
+    // each company — the same shape four times over
+    const tile = (label, sub, value, move, heads) => `
+      <div class="stat"><span class="k">${esc(label)}${sub?' <i>'+esc(sub)+'</i>':''}</span>
+        <span class="v"><span class="cur">AED</span>${money(value,0)}</span>
+        <span class="n">${move
+          ? '<b style="color:var(--'+(move>=0?'warn':'good')+')">'
+            + (move>=0?'+':'(') + money(Math.abs(move),0) + (move>=0?'':')')
+            + '</b> ' + (move>=0?'charged':'released')
+          : '<span style="color:var(--ink3)">no movement</span>'}
+          &middot; ${heads} ${heads===1?'person':'people'}</span></div>`;
+    return `<div class="strip tight">
+      ${tile('All three companies', esc(dayLabel(me)) + ' ' + me.slice(0,4),
+             tot, mv, all.flat().filter(x=>x.now.v>0).length)}
+      ${cos.map((c,i)=>tile(c==='Lex'?'Lex Estates':c, '',
+             all[i].reduce((s,x)=>s+x.now.v,0),
+             all[i].reduce((s,x)=>s+x.move,0),
+             all[i].filter(x=>x.now.v>0).length)).join('')}
+    </div>`;
+  })()}
 
   <section class="panel">
     <header><h3>Gratuity provision</h3>

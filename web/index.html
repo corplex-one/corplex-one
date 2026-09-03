@@ -1160,6 +1160,14 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
 @media(prefers-reduced-motion:reduce){ .pfsave{transition:none} }
 @media(max-width:720px){ .pfsave{bottom:78px} }   /* clear of the tab bar */
 
+  /* Four numbers that belong together read better close than spread out. */
+  .strip.tight .stat{padding:12px 15px;gap:3px}
+  .strip.tight .stat .v{font-size:22px}
+  .strip.tight .stat .k i{font-style:normal;color:var(--ink3);opacity:.75;
+    letter-spacing:.04em;margin-left:5px}
+  .strip.tight .stat .n b{font-weight:600;font-variant-numeric:tabular-nums}
+  @media(max-width:840px){ .strip.tight .stat .v{font-size:20px} }
+
   /* the nudge — a note, not an alarm, until it is your manager's business */
   .nudge{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;margin-bottom:16px;
     border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
@@ -1290,8 +1298,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609030819';</script>
-<script src="config.js?v=202609030819"></script>
-<script type="module" src="boot.js?v=202609030819"></script>
+<script>window.__BUILD = '202609030826';</script>
+<script src="config.js?v=202609030826"></script>
+<script type="module" src="boot.js?v=202609030826"></script>
 </body>
 </html>
