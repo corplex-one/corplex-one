@@ -1197,6 +1197,23 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .attday:hover{text-decoration:underline}
   .attday:disabled{opacity:.4;cursor:default}
 
+  /* A payslip in the viewer: white paper on the sunk background, and the
+     window prints as the sheet alone. */
+  .slipmodal{max-width:920px}
+  .slipbody{align-items:flex-start;padding:24px;display:block}
+  .slipbody .slip{margin:0 auto}
+  .sliprow, tr.sliprow{cursor:pointer}
+  tr.sliprow:hover{background:var(--panel2)}
+  @media print{
+    body.printslip #app{display:none!important}
+    body.printslip #lookWrap{position:static!important;z-index:auto}
+    body.printslip #lookWrap .lookbg,
+    body.printslip #lookWrap .look header{display:none!important}
+    body.printslip #lookWrap .look{position:static;inset:auto;margin:0;max-width:none;
+      box-shadow:none;background:#fff;border-radius:0}
+    body.printslip #lookWrap .lookbody{overflow:visible;background:#fff;padding:0}
+  }
+
   /* the nudge — a note, not an alarm, until it is your manager's business */
   .nudge{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;margin-bottom:16px;
     border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
@@ -1327,8 +1344,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609030941';</script>
-<script src="config.js?v=202609030941"></script>
-<script type="module" src="boot.js?v=202609030941"></script>
+<script>window.__BUILD = '202609030950';</script>
+<script src="config.js?v=202609030950"></script>
+<script type="module" src="boot.js?v=202609030950"></script>
 </body>
 </html>

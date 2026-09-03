@@ -4802,17 +4802,46 @@ function vMySlip(){
     <header><h3>Earlier payslips</h3></header>
     <div class="pad"><p style="color:var(--ink2);margin:0">${esc(P.month)} is the first run through the portal. From here on, every released month stays in this list.</p></div>
   </section>`;
+  // Every month that has been released, newest first. The sheet itself opens
+  // when you ask for it.
+  const mine = (P.runs || [])
+    .filter(r => r.status === 'closed')
+    .map(r => ({run: r, row: r.rows.find(x => x.portalName === state.user && !x.dummy)}))
+    .filter(x => x.row);
   return `
+  <div class="strip tight">
+    <div class="stat"><span class="k">${esc(P.month)}</span>
+      <span class="v"><span class="cur">AED</span>${money(s.net,2)}</span>
+      <span class="n">paid ${esc(s.payDate)}</span></div>
+    <div class="stat"><span class="k">Earnings</span>
+      <span class="v"><span class="cur">AED</span>${money(s.gross,2)}</span>
+      <span class="n">${s.earn.length} line${s.earn.length===1?'':'s'}</span></div>
+    <div class="stat"><span class="k">Deductions</span>
+      <span class="v" style="color:var(--${s.dedT?'warn':'ink'})"><span class="cur">AED</span>${money(s.dedT,2)}</span>
+      <span class="n">${s.ded.length?s.ded.map(d=>esc(d[0])).join(', '):'none this month'}</span></div>
+    <div class="stat"><span class="k">Days paid</span><span class="v">${s.paidDays}</span>
+      <span class="n">${s.lop?s.lop+' without pay':'a full month'}</span></div>
+  </div>
+
   <section class="panel">
-    <header><h3>${esc(P.month)}</h3><span class="pill good"><span class="dt"></span>Released</span>
-      <span class="pill mute" style="margin-left:auto">A4</span><button class="btn" id="slPrint" type="button" style="padding:6px 14px;font-size:13px">Print or save as PDF</button></header>
-    <div class="slwrap">${slipHTML(s)}</div>
+    <header><h3>Your payslips</h3><span class="hint">click a month to open it</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Month</th><th>Paid on</th><th class="r">Earnings</th>
+        <th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
+      <tbody>${mine.map(x => { const ss = slipOf(x.row);
+        return '<tr class="sliprow" data-myslip="' + esc(x.run.key) + '">'
+          + '<td class="nw"><b>' + esc(x.run.label) + '</b></td>'
+          + '<td class="n nw">' + esc(ss.payDate) + '</td>'
+          + '<td class="n r">' + money(ss.gross,2) + '</td>'
+          + '<td class="n r">' + (ss.dedT ? money(ss.dedT,2) : '&mdash;') + '</td>'
+          + '<td class="n r netcol">' + money(ss.net,2) + '</td>'
+          + '<td class="r"><button class="btn ghost" data-myslip="' + esc(x.run.key)
+          + '" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>';
+      }).join('')}
+      </tbody></table></div>
+    <p class="cap">Every released month stays here. The payslip opens on ${esc(s.ent.legal)} letterhead and can be printed or saved as a PDF from the window.</p>
   </section>
-  ${revNote(state.user)}
-  <section class="panel">
-    <header><h3>Earlier payslips</h3></header>
-    <div class="pad"><p style="color:var(--ink2);margin:0">${esc(P.month)} is the first run through the portal. From here on, every released month stays in this list.</p></div>
-  </section>`;
+  ${revNote(state.user)}`;
 }
 function vSlips(){
   const P = DATA.payroll;
@@ -4848,7 +4877,7 @@ function vSlips(){
         <td class="nw">${nm(r.name)}</td><td class="n">${esc(r.id)}</td><td>${esc(DATA.payroll.label[r.company]||r.company)}</td>
         <td class="n r">${money(s.gross,2)}</td><td class="n r">${s.dedT?money(s.dedT,2):'&mdash;'}</td>
         <td class="n r netcol">${money(s.net,2)}</td>
-        <td class="r"><button class="btn ghost" data-slip="${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">${state.slipOpen===r.id?'Hide':'View'}</button></td></tr>`;}).join('')}
+        <td class="r"><button class="btn ghost" data-slip="${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>`;}).join('')}
         <tr class="tot"><td>${rows.length} people</td><td></td><td></td>
           <td class="n r">${money(rows.reduce((a,r)=>a+slipOf(r).gross,0),2)}</td>
           <td class="n r">${money(rows.reduce((a,r)=>a+slipOf(r).dedT,0),2)}</td>
@@ -5423,14 +5452,14 @@ const TABS = [
   {id:'myslip',      group:'hr',    label:'My payslip',       title:'My payslip', gate:u=>!isPartner(u)},
   {id:'myticket',    group:'hr',    label:'My air ticket',    title:'My air ticket', gate:u=>!isPartner(u)},
   {id:'payroll',     group:'con',   label:'Payroll',          title:'Payroll', gate:canAdmin, con:true},
-  {id:'revisions',   group:'con',   label:'Salary revisions', title:'Salary revisions', gate:canUpload, con:true},
+  {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
+  {id:'revisions',   group:'con',   label:'Revisions',        title:'Salary revisions', gate:canUpload, con:true},
+  {id:'tickets',     group:'con',   label:'Air ticket',       title:'Air ticket tracker', gate:canAdmin, con:true},
   {id:'gratuity',    group:'con',   label:'Gratuity',         title:'Gratuity provision', gate:canAdmin, con:true},
+  {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},
   {id:'hradmin',     group:'con',   label:'Attendance',       title:'Attendance & leave', gate:canAdmin, con:true},
   {id:'regular',     group:'con',   label:'Regularization',   title:'Regularization', gate:canAdmin, con:true},
   {id:'docsadmin',   group:'con',   label:'Documents',        title:'Document expiry', gate:canAdmin, con:true},
-  {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},
-  {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
-  {id:'tickets',     group:'con',   label:'Air tickets',      title:'Air ticket tracker', gate:canAdmin, con:true},
   {id:'digest',      group:'con',   label:'Emails',           title:'Emails the portal sends', gate:canAdmin, con:true},
   {id:'admin',       group:'con',   label:'Rules & staff',    title:'Rules & staff', gate:canAdmin, con:true}
 ];
@@ -6202,11 +6231,21 @@ function render(){
   }
   if(state.tab==='payslips' || state.tab==='myslip'){
     document.querySelectorAll('[data-slip]').forEach(b=>b.onclick=()=>{
+      const runs = DATA.payroll.runs || [];
+      const here = runs.find(r=>r.key===state.payRun) || runs[0];
+      const row = (here ? here.rows : DATA.payroll.rows).find(r=>r.id===b.dataset.slip);
+      if(row) return openSlipFor(row);
       state.slipOpen = state.slipOpen===b.dataset.slip ? null : b.dataset.slip; render();
       const el=document.querySelector('.slwrap'); if(el) el.scrollIntoView({behavior:'smooth',block:'center'});
     });
     document.querySelectorAll('#coSeg button').forEach(b=>b.onclick=()=>{state.payCompany=b.dataset.co;render();});
     const pr=document.getElementById('slPrint'); if(pr) pr.onclick=()=>window.print();
+    document.querySelectorAll('[data-myslip]').forEach(el => el.onclick = ev => {
+      ev.stopPropagation();
+      const run = (DATA.payroll.runs||[]).find(r => r.key === el.dataset.myslip);
+      const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy);
+      if(row) openSlipFor(row);
+    });
   }
   if(state.tab==='tickets'){
     const bind=(id,key)=>{const el=document.getElementById(id); if(el) el.onchange=()=>{state.atFilter[key]=el.value;render();};};
@@ -6737,4 +6776,29 @@ function vPayrollDraft(run){
       <p class="cap">This is what the spreadsheet used to do for you: not the arithmetic, which the database can be trusted with, but a second opinion on whether a number that moved was <i>meant</i> to move. Anything in this list without a reason beside it is worth a look before you submit.</p>`
       : '<div class="pad"><p style="margin:0;color:var(--ink2)">Nothing has moved since '+esc(MKEY(V.prev.key))+'.</p></div>'}
   </section>` : ''}`;
+}
+
+function showSlip(html, title, sub){
+  const box = document.getElementById('lookWrap');
+  box.innerHTML = '<div class="lookbg" data-lookclose="1"></div>'
+    + '<div class="look slipmodal" role="dialog" aria-modal="true" aria-label="Payslip">'
+    +   '<header><b>' + esc(title) + '</b><span>' + esc(sub || '') + '</span>'
+    +     '<button class="btn ghost" id="slipPrint" type="button">Print or save as PDF</button>'
+    +     '<button class="btn ghost" data-lookclose="1" type="button">Close</button></header>'
+    +   '<div class="lookbody slipbody">' + html + '</div></div>';
+  box.classList.remove('hidden');
+  box.querySelectorAll('[data-lookclose]').forEach(b => b.onclick = hideDoc);
+  const pr = document.getElementById('slipPrint');
+  if(pr) pr.onclick = () => {
+    document.body.classList.add('printslip');
+    window.print();
+    setTimeout(() => document.body.classList.remove('printslip'), 400);
+  };
+  document.body.style.overflow = 'hidden';
+}
+function openSlipFor(row){
+  if(!row) return;
+  const s = slipOf(row);
+  showSlip(slipHTML(s), nm(row.portalName || row.name),
+           (DATA.payroll.label[row.company] || row.company) + ' \u00b7 ' + s.month);
 }
