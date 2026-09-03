@@ -338,12 +338,21 @@ export function buildData(db, meId){
   const runs = (db.payroll_runs || []).slice().sort((a,b) =>
     a.month_key < b.month_key ? 1 : -1);
   const lineOf = l => ({
-    id: l.id, name: l.name, portalName: name(l.employee_id) || l.name,
-    empId: l.employee_id || '', staffNo: l.staff_no || '', id2: l.staff_no || '',
+    // `id` is the staff number, because that is what every screen written
+    // before this one means by it — a payslip that prints a database
+    // identifier where CP008 should be is this field getting above itself.
+    // The line's own identifier is lineId, and only the register uses it.
+    id: l.staff_no || '', lineId: l.id,
+    name: l.name, portalName: name(l.employee_id) || l.name,
+    empId: l.employee_id || '', staffNo: l.staff_no || '',
     company: co(l.company), visa: l.visa || '',
     paidBy: co(l.paid_by), chargedTo: co(l.charged_to),
     dept: l.department || '', title: l.title || '', doj: longDate(l.doj),
-    days: +l.days, salary:+l.salary, claims:+l.claims, air:+l.air_ticket,
+    days: +l.days,
+    // what check-in made of the month; null where there is nothing recorded
+    daysAtt: l.days_attended === null || l.days_attended === undefined
+             ? null : +l.days_attended,
+    salary:+l.salary, claims:+l.claims, air:+l.air_ticket,
     inc:+l.incentive, comm:+l.commission, ref:+l.referral, other:+l.other_add,
     gross:+l.gross, adv:+l.advance, don:+l.donation, ins:+l.insurance,
     mob:+l.mobile, oth:+l.other_ded, ded:+l.deductions, net:+l.net,

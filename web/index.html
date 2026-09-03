@@ -1182,8 +1182,20 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .payin:focus{outline:2px solid var(--accent);outline-offset:-2px;background:var(--card);
     color:var(--ink)}
   .payin:disabled{opacity:.45}
-  .autoc{font-style:normal;font-weight:400;text-transform:none;letter-spacing:0;
-    color:var(--ink3);opacity:.8;font-size:10px}
+  .autoc{display:block;font-style:normal;font-weight:400;text-transform:none;
+    letter-spacing:0;color:var(--ink3);opacity:.8;font-size:9.5px;line-height:1}
+  /* one kind of column stops and the next begins */
+  .paytable td.rule, .paytable th.rule{border-right:1px solid var(--line)}
+  .paytable th{font-size:10px;line-height:1.25;white-space:normal;vertical-align:bottom}
+  .paytable td, .paytable th{padding-left:6px;padding-right:6px}
+  .paytable .payin{padding-left:5px;padding-right:6px;font-size:12.5px}
+  .paytable td.n{font-size:12.5px}
+  /* what check-in made of the month, offered rather than imposed */
+  .attday{display:block;width:100%;border:0;background:transparent;cursor:pointer;
+    padding:0 9px 5px;text-align:right;font:inherit;font-size:10.5px;
+    color:var(--warn);white-space:nowrap}
+  .attday:hover{text-decoration:underline}
+  .attday:disabled{opacity:.4;cursor:default}
 
   /* the nudge — a note, not an alarm, until it is your manager's business */
   .nudge{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;margin-bottom:16px;
@@ -1315,8 +1327,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609030912';</script>
-<script src="config.js?v=202609030912"></script>
-<script type="module" src="boot.js?v=202609030912"></script>
+<script>window.__BUILD = '202609030941';</script>
+<script src="config.js?v=202609030941"></script>
+<script type="module" src="boot.js?v=202609030941"></script>
 </body>
 </html>

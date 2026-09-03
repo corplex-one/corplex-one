@@ -6142,12 +6142,23 @@ function render(){
         const said = await window.__db.setLine(el.dataset.line, el.dataset.field, el.value || 0);
         el.disabled = false;
         if(!said){ el.value = was; return; }
-        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.id===el.dataset.line));
-        const row = run && run.rows.find(x=>x.id===el.dataset.line);
+        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.lineId===el.dataset.line));
+        const row = run && run.rows.find(x=>x.lineId===el.dataset.line);
         if(row){ row[el.dataset.k] = +el.value || 0;
                  row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
         const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
       };
+    });
+    document.querySelectorAll('.attday').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const said = await window.__db.setLine(b.dataset.att, 'days', b.dataset.attv);
+      if(said){
+        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.lineId===b.dataset.att));
+        const row = run && run.rows.find(x=>x.lineId===b.dataset.att);
+        if(row){ row.days = +said.days; row.salary = +said.salary;
+                 row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
+      }
+      const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
     });
     { const g = document.getElementById('payGen');
       if(g) g.onclick = async () => {
@@ -6491,20 +6502,25 @@ const priorRun = key => {
 const MKEY = k => { const [y,m] = k.split('-'); return MONTHNAME[+m-1] + ' ' + y; };
 
 // the columns you can type into, in the order they appear on the register
+// rule: true marks where one kind of column stops and the next begins —
+// after the days, after the earnings, after the deductions.
 const PAYCOLS = [
-  {k:'days',       f:'days',       label:'Days',       add:false},
-  {k:'claims',     f:'claims',     label:'Claims',     add:true},
-  {k:'air',        f:'air_ticket', label:'Air ticket', add:true, auto:true},
-  {k:'inc',        f:'incentive',  label:'Incentive',  add:true},
-  {k:'comm',       f:'commission', label:'Commission', add:true},
-  {k:'ref',        f:'referral',   label:'Referral',   add:true},
-  {k:'other',      f:'other_add',  label:'Other',      add:true},
-  {k:'adv',        f:'advance',    label:'Advance',    add:false},
-  {k:'don',        f:'donation',   label:'Donation',   add:false},
-  {k:'ins',        f:'insurance',  label:'Insurance',  add:false},
-  {k:'mob',        f:'mobile',     label:'Mobile',     add:false},
-  {k:'oth',        f:'other_ded',  label:'Other ded.', add:false}
+  {k:'days',   f:'days',       label:'Days',       rule:true},
+  {k:'claims', f:'claims',     label:'Claims'},
+  {k:'air',    f:'air_ticket', label:'Air ticket', auto:true},
+  {k:'inc',    f:'incentive',  label:'Incentive'},
+  {k:'comm',   f:'commission', label:'Commission'},
+  {k:'ref',    f:'referral',   label:'Referral'},
+  {k:'other',  f:'other_add',  label:'Other',      rule:true},
+  {k:'adv',    f:'advance',    label:'Advance'},
+  {k:'don',    f:'donation',   label:'Donation'},
+  {k:'ins',    f:'insurance',  label:'Insurance'},
+  {k:'mob',    f:'mobile',     label:'Mobile'},
+  {k:'oth',    f:'other_ded',  label:'Other ded.', rule:true}
 ];
+// Employee, company, then fourteen money columns all the same width.
+const PAYGROUP = () => '<colgroup><col style="width:15%"><col style="width:6%">'
+  + Array(PAYCOLS.length + 2).fill('<col style="width:5.65%">').join('') + '</colgroup>';
 
 /* --- what moved since last month, and why ---
  * This is what replaces the spreadsheet as the second pair of eyes. A figure
@@ -6527,7 +6543,9 @@ function payVariance(run){
       ['salary','air','comm','claims','inc','ref','other','gross','ded','net']
         .forEach(f => { a[f] += (+r[f] || 0); });
       if(!a.companies.includes(r.company)) a.companies.push(r.company);
-      a.company = a.companies.join(' + ');
+      // sorted, or Miraziz reads as moving from 'CorpLex + POA' to
+      // 'POA + CorpLex' every month depending on the order the rows arrived in
+      a.company = a.companies.slice().sort().join(' + ');
     });
     return by;
   };
@@ -6571,8 +6589,16 @@ function payVariance(run){
 function vPayrollDraft(run){
   const P = DATA.payroll, T = DATA.tickets;
   const prep = canUpload(state.user);
-  const rows = run.rows.filter(r => !r.dummy)
-    .sort((a,b) => (a.staffNo || 'ZZ').localeCompare(b.staffNo || 'ZZ') || a.company.localeCompare(b.company));
+  const byNo = (a,b) => (a.staffNo || 'ZZ').localeCompare(b.staffNo || 'ZZ')
+                     || a.company.localeCompare(b.company);
+  const rows  = run.rows.filter(r => !r.dummy).sort(byNo);
+  // Payments that leave the account without being a staff cost. Avin types
+  // their figures like anybody else's; they simply sit under their own heading
+  // and outside the staff total, which is the only thing that makes them
+  // different.
+  const extra = run.rows.filter(r => r.dummy).sort(byNo);
+  const COS = ['CorpLex','POA','Lex'];
+  const coLabel = c => c === 'Lex' ? 'Lex Estates' : c;
   const tot = f => rows.reduce((s,r) => s + (+r[f] || 0), 0);
   const V = payVariance(run);
   const dueNow = rows.filter(r => r.air > 0);
@@ -6580,12 +6606,24 @@ function vPayrollDraft(run){
 
   const cell = (r, c) => {
     const v = +r[c.k] || 0;
-    if(!prep) return `<td class="n r${c.k==='net'?' netcol':''}">${v?money(v,2):'\u2014'}</td>`;
-    return `<td class="n r payc"><input class="payin${v?' has':''}" type="number" step="0.01" min="0"
+    if(!prep) return `<td class="n r${c.rule?' rule':''}">${v?money(v,2):'\u2014'}</td>`;
+    return `<td class="n r payc${c.rule?' rule':''}"><input class="payin${v?' has':''}" type="number" step="0.01" min="0"
       value="${v||''}" placeholder="\u2014"
-      data-line="${esc(r.id)}" data-field="${c.f}" data-k="${c.k}"
-      aria-label="${esc(c.label)} for ${esc(r.portalName)}"></td>`;
+      data-line="${esc(r.lineId)}" data-field="${c.f}" data-k="${c.k}"
+      aria-label="${esc(c.label)} for ${esc(r.portalName)}">${
+      // On the days column, what check-in made of the month sits under the
+      // box. A missed tap is not an absence — that is what regularization is
+      // for — so it is a second opinion to accept or ignore, never the figure
+      // being paid.
+      c.k === 'days' && r.daysAtt !== null && r.daysAtt !== undefined
+        && Math.abs(r.daysAtt - v) > 0.001
+        ? `<button class="attday" type="button" data-att="${esc(r.lineId)}" data-attv="${r.daysAtt}"
+             title="Check-in recorded ${r.daysAtt} days. Click to use it.">check-in ${money(r.daysAtt,0)}</button>`
+        : ''}</td>`;
   };
+  const attDiff = rows.filter(r => r.daysAtt !== null && r.daysAtt !== undefined
+    && Math.abs(r.daysAtt - r.days) > 0.001);
+  const attNone = rows.filter(r => r.daysAtt === null || r.daysAtt === undefined);
 
   return `
   <div class="strip tight">
@@ -6594,13 +6632,19 @@ function vPayrollDraft(run){
       <span class="n">${rows.length} people \u00b7 nothing paid yet</span></div>
     <div class="stat"><span class="k">Earnings</span>
       <span class="v"><span class="cur">AED</span>${money(tot('gross'),0)}</span>
-      <span class="n">salary ${money(tot('salary'),0)} \u00b7 added ${money(tot('gross')-tot('salary'),0)}</span></div>
+      <span class="n">salary ${money(tot('salary'),0)}${
+        tot('gross')-tot('salary') ? ' \u00b7 added ' + money(tot('gross')-tot('salary'),0) : ''}${
+        dueNow.length ? ' \u00b7 ' + dueNow.length + ' air ticket' + (dueNow.length===1?'':'s') : ''}</span></div>
     <div class="stat"><span class="k">Deductions</span>
       <span class="v" style="color:var(--${tot('ded')?'warn':'ink'})"><span class="cur">AED</span>${money(tot('ded'),0)}</span>
-      <span class="n">${rows.filter(r=>r.ded).length||'nobody'} ${rows.filter(r=>r.ded).length===1?'person':'people'}</span></div>
-    <div class="stat"><span class="k">Air tickets</span>
-      <span class="v" style="color:var(--${dueNow.length?'accent2':'ink'})"><span class="cur">AED</span>${money(tot('air'),0)}</span>
-      <span class="n">${dueNow.length?dueNow.length+' due, brought in by the tracker':'none fall due this month'}</span></div>
+      <span class="n">${(() => { const n = rows.filter(r=>r.ded).length;
+        return n === 0 ? 'nobody has one' : n === 1 ? 'one person' : n + ' people'; })()}</span></div>
+    <div class="stat"><span class="k">Check-in disagrees</span>
+      <span class="v" style="color:var(--${attDiff.length?'warn':'good'})">${attDiff.length}</span>
+      <span class="n">${attDiff.length
+        ? esc(attDiff.slice(0,3).map(r=>nm(r.portalName)+' '+money(r.daysAtt,0)+'d').join(', '))
+          + (attDiff.length>3 ? ' and ' + (attDiff.length-3) + ' more' : '')
+        : 'the days being paid match the records'}</span></div>
   </div>
 
   <section class="panel">
@@ -6620,22 +6664,46 @@ function vPayrollDraft(run){
         ${esc(noSalary.map(r=>nm(r.portalName)).join(', '))}. Commission-only staff are
         expected to look like this until you type their figure.</p>`:''}
     </div>
-    <div class="tw"><table class="invtable">
+    <div class="tw"><table class="invtable paytable">
+      ${PAYGROUP()}
       <thead><tr><th class="s1">Employee</th><th>Co.</th>${PAYCOLS.map(c=>
-        `<th class="r">${esc(c.label)}${c.auto?'<i class="autoc"> auto</i>':''}</th>`).join('')}
-        <th class="r">Gross</th><th class="r">Net</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr>
-        <td class="s1">${nm(r.portalName)}${r.vat?' <span class="wmark">+VAT to pay</span>':''}</td>
-        <td class="nw">${esc(r.company)}</td>
-        ${PAYCOLS.map(c=>cell(r,c)).join('')}
-        <td class="n r">${money(r.gross,2)}</td>
-        <td class="n r netcol">${money(r.net,2)}</td></tr>`).join('')}
-        <tr class="tot"><td class="s1">${rows.length} people</td><td></td>
-          ${PAYCOLS.map(c=>`<td class="n r">${tot(c.k)?money(tot(c.k), c.k==='days'?0:2):'\u2014'}</td>`).join('')}
-          <td class="n r">${money(tot('gross'),2)}</td>
-          <td class="n r netcol">${money(tot('net'),2)}</td></tr>
+        `<th class="r${c.rule?' rule':''}">${esc(c.label)}${c.auto?'<i class="autoc">auto</i>':''}</th>`).join('')}
+        <th class="r rule">Gross</th><th class="r">Net</th></tr></thead>
+      <tbody>${(() => {
+        const line = r => `<tr>
+          <td class="s1">${nm(r.portalName)}${r.vat?' <span class="wmark">+VAT to pay</span>':''}</td>
+          <td class="nw">${esc(r.company)}</td>
+          ${PAYCOLS.map(c=>cell(r,c)).join('')}
+          <td class="n r rule">${money(r.gross,2)}</td>
+          <td class="n r netcol">${money(r.net,2)}</td></tr>`;
+        const sub = (list, label, cls) => {
+          const t = f => list.reduce((s,r) => s + (+r[f] || 0), 0);
+          return `<tr class="${cls}"><td class="s1">${esc(label)}</td>
+            <td>${list.length} ${list.length===1?'person':'people'}</td>
+            ${PAYCOLS.map(c=>`<td class="n r${c.rule?' rule':''}">${t(c.k)?money(t(c.k), c.k==='days'?0:2):'\u2014'}</td>`).join('')}
+            <td class="n r rule">${money(t('gross'),2)}</td>
+            <td class="n r netcol">${money(t('net'),2)}</td></tr>`;
+        };
+        let out = '';
+        COS.forEach(c => {
+          const g = rows.filter(r => r.company === c);
+          if(!g.length) return;
+          out += `<tr class="grp"><td class="s1" colspan="${PAYCOLS.length+4}">${esc(coLabel(c))}</td></tr>`;
+          out += g.map(line).join('');
+          out += sub(g, '', 'sub');
+        });
+        out += sub(rows, rows.length + ' on the payroll', 'tot');
+        if(extra.length){
+          out += `<tr class="grp"><td class="s1" colspan="${PAYCOLS.length+4}">Not staff — leaves the account, not a staff cost</td></tr>`;
+          out += extra.map(line).join('');
+          out += sub(extra, '', 'sub');
+          out += sub(rows.concat(extra), 'Everything leaving the account', 'tot');
+        }
+        return out;
+      })()}
       </tbody></table></div>
-    <p class="cap">Days are 30 less unpaid leave, pro-rated for anyone who joined or left inside the month. A figure you type is yours: refreshing from the records will not overwrite it, and the gross and net are worked out in the database rather than here.</p>
+    <p class="cap">Days are 30 less unpaid leave, pro-rated for anyone who joined or left inside the month. Where check-in makes it a different number, that figure sits under the box &mdash; click it to take it, or leave it and pay the days above. A missed tap is not an absence, so attendance advises and never decides. A figure you type is yours: refreshing from the records will not overwrite it, and the gross and net are worked out in the database rather than here.${
+      attNone.length ? ' <b>' + attNone.length + ' ' + (attNone.length===1?'person has':'people have') + ' no attendance recorded this month</b> &mdash; ' + esc(attNone.map(r=>nm(r.portalName)).join(', ')) + '.' : ''}</p>
   </section>
 
   ${V ? `<section class="panel invpanel" style="height:auto;max-height:none">
