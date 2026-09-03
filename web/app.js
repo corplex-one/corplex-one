@@ -4728,7 +4728,7 @@ function ciClock(open){
 }
 function payrollRowFor(user){
   const rows = DATA.payroll.rows.filter(r=>!r.dummy);
-  let hit = rows.find(r=>r.name===user);
+  let hit = rows.find(r=>r.name===user) || rows.find(r=>r.portalName===user);
   if(hit) return hit;
   const map = {};
   (DATA.tickets.employees||[]).forEach(e=>{ if(e.portalName) map[e.portalName]=e.name; });
