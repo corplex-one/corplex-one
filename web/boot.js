@@ -467,6 +467,30 @@ window.__db = {
     }catch(e){ oops(e, 'Withdrawing the draft'); await reload(); }
   },
 
+  // The leave policy is not a display value: every balance in the portal is
+  // computed from it, so the database checks the figures rather than the form.
+  async setLeavePolicy(p){
+    try{
+      const {data, error} = await sb.rpc('set_leave_policy', {
+        p_annual: Number(p.annual), p_accrual: Number(p.accrual),
+        p_carry: Number(p.carry), p_expires: Number(p.expires),
+        p_probation: p.probation === '' || p.probation == null ? null : Number(p.probation)});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The leave policy'); await reload(); }
+  },
+
+  async setSickPolicy(p){
+    try{
+      const {data, error} = await sb.rpc('set_sick_policy', {
+        p_full: Number(p.full), p_half: Number(p.half), p_unpaid: Number(p.unpaid)});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The sick policy'); await reload(); }
+  },
+
   async confirmEmployee(id, on){
     try{
       const {data, error} = await sb.rpc('confirm_employee',

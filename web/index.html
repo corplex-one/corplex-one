@@ -1245,6 +1245,24 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .rgform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
   .btn.sm{padding:5px 12px;font-size:12.5px}
 
+  /* the sub-tabs of the section you are in, kept on screen so the screens of
+     one job stay one click from each other */
+  .subbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    margin:-8px 0 2px;padding:0 2px}
+  .subtabs{display:inline-flex;gap:3px;background:var(--sunk);border:1px solid var(--line);
+    border-radius:9px;padding:3px;flex-wrap:wrap}
+  .subtabs button{background:none;border:0;color:var(--ink2);padding:6px 13px;
+    border-radius:7px;font-size:13.5px;font-family:inherit}
+  .subtabs button:hover{color:var(--ink);background:var(--panel)}
+  .subtabs button[aria-current="true"]{background:var(--accent);color:var(--accentInk);font-weight:600}
+  .subtitle{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:18px;color:var(--ink2);
+    margin-left:auto}
+
+  /* a screen that looks finished and is not */
+  .drop.notyet{border-style:dashed;border-color:var(--warn);background:var(--warnBg);
+    color:var(--ink2)}
+  .drop.notyet .big{color:var(--warn)}
+
   /* a revision letter waiting to be sent */
   .draft{border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
     padding:14px 16px;margin-bottom:12px;background:var(--card)}
@@ -1378,8 +1396,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609031128';</script>
-<script src="config.js?v=202609031128"></script>
-<script type="module" src="boot.js?v=202609031128"></script>
+<script>window.__BUILD = '202609031643';</script>
+<script src="config.js?v=202609031643"></script>
+<script type="module" src="boot.js?v=202609031643"></script>
 </body>
 </html>

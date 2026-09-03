@@ -5400,7 +5400,11 @@ function PROB(){
 }
 
 function vAdmin(){
-  const staff = USERS.map(u=>u.name).concat(FORMER);
+  // The sales roster, filtered to one entity when a company is chosen. Somebody
+  // who has left keeps the company they left from, which is what makes a
+  // year-to-date figure add up.
+  const staff = USERS.map(u=>u.name).concat(FORMER)
+    .filter(n => !state.salesCo || companyOf(n).key === state.salesCo);
   const upl = canUpload(state.user);
   const W = WHERE(), O = OFFICE();
   return `
@@ -5551,19 +5555,22 @@ function vAdmin(){
           <button class="btn ghost" id="resetBtn" type="button">Discard</button>
           <span style="color:var(--ink3);font-size:12.5px">Staff see nothing until you publish.</span>
         </div>` : `
-        <div class="drop">
-          <div class="big">Drop this week's workbook here</div>
-          <div style="margin-bottom:14px">.xlsx up to 20 MB — the portal reads the <b>Sales Data</b>, <b>Employee Master</b>, <b>Company Master</b> and <b>Commission Rules</b> sheets, and splits the rows by the department on <b>Employee Master</b>.</div>
-          <button class="btn" id="uploadBtn" type="button">Choose file</button>
+        <div class="drop notyet">
+          <div class="big">Not built yet</div>
+          <div style="margin-bottom:4px">This is the one screen in the console that does not do
+            what it looks like it does. Dropping a workbook here would go nowhere: the reader for
+            the <b>Sales Data</b>, <b>Employee Master</b>, <b>Company Master</b> and
+            <b>Commission Rules</b> sheets has not been written.</div>
+          <div>The sales figures everywhere else in the portal came from a single import and are
+            correct as far as that import went. They cannot be refreshed until this is real.</div>
         </div>
-        <p class="note" style="margin-top:16px">Last published <b>Sun 30 Aug 2026, 18:20 GST</b> by Avin Mascarenhas — ${DATA.totals.count + DATA.atDept.totals.count} invoices across both departments. Every publish is versioned, so you can roll back to the previous week in one click.</p>
         <div class="tw" style="margin-top:16px"><table>
-          <thead><tr><th>Year</th><th>Status</th><th class="r">Invoices</th><th>Visible to staff</th></tr></thead>
+          <thead><tr><th>Year</th><th class="r">Invoices in the portal</th><th>Where they came from</th></tr></thead>
           <tbody>
-            <tr><td class="n">2026</td><td><span class="pill good"><span class="dt"></span>Published</span></td><td class="n r">${DATA.totals.count + DATA.atDept.totals.count}</td><td>Corporate &amp; Legal and Accounting &amp; Tax, kept apart</td></tr>
-            <tr><td class="n">2025</td><td><span class="pill mute">Not uploaded</span></td><td class="n r">—</td><td>Upload the 2025 workbook to switch it on</td></tr>
+            <tr><td class="n">2026</td><td class="n r">${DATA.totals.count + DATA.atDept.totals.count}</td><td>one import, Corporate &amp; Legal and Accounting &amp; Tax kept apart</td></tr>
+            <tr><td class="n">2025</td><td class="n r">&mdash;</td><td style="color:var(--ink3)">nothing loaded</td></tr>
           </tbody></table></div>
-        <p class="cap" style="padding-left:0">Each year is stored separately, so staff can flip between them without anything being recalculated. Prior years are read-only once published.</p>`}
+        <p class="cap" style="padding-left:0">This is what the portal holds, not a publishing history &mdash; there has not been one. Everything on the sales screens is worked out from these rows.</p>`}
     </div>
   </section>`:`
   <div class="note"><b>Uploading is restricted to the accounts manager.</b> You can see every rule, rate and account below, but the weekly workbook is published by Avin Mascarenhas only &mdash; one person owning the upload is what keeps the numbers reconcilable.</div>`}
@@ -5589,7 +5596,10 @@ function vAdmin(){
 
   <div class="grid g2">
     <section class="panel">
-      <header><h3>Staff accounts</h3><span class="hint">${USERS.length} active logins &middot; ${FORMER.length} deactivated</span></header>
+      <header><h3>Staff accounts</h3>
+        <div class="seg" style="margin-left:auto">${
+          [['', 'Everyone'], ['corplex','CorpLex'], ['poa','POA'], ['lex','Lex Estates']]
+            .map(([k,l])=>`<button data-sco="${k}" aria-pressed="${(state.salesCo||'')===k}" type="button">${esc(l)}</button>`).join('')}</div></header>
       <div class="tw" style="max-height:340px;overflow-y:auto"><table>
         <thead><tr><th>Name</th><th>Role</th><th>Commission</th><th class="r">${state.period==="FY"?"2026":state.period} net sales</th></tr></thead>
         <tbody>${staff.map(n=>{const e=aggOf(n,state.period)||{netTot:0,deptOk:'Yes'};
@@ -5630,17 +5640,36 @@ const TABS = [
 
   {id:'myslip',      group:'hr',    label:'My payslip',       title:'My payslip', gate:u=>!isPartner(u)},
   {id:'myticket',    group:'hr',    label:'My air ticket',    title:'My air ticket', gate:u=>!isPartner(u)},
-  {id:'payroll',     group:'con',   label:'Payroll',          title:'Payroll', gate:canAdmin, con:true},
-  {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
-  {id:'revisions',   group:'con',   label:'Revisions',        title:'Salary revisions', gate:canUpload, con:true},
-  {id:'tickets',     group:'con',   label:'Air ticket',       title:'Air ticket tracker', gate:canAdmin, con:true},
-  {id:'gratuity',    group:'con',   label:'Gratuity',         title:'Gratuity provision', gate:canAdmin, con:true},
-  {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},
-  {id:'hradmin',     group:'con',   label:'Attendance',       title:'Attendance & leave', gate:canAdmin, con:true},
-  {id:'regular',     group:'con',   label:'Regularization',   title:'Regularization', gate:canAdmin, con:true},
-  {id:'docsadmin',   group:'con',   label:'Documents',        title:'Document expiry', gate:canAdmin, con:true},
-  {id:'digest',      group:'con',   label:'Emails',           title:'Emails the portal sends', gate:canAdmin, con:true},
-  {id:'admin',       group:'con',   label:'Rules & staff',    title:'Rules & staff', gate:canAdmin, con:true}
+  // ---- Pay: the month, and everything that lands on a payslip
+  {id:'payroll',    group:'con', sec:'pay',    label:'Payroll',        title:'Payroll', gate:canAdmin, con:true},
+  {id:'payslips',   group:'con', sec:'pay',    label:'Payslips',       title:'Payslips', gate:canAdmin, con:true},
+  {id:'revisions',  group:'con', sec:'pay',    label:'Revisions',      title:'Salary revisions', gate:canUpload, con:true},
+  {id:'tickets',    group:'con', sec:'pay',    label:'Air ticket',     title:'Air ticket tracker', gate:canAdmin, con:true},
+  {id:'gratuity',   group:'con', sec:'pay',    label:'Gratuity',       title:'Gratuity provision', gate:canAdmin, con:true},
+  {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canUpload, con:true},
+  // ---- People: the day, and the rules the day is measured against
+  {id:'hradmin',    group:'con', sec:'people', label:'Attendance',     title:'Attendance', gate:canAdmin, con:true},
+  {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:canAdmin, con:true},
+  {id:'regular',    group:'con', sec:'people', label:'Regularization', title:'Regularization', gate:canAdmin, con:true},
+  {id:'shifts',     group:'con', sec:'people', label:'Shifts',         title:'Shifts and reporting lines', gate:canAdmin, con:true},
+  {id:'holidays',   group:'con', sec:'people', label:'Holidays',       title:'Public holidays', gate:canAdmin, con:true},
+  {id:'leaverules', group:'con', sec:'people', label:'Leave policy',   title:'Leave policy', gate:canUpload, con:true},
+  {id:'leavebal',   group:'con', sec:'people', label:'Leave balances', title:'Annual leave balances', gate:canAdmin, con:true},
+  // ---- Sales: was buried at the bottom of Rules & staff
+  {id:'salesup',    group:'con', sec:'sales',  label:'Weekly upload',  title:'Weekly sales upload', gate:canUpload, con:true},
+  {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:canAdmin, con:true},
+  {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:canAdmin, con:true},
+  {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:canAdmin, con:true},
+  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:canAdmin, con:true},
+  // ---- Staff
+  {id:'addstaff',   group:'con', sec:'staff',  label:'Add somebody',   title:'Add somebody to the staff list', gate:canUpload, con:true},
+  {id:'probation',  group:'con', sec:'staff',  label:'Probation',      title:'Probation', gate:canAdmin, con:true},
+  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:canAdmin, con:true},
+  // ---- Documents: the hero stays put as you move between these four
+  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:canAdmin, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Fill in dates',  title:'Fill in document dates', gate:canAdmin, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
+  {id:'directory',  group:'con', sec:'docs',   label:'Staff directory',title:'Staff directory', gate:canAdmin, con:true}
 ];
 const PERIODTABS = ['dashboard','commission','invoices','team','leaderboard','company'];
 const ALLOWED = () => TABS.filter(t=>!t.con && (!t.gate || t.gate(state.user)));
@@ -5648,14 +5677,26 @@ const STAFFTABS = () => ALLOWED().filter(t=>!t.hide && onPhone(t));
 const CONTABS = () => TABS.filter(t=>t.con && (!t.gate || t.gate(state.user)));
 function visibleTabs(){ return state.mode==='console' ? CONTABS() : STAFFTABS(); }
 function reachable(){ return state.mode==='console' ? CONTABS() : ALLOWED().filter(onPhone); }
+const SECTIONS = [['pay','Pay'], ['people','People'], ['sales','Sales'],
+                  ['staff','Staff'], ['docs','Documents']];
+const secOf   = id => (TABS.find(t=>t.id===id) || {}).sec || 'pay';
+const secTabs = s  => CONTABS().filter(t => t.sec === s);
+// A section nobody may open is a section nobody sees: the gates are per screen,
+// so a section with nothing left in it disappears rather than opening empty.
+const liveSections = () => SECTIONS.filter(([k]) => secTabs(k).length);
+
 function conBar(){
-  const tabs = CONTABS();
+  const here = secOf(state.tab);
+  const subs = secTabs(here);
   return `<div class="conbar">
     <h2>Accounts console</h2>
     <span class="cwho">${canUpload(state.user)?'Full access':'View only'} &middot; ${esc(state.user)}</span>
-    <div class="ctabs">${tabs.map(t=>`<button data-ctab="${esc(t.id)}" aria-current="${state.tab===t.id}" type="button">${esc(t.label)}</button>`).join('')}</div>
+    <div class="ctabs">${liveSections().map(([k,l])=>`<button data-csec="${k}" aria-current="${here===k}" type="button">${esc(l)}</button>`).join('')}</div>
     <button class="cback" id="conBack" type="button">Back to my portal</button>
-  </div>`;
+  </div>
+  ${subs.length > 1 ? `<div class="subbar">
+    <div class="subtabs">${subs.map(t=>`<button data-ctab="${esc(t.id)}" aria-current="${state.tab===t.id}" type="button">${esc(t.label)}</button>`).join('')}</div>
+  </div>` : ''}`;
 }
 function renderNav(){
   const nav = document.getElementById('nav');
@@ -5893,6 +5934,116 @@ function renderChrome(){
   document.getElementById('pageTitle').innerHTML = `${esc(ttl)}${(periodic && !MOBILE())?`<small>${esc(PLABEL[state.period]+' · '+state.year)}</small>`:''}`;
 }
 function tabHash(){ return (state.mode === 'console' ? 'c/' : '') + state.tab; }
+const LP = () => HR().leavePolicy || {};
+const SP = () => HR().sick || {};
+const LF = () => state.lpForm || (state.lpForm = {
+  annual:   String(LP().annualDays ?? ''),
+  accrual:  String(LP().accrualPerMonth ?? ''),
+  carry:    String((LP().carry || {}).days ?? ''),
+  expires:  String((LP().carry || {}).expiresMonths ?? ''),
+  probation:String(LP().probationMonths ?? ''),
+  full:     String(SP().fullDays ?? ''),
+  half:     String(SP().halfDays ?? ''),
+  unpaid:   String(SP().unpaidDays ?? '')});
+
+function vLeaveRules(){
+  const f = LF(), upl = canUpload(state.user);
+  const yr = (+f.accrual || 0) * 12;
+  const off = Math.abs(yr - (+f.annual || 0)) > 1;
+  return `
+  <section class="panel">
+    <header><h3>Annual leave</h3>
+      <span class="hint" style="margin-left:auto">every balance in the portal is computed from these</span></header>
+    <div class="pad">
+      <div class="jform">
+        <label><span>Days a year</span><input id="lpAnnual" inputmode="decimal" value="${esc(f.annual)}"${upl?'':' disabled'}></label>
+        <label><span>Accrued each month</span><input id="lpAccrual" inputmode="decimal" value="${esc(f.accrual)}"${upl?'':' disabled'}></label>
+        <label><span>Probation, in months</span><input id="lpProb" inputmode="decimal" value="${esc(f.probation)}"${upl?'':' disabled'}></label>
+        <label><span>Days that may carry forward</span><input id="lpCarry" inputmode="decimal" value="${esc(f.carry)}"${upl?'':' disabled'}></label>
+        <label><span>Carried leave expires after, months</span><input id="lpExp" inputmode="decimal" value="${esc(f.expires)}"${upl?'':' disabled'}></label>
+        <label><span>Counted in</span><input value="${esc(LP().basis || 'working days')}" disabled></label>
+        <p class="jnote wide">Twelve months at <b>${esc(f.accrual || '0')}</b> a day comes to
+          <b>${(Math.round(yr*100)/100)} days a year</b>${off?` &mdash; which is not the <b>${esc(f.annual||'0')}</b> above. The database will refuse the pair until they agree.`:', which matches the entitlement above.'}</p>
+      </div>
+      <div class="drow">
+        <button class="btn" id="lpSave" type="button"${upl && !off ?'':' disabled'}>Save the leave policy</button>
+        <span class="jwhy">${state.lpSaved==='leave'?'Saved. Every balance has been recomputed.':''}</span>
+      </div>
+      <div class="note" style="margin-top:16px;border-left-color:var(--warn);font-size:13.5px">
+        <b>These are not display figures.</b> Balances are worked out from them, from the
+        opening date of ${esc(dayLabel(LP().openingAt || '')) || '\u2014'} ${esc(String(LP().openingAt||'').slice(0,4))}
+        onwards. Lowering the accrual reduces what everybody has accumulated since that
+        date, including leave already taken against it. The opening date is not editable
+        here on purpose &mdash; moving it rewrites the whole calculation, and that belongs
+        at a year end, done deliberately.
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h3>Sick leave</h3>
+      <span class="hint" style="margin-left:auto">the UAE ladder &mdash; full pay, then half, then unpaid</span></header>
+    <div class="pad">
+      <div class="jform">
+        <label><span>Days at full pay</span><input id="spFull" inputmode="decimal" value="${esc(f.full)}"${upl?'':' disabled'}></label>
+        <label><span>Then at half pay</span><input id="spHalf" inputmode="decimal" value="${esc(f.half)}"${upl?'':' disabled'}></label>
+        <label><span>Then unpaid</span><input id="spUnpaid" inputmode="decimal" value="${esc(f.unpaid)}"${upl?'':' disabled'}></label>
+      </div>
+      <div class="drow">
+        <button class="btn" id="spSave" type="button"${upl?'':' disabled'}>Save the sick policy</button>
+        <span class="jwhy">${state.lpSaved==='sick'?'Saved.':''}</span>
+      </div>
+      <p class="cap">A year of sickness runs down the ladder in that order once probation is over.
+        The portal shows each person what is left of each rung on their own leave page.</p>
+    </div>
+  </section>`;
+}
+
+const PAGE = {
+  office:     ['admin',   ['Where the office is']],
+  addstaff:   ['admin',   ['Add somebody to the staff list']],
+  probation:  ['admin',   ['Probation']],
+  salesup:    ['admin',   ['Weekly upload']],
+  salestpl:   ['admin',   ['Upload template']],
+  salesrules: ['admin',   ['Commission rules']],
+  salesstaff: ['admin',   ['Staff accounts']],
+  salesptr:   ['admin',   ['Referral partners']],
+  hradmin:    ['hradmin', ['attendance', 'Exceptions'], true],
+  shifts:     ['hradmin', ['Shifts and reporting lines']],
+  leavebal:   ['hradmin', ['Annual leave balances'], true],
+  holidays:   ['hradmin', ['Public holidays']],
+  // Avin: 'once opened, keep the hero of expired, expiring etc' — so the four
+  // document pages all carry the same strip, and moving between them does not
+  // make the count you were reading disappear.
+  docsadmin:  ['docs',    ['Document expiry'], true],
+  docdates:   ['docs',    ['Fill in document dates'], true],
+  profiles:   ['docs',    ['Profile completeness'], true],
+  directory:  ['docs',    ['Staff directory'], true]
+};
+const PAGESRC = {admin: () => vAdmin(), hradmin: () => vHRAdmin(), docs: () => vDocsAdmin()};
+
+function pageOf(id){
+  const spec = PAGE[id];
+  if(!spec) return '<p style="color:var(--ink3)">Nothing here.</p>';
+  const [src, want, hero] = spec;
+  const box = document.createElement('div');
+  box.innerHTML = PAGESRC[src]();
+  const out = [];
+  const wanted = el => {
+    const h = el.querySelector('h3');
+    return !!h && want.some(w => h.textContent.indexOf(w) >= 0);
+  };
+  for(const c of [...box.children]){
+    if(c.classList.contains('strip')){ if(hero) out.push(c.outerHTML); continue; }
+    if(c.matches('section.panel')){ if(wanted(c)) out.push(c.outerHTML); continue; }
+    for(const p of [...c.querySelectorAll('section.panel')])
+      if(wanted(p)) out.push(p.outerHTML);
+  }
+  return out.join('\n');
+}
+const PAGEVIEW = {};
+Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });
+
 function readHash(){
   const h = (location.hash || '').replace(/^#/, '');
   if(!h) return;
@@ -5905,6 +6056,8 @@ function readHash(){
 function render(){
   // Letters lives inside Advances & letters now - old links land on the right section
   if(state.tab === 'letters'){ state.tab = 'loans'; state.askTab = 'letters'; }
+  // Rules & staff was split five ways; an old link lands on the joiner form.
+  if(state.tab === 'admin') state.tab = 'addstaff';
   if(state.mode==='console' && !canAdmin(state.user)){ state.mode='staff'; state.tab='home'; }
   if(state.mode!=='console' && (TABS.find(t=>t.id===state.tab)||{}).con) state.tab='home';
   const keepY = window.scrollY;
@@ -5936,7 +6089,8 @@ function render(){
   v.innerHTML = (CON?conBar():'') + ({home:vHome, dashboard:vDashboard, commission:vCommission, invoices:vInvoices,
                   leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
-                  profile:vProfile, docsadmin:vDocsAdmin, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
+                  profile:vProfile, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
+                  leaverules:vLeaveRules, ...PAGEVIEW,
                   people:vPeople, digest:vDigest, admin:vAdmin, regular:vRegular}[state.tab])();
   const here = tabHash();
   if(state._at !== here){
@@ -5950,6 +6104,9 @@ function render(){
   document.querySelectorAll('#runSeg button').forEach(b=>b.onclick=()=>{
     state.payRun = b.dataset.run; state.slipOpen = null; render(); });
   document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });
+  document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
+    const first = secTabs(b.dataset.csec)[0];
+    if(first){ state.tab = first.id; state.slipOpen = null; render(); } });
   document.querySelectorAll('[data-dexp]').forEach(el=>el.onchange=()=>{
     const n = el.dataset.dexp, k = el.dataset.k;
     const D = HR().docs || (HR().docs = {});
@@ -6102,7 +6259,27 @@ function render(){
   document.querySelectorAll('[data-pbext]').forEach(el=>el.onchange=async ()=>{
     if(!el.value) return; el.disabled = true;
     await window.__db.extendProbation((HR().ids||{})[el.dataset.pbext], el.value,
-      'extended from Rules & staff'); render(); });
+      'extended from the probation list'); render(); });
+  [['lpAnnual','annual'],['lpAccrual','accrual'],['lpProb','probation'],
+   ['lpCarry','carry'],['lpExp','expires'],
+   ['spFull','full'],['spHalf','half'],['spUnpaid','unpaid']].forEach(([id,key])=>{
+    const el = document.getElementById(id); if(!el) return;
+    let tm; el.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(()=>{
+      LF()[key] = el.value; state.lpSaved = ''; render();
+      const e2 = document.getElementById(id);
+      if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+    }, 300); };
+  });
+  const lps = document.getElementById('lpSave');
+  if(lps) lps.onclick = async ()=>{ lps.disabled = true;
+    const r = await window.__db.setLeavePolicy(LF());
+    state.lpForm = null; if(r) state.lpSaved = 'leave'; render(); };
+  const sps = document.getElementById('spSave');
+  if(sps) sps.onclick = async ()=>{ sps.disabled = true;
+    const r = await window.__db.setSickPolicy(LF());
+    state.lpForm = null; if(r) state.lpSaved = 'sick'; render(); };
+  document.querySelectorAll('[data-sco]').forEach(b=>b.onclick=()=>{
+    state.salesCo = b.dataset.sco; render(); });
   ['rqType','rqFrom','rqTo','rqReason'].forEach(id=>{
     const el=document.getElementById(id); if(!el) return;
     const key=id.slice(2).toLowerCase();
