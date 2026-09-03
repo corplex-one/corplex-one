@@ -302,7 +302,7 @@ export function buildData(db, meId){
   // build. The app reads this row for the visa and paying entity, which is
   // what decides whose letterhead a document carries.
   const payroll = {
-    month:'', monthKey:'', label:'', status:'', rows: emp.map(e => ({
+    month:'', monthKey:'', label:'', status:'', runs: [], rows: emp.map(e => ({
       name: e.full_name, portalName: e.full_name, id: e.staff_no || '',
       company: (companies[e.company]||{}).code || '',
       visa:    (companies[e.visa_company]||{}).code || '',
@@ -332,8 +332,32 @@ export function buildData(db, meId){
     master.people[e.staff_no] = {mol: p.mol_number || '', acct4: p.account_last4 || ''};
   });
 
-  const run = (db.payroll_runs || []).slice().sort((a,b) =>
-    a.month_key < b.month_key ? 1 : -1)[0];
+  // Every run, newest first, so September can sit beside August and be
+  // compared with it. `payroll.rows` stays pointing at the newest, which is
+  // what every screen written before this expects.
+  const runs = (db.payroll_runs || []).slice().sort((a,b) =>
+    a.month_key < b.month_key ? 1 : -1);
+  const lineOf = l => ({
+    id: l.id, name: l.name, portalName: name(l.employee_id) || l.name,
+    empId: l.employee_id || '', staffNo: l.staff_no || '', id2: l.staff_no || '',
+    company: co(l.company), visa: l.visa || '',
+    paidBy: co(l.paid_by), chargedTo: co(l.charged_to),
+    dept: l.department || '', title: l.title || '', doj: longDate(l.doj),
+    days: +l.days, salary:+l.salary, claims:+l.claims, air:+l.air_ticket,
+    inc:+l.incentive, comm:+l.commission, ref:+l.referral, other:+l.other_add,
+    gross:+l.gross, adv:+l.advance, don:+l.donation, ins:+l.insurance,
+    mob:+l.mobile, oth:+l.other_ded, ded:+l.deductions, net:+l.net,
+    email: (byId.get(l.employee_id) || {}).work_email || '',
+    note: l.note || '', dummy: l.non_staff, vat: !!l.vat
+  });
+  payroll.runs = runs.map(r => ({
+    key: r.month_key, label: r.label, status: r.status, runId: r.id,
+    payDate: r.pay_date ? longDate(r.pay_date) : '',
+    preparedBy: name(r.prepared_by), approver: name(r.approver),
+    rows: (db.payroll_lines || []).filter(l => l.run_id === r.id).map(lineOf)
+  }));
+
+  const run = runs[0];
   if(run){
     master.payDate = run.pay_date ? longDate(run.pay_date) : '';
     Object.assign(payroll, {
@@ -345,6 +369,7 @@ export function buildData(db, meId){
     });
     const lines = (db.payroll_lines || []).filter(l => l.run_id === run.id);
     if(lines.length) payroll.rows = lines.map(l => ({
+      lineId: l.id, vat: !!l.vat,
       name: l.name, portalName: name(l.employee_id) || l.name, id: l.staff_no || '',
       company: co(l.company), visa: l.visa || '',
       paidBy: co(l.paid_by), chargedTo: co(l.charged_to),

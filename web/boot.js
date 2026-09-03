@@ -409,6 +409,58 @@ window.__db = {
     }catch(e){ oops(e, 'The payroll status'); await reload(); }
   },
 
+  // ------------------------------------------------------------- payroll
+  // Preparing a month here rather than in a spreadsheet. The database builds
+  // the lines and works out gross, deductions and net; this end only asks.
+  async generateRun(monthKey, label){
+    try{
+      const {data, error} = await sb.rpc('generate_run',
+        {p_month: monthKey, p_label: label || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Generating the month'); await reload(); }
+  },
+
+  // One figure on one line. The net comes back from the database rather than
+  // being worked out on screen, so what is shown is what is stored.
+  async setLine(id, field, value){
+    try{
+      const {data, error} = await sb.rpc('set_payroll_line',
+        {p_line: id, p_field: field, p_value: Number(value) || 0});
+      if(error) throw error;
+      return data;
+    }catch(e){ oops(e, 'That figure'); await reload(); }
+  },
+
+  async issueRevision(r){
+    try{
+      const {data, error} = await sb.rpc('issue_revision', {
+        p_emp: r.emp, p_basic: Number(r.basic) || 0, p_allow: Number(r.allow) || 0,
+        p_from: r.from, p_reason: r.reason || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The revision letter'); await reload(); }
+  },
+
+  async addEmployee(p){
+    try{
+      const {data, error} = await sb.rpc('add_employee', {
+        p_name: p.name, p_doj: p.doj, p_company: p.company,
+        p_basis: p.basis || 'salaried',
+        p_basic: Number(p.basic) || 0, p_allowance: Number(p.allow) || 0,
+        p_email: p.email || null, p_title: p.title || null,
+        p_department: p.dept || null, p_visa_company: p.visa || null,
+        p_paid_by: p.paidBy || null, p_legal_name: p.legal || null,
+        p_manager: p.manager || null, p_shift: p.shift || 'S2',
+        p_country: p.country || null, p_ticket_rate: p.rate || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Adding them'); await reload(); }
+  },
+
   async newLoan(l){
     try{
       const {data, error} = await sb.from('loans').insert({

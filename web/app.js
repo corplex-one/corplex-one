@@ -4099,10 +4099,13 @@ function channelOf(r){
 const vatOf = r => (DATA.payroll.vatOn||[]).includes(r.name) ? Math.round(r.net*0.05*100)/100 : 0;
 const NEXTRUN = {key:'sep', label:'Sep 2026', month:'September 2026', proc:'Sep-2026'};
 function runSeg(){
-  const r = state.payRun;
+  const runs = (DATA.payroll.runs || []);
+  if(!runs.length) return '';
+  const here = state.payRun || (runs[0] && runs[0].key);
   return `<div class="seg" id="runSeg" style="margin-left:18px">
-    <button data-run="aug" aria-pressed="${r==='aug'}" type="button">Aug 2026 &middot; ${state.payStatus==='closed'?'closed':'open'}</button>
-    <button data-run="sep" aria-pressed="${r==='sep'}" type="button">${esc(NEXTRUN.label)} &middot; ${['not started','draft','with Miraziz'][state.sepStage]}</button>
+    ${runs.slice().sort((a,b)=>a.key<b.key?-1:1).map(r=>
+      `<button data-run="${esc(r.key)}" aria-pressed="${here===r.key}" type="button">${
+        esc(MKEY(r.key))} &middot; ${esc(r.status)}</button>`).join('')}
   </div>`;
 }
 function vPayrollNext(){
@@ -4181,7 +4184,13 @@ function vPayrollNext(){
   </div>`;
 }
 function vPayroll(){
-  if(state.payRun==='sep') return vPayrollNext();
+  const runs = DATA.payroll.runs || [];
+  if(runs.length){
+    if(!state.payRun || !runs.some(r=>r.key===state.payRun))
+      state.payRun = (runs.find(r=>r.status==='draft') || runs[0]).key;
+    const here = runs.find(r=>r.key===state.payRun);
+    if(here && here.status === 'draft' && canAdmin(state.user)) return vPayrollDraft(here);
+  }
   const P = DATA.payroll, co = state.payCompany, me = state.user;
   const isPrep = canUpload(me), isApprover = roleOf(me)==='owner';
   const staff = P.rows.filter(r=>!r.dummy);
@@ -4806,8 +4815,11 @@ function vMySlip(){
   </section>`;
 }
 function vSlips(){
-  const P = DATA.payroll, released = state.payStatus==='closed';
-  const staff = P.rows.filter(r=>!r.dummy);
+  const P = DATA.payroll;
+  const runs = P.runs || [];
+  const here = runs.find(r => r.key === state.payRun) || runs[0] || null;
+  const released = here ? here.status === 'closed' : state.payStatus === 'closed';
+  const staff = (here ? here.rows : P.rows).filter(r=>!r.dummy);
   const co = state.payCompany;
   const rows = co==='all' ? staff : staff.filter(r=>r.company===co);
   const one = state.slipOpen ? staff.find(r=>r.id===state.slipOpen && (co==='all'||r.company===co)) : null;
@@ -4820,6 +4832,7 @@ function vSlips(){
       <div class="seg" id="coSeg" style="margin-left:auto">
         <button data-co="all" aria-pressed="${co==='all'}" type="button">All</button>
         ${DATA.payroll.companies.map(c=>`<button data-co="${esc(c)}" aria-pressed="${co===c}" type="button">${esc(DATA.payroll.label[c]||c)}</button>`).join('')}
+      </div>${runSeg()}<div style="display:none">
       </div>
       <span style="color:var(--ink3);font-size:12.5px">${rows.length} ${rows.length===1?'payslip':'payslips'}</span></header>
     <div class="pad" style="padding-bottom:10px">
@@ -5726,6 +5739,8 @@ function render(){
     window.scrollTo({top:keepY, behavior:'instant'});
   }
   drawCharts();
+  document.querySelectorAll('#runSeg button').forEach(b=>b.onclick=()=>{
+    state.payRun = b.dataset.run; state.slipOpen = null; render(); });
   document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });
   document.querySelectorAll('[data-dexp]').forEach(el=>el.onchange=()=>{
     const n = el.dataset.dexp, k = el.dataset.k;
@@ -6115,6 +6130,30 @@ function render(){
     document.querySelectorAll('#coSeg button').forEach(b=>b.onclick=()=>{state.payCompany=b.dataset.co;render();});
     const on=(id,fn)=>{const el=document.getElementById(id); if(el) el.onclick=fn;};
     document.querySelectorAll('#runSeg button').forEach(b=>b.onclick=()=>{state.payRun=b.dataset.run;render();});
+    // Each figure saves as you leave the box, and the net comes back from the
+    // database — so the total under the column is the stored total, not a
+    // second opinion worked out on screen.
+    document.querySelectorAll('.payin').forEach(el => {
+      el.onfocus = () => el.select();
+      el.onkeydown = ev => { if(ev.key === 'Enter') el.blur(); };
+      el.onchange = async () => {
+        const was = el.defaultValue;
+        el.disabled = true;
+        const said = await window.__db.setLine(el.dataset.line, el.dataset.field, el.value || 0);
+        el.disabled = false;
+        if(!said){ el.value = was; return; }
+        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.id===el.dataset.line));
+        const row = run && run.rows.find(x=>x.id===el.dataset.line);
+        if(row){ row[el.dataset.k] = +el.value || 0;
+                 row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
+        const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
+      };
+    });
+    { const g = document.getElementById('payGen');
+      if(g) g.onclick = async () => {
+        g.disabled = true; g.textContent = 'Reading the records\u2026';
+        await window.__db.generateRun(state.payRun);
+        render(); }; }
     on('sepUpload',()=>{state.sepStage=1;render();});
     on('sepReset',()=>{state.sepStage=0;render();});
     on('sepSubmit',()=>{state.sepStage=2;render();});
@@ -6438,4 +6477,196 @@ function vRegular(){
       </tbody></table></div>
     <p class="cap">Two approved a month each, counted by the database rather than by this screen \u2014 a limit only the screen keeps is not a limit. A declined request costs nobody anything.</p>
   </section>`;
+}
+
+
+const PAYRUNS = () => (DATA.payroll.runs || []);
+const runOf = key => PAYRUNS().find(r => r.key === key) || null;
+const draftRun = () => PAYRUNS().find(r => r.status === 'draft') || null;
+// the month before the one being looked at, for comparison
+const priorRun = key => {
+  const all = PAYRUNS().filter(r => r.key < key).sort((a,b) => a.key < b.key ? 1 : -1);
+  return all[0] || null;
+};
+const MKEY = k => { const [y,m] = k.split('-'); return MONTHNAME[+m-1] + ' ' + y; };
+
+// the columns you can type into, in the order they appear on the register
+const PAYCOLS = [
+  {k:'days',       f:'days',       label:'Days',       add:false},
+  {k:'claims',     f:'claims',     label:'Claims',     add:true},
+  {k:'air',        f:'air_ticket', label:'Air ticket', add:true, auto:true},
+  {k:'inc',        f:'incentive',  label:'Incentive',  add:true},
+  {k:'comm',       f:'commission', label:'Commission', add:true},
+  {k:'ref',        f:'referral',   label:'Referral',   add:true},
+  {k:'other',      f:'other_add',  label:'Other',      add:true},
+  {k:'adv',        f:'advance',    label:'Advance',    add:false},
+  {k:'don',        f:'donation',   label:'Donation',   add:false},
+  {k:'ins',        f:'insurance',  label:'Insurance',  add:false},
+  {k:'mob',        f:'mobile',     label:'Mobile',     add:false},
+  {k:'oth',        f:'other_ded',  label:'Other ded.', add:false}
+];
+
+/* --- what moved since last month, and why ---
+ * This is what replaces the spreadsheet as the second pair of eyes. A figure
+ * that moved for a reason is fine; a figure that moved for no reason is the
+ * thing to look at. */
+function payVariance(run){
+  const prev = priorRun(run.key);
+  if(!prev) return null;
+  // A person, not a line. Somebody who changes company mid-year — Fakhridin
+  // Kochkorov moving from POA to Lex — would otherwise read as one person
+  // leaving and a different one arriving, and Miraziz's two lines are one
+  // person's pay. The invented rows are not part of the comparison at all.
+  const fold = list => {
+    const by = {};
+    list.filter(r => !r.dummy).forEach(r => {
+      const k = r.portalName;
+      const a = by[k] || (by[k] = {portalName:k, company:r.company, companies:[],
+        days:r.days, salary:0, air:0, comm:0, claims:0, inc:0, ref:0, other:0,
+        gross:0, ded:0, net:0});
+      ['salary','air','comm','claims','inc','ref','other','gross','ded','net']
+        .forEach(f => { a[f] += (+r[f] || 0); });
+      if(!a.companies.includes(r.company)) a.companies.push(r.company);
+      a.company = a.companies.join(' + ');
+    });
+    return by;
+  };
+  const was = fold(prev.rows), now = fold(run.rows);
+  const seen = {};
+  const out = [];
+  Object.values(now).forEach(r => {
+    const k = r.portalName;
+    seen[k] = true;
+    const p = was[k];
+    if(!p){ out.push({r, kind:'new', by: r.net, why:['a joiner — not on ' + MKEY(prev.key)]}); return; }
+    const by = Math.round((r.net - p.net) * 100) / 100;
+    if(!by && p.company === r.company) return;
+    const why = [];
+    if(p.company !== r.company) why.push('moved from ' + p.company + ' to ' + r.company);
+    if(r.salary !== p.salary){
+      why.push(r.days !== p.days
+        ? r.days + ' days rather than ' + p.days
+        : 'salary ' + money(p.salary,0) + ' \u2192 ' + money(r.salary,0));
+    }
+    if(r.air !== p.air)   why.push(r.air ? 'air ticket due' : 'no air ticket this month');
+    if(r.comm !== p.comm) why.push('commission ' + money(p.comm,0) + ' \u2192 ' + money(r.comm,0));
+    if(r.claims !== p.claims) why.push('claims changed');
+    if(r.inc !== p.inc)   why.push('incentive changed');
+    if(r.ref !== p.ref)   why.push('referral changed');
+    if(r.other !== p.other) why.push('other earnings changed');
+    if(r.ded !== p.ded)   why.push('deductions ' + money(p.ded,0) + ' \u2192 ' + money(r.ded,0));
+    out.push({r, kind:'moved', by, why});
+  });
+  Object.values(was).forEach(r => {
+    if(!seen[r.portalName])
+      out.push({r, kind:'gone', by: -r.net,
+                why:['on ' + MKEY(prev.key) + ', not on this one — a leaver, or off payroll']});
+  });
+  out.sort((a,b) => Math.abs(b.by) - Math.abs(a.by));
+  return {prev, rows: out,
+          prevNet: Object.values(was).reduce((s,r) => s + r.net, 0),
+          unexplained: out.filter(x => x.kind === 'moved' && !x.why.length)};
+}
+
+function vPayrollDraft(run){
+  const P = DATA.payroll, T = DATA.tickets;
+  const prep = canUpload(state.user);
+  const rows = run.rows.filter(r => !r.dummy)
+    .sort((a,b) => (a.staffNo || 'ZZ').localeCompare(b.staffNo || 'ZZ') || a.company.localeCompare(b.company));
+  const tot = f => rows.reduce((s,r) => s + (+r[f] || 0), 0);
+  const V = payVariance(run);
+  const dueNow = rows.filter(r => r.air > 0);
+  const noSalary = rows.filter(r => !r.salary && !r.comm && !r.claims);
+
+  const cell = (r, c) => {
+    const v = +r[c.k] || 0;
+    if(!prep) return `<td class="n r${c.k==='net'?' netcol':''}">${v?money(v,2):'\u2014'}</td>`;
+    return `<td class="n r payc"><input class="payin${v?' has':''}" type="number" step="0.01" min="0"
+      value="${v||''}" placeholder="\u2014"
+      data-line="${esc(r.id)}" data-field="${c.f}" data-k="${c.k}"
+      aria-label="${esc(c.label)} for ${esc(r.portalName)}"></td>`;
+  };
+
+  return `
+  <div class="strip tight">
+    <div class="stat"><span class="k">${esc(run.label)} <i>draft</i></span>
+      <span class="v"><span class="cur">AED</span>${money(tot('net'),2)}</span>
+      <span class="n">${rows.length} people \u00b7 nothing paid yet</span></div>
+    <div class="stat"><span class="k">Earnings</span>
+      <span class="v"><span class="cur">AED</span>${money(tot('gross'),0)}</span>
+      <span class="n">salary ${money(tot('salary'),0)} \u00b7 added ${money(tot('gross')-tot('salary'),0)}</span></div>
+    <div class="stat"><span class="k">Deductions</span>
+      <span class="v" style="color:var(--${tot('ded')?'warn':'ink'})"><span class="cur">AED</span>${money(tot('ded'),0)}</span>
+      <span class="n">${rows.filter(r=>r.ded).length||'nobody'} ${rows.filter(r=>r.ded).length===1?'person':'people'}</span></div>
+    <div class="stat"><span class="k">Air tickets</span>
+      <span class="v" style="color:var(--${dueNow.length?'accent2':'ink'})"><span class="cur">AED</span>${money(tot('air'),0)}</span>
+      <span class="n">${dueNow.length?dueNow.length+' due, brought in by the tracker':'none fall due this month'}</span></div>
+  </div>
+
+  <section class="panel">
+    <header><h3>${esc(run.label)}</h3>
+      <span class="pill warn"><span class="dt"></span>Draft</span>
+      ${runSeg()}
+      ${prep?`<button class="btn ghost" id="payGen" type="button" style="margin-left:auto;padding:5px 13px;font-size:12.5px">Refresh from the records</button>`:''}
+    </header>
+    <div class="pad">
+      <p style="margin:0;color:var(--ink2);font-size:14.5px;max-width:88ch">
+        The salary, the days and the air ticket come from the records and refresh
+        whenever you press the button above &mdash; after a joiner, a revision letter, or a
+        correction. Everything else is yours to type, and refreshing never touches it.
+        Each figure saves as you leave the box.</p>
+      ${noSalary.length?`<p class="note" style="margin-top:14px"><b>${noSalary.length}
+        ${noSalary.length===1?'person has':'people have'} nothing on their line yet</b> &mdash;
+        ${esc(noSalary.map(r=>nm(r.portalName)).join(', '))}. Commission-only staff are
+        expected to look like this until you type their figure.</p>`:''}
+    </div>
+    <div class="tw"><table class="invtable">
+      <thead><tr><th class="s1">Employee</th><th>Co.</th>${PAYCOLS.map(c=>
+        `<th class="r">${esc(c.label)}${c.auto?'<i class="autoc"> auto</i>':''}</th>`).join('')}
+        <th class="r">Gross</th><th class="r">Net</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr>
+        <td class="s1">${nm(r.portalName)}${r.vat?' <span class="wmark">+VAT to pay</span>':''}</td>
+        <td class="nw">${esc(r.company)}</td>
+        ${PAYCOLS.map(c=>cell(r,c)).join('')}
+        <td class="n r">${money(r.gross,2)}</td>
+        <td class="n r netcol">${money(r.net,2)}</td></tr>`).join('')}
+        <tr class="tot"><td class="s1">${rows.length} people</td><td></td>
+          ${PAYCOLS.map(c=>`<td class="n r">${tot(c.k)?money(tot(c.k), c.k==='days'?0:2):'\u2014'}</td>`).join('')}
+          <td class="n r">${money(tot('gross'),2)}</td>
+          <td class="n r netcol">${money(tot('net'),2)}</td></tr>
+      </tbody></table></div>
+    <p class="cap">Days are 30 less unpaid leave, pro-rated for anyone who joined or left inside the month. A figure you type is yours: refreshing from the records will not overwrite it, and the gross and net are worked out in the database rather than here.</p>
+  </section>
+
+  ${V ? `<section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>What moved since ${esc(MKEY(V.prev.key))}</h3>
+      <span class="hint">${V.rows.length} ${V.rows.length===1?'change':'changes'}${
+        V.unexplained.length?' \u00b7 '+V.unexplained.length+' with no reason found':''}</span></header>
+    ${V.rows.length?`<div class="tw"><table class="invtable">
+      <thead><tr><th class="s1">Employee</th><th>Co.</th><th class="r">${esc(MKEY(V.prev.key))}</th>
+        <th class="r">${esc(MKEY(run.key))}</th><th class="r">Change</th><th>Why</th></tr></thead>
+      <tbody>${V.rows.map(x=>{
+        // For a leaver the row we kept IS last month's, so its net is the
+        // "was" and there is no "now" — subtracting the change would count it
+        // twice.
+        const was = x.kind === 'new'  ? null
+                  : x.kind === 'gone' ? x.r.net
+                  : Math.round((x.r.net - x.by) * 100) / 100;
+        return `<tr>
+        <td class="s1">${nm(x.r.portalName)}</td><td class="nw">${esc(x.r.company)}</td>
+        <td class="n r">${was===null?'\u2014':money(was,2)}</td>
+        <td class="n r">${x.kind==='gone'?'\u2014':money(x.r.net,2)}</td>
+        <td class="n r" style="color:var(--${x.by>=0?'warn':'good'})">${x.by>=0?'+':'('}${money(Math.abs(x.by),2)}${x.by>=0?'':')'}</td>
+        <td class="gnote">${x.why.length
+          ? esc(x.why.join(' \u00b7 '))
+          : '<span class="pill warn"><span class="dt"></span>no reason found &mdash; look at this one</span>'}</td></tr>`;}).join('')}
+        <tr class="tot"><td class="s1">Net change</td><td></td>
+          <td class="n r">${money(V.prevNet,2)}</td>
+          <td class="n r">${money(tot('net'),2)}</td>
+          <td class="n r netcol">${money(tot('net') - V.prevNet,2)}</td>
+          <td></td></tr>
+      </tbody></table></div>
+      <p class="cap">This is what the spreadsheet used to do for you: not the arithmetic, which the database can be trusted with, but a second opinion on whether a number that moved was <i>meant</i> to move. Anything in this list without a reason beside it is worth a look before you submit.</p>`
+      : '<div class="pad"><p style="margin:0;color:var(--ink2)">Nothing has moved since '+esc(MKEY(V.prev.key))+'.</p></div>'}
+  </section>` : ''}`;
 }
