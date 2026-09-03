@@ -433,15 +433,78 @@ window.__db = {
     }catch(e){ oops(e, 'That figure'); await reload(); }
   },
 
+  // Writing a revision no longer moves anybody's salary. It writes a draft
+  // letter and stops there; releaseRevision is the act that moves it.
   async issueRevision(r){
     try{
       const {data, error} = await sb.rpc('issue_revision', {
         p_emp: r.emp, p_basic: Number(r.basic) || 0, p_allow: Number(r.allow) || 0,
-        p_from: r.from, p_reason: r.reason || null});
+        p_from: r.from, p_reason: r.reason || null,
+        p_company: r.company || '', p_kind: r.kind || 'revision',
+        p_release: false});
       if(error) throw error;
       await reload();
       return data;
     }catch(e){ oops(e, 'The revision letter'); await reload(); }
+  },
+
+  async releaseRevision(id){
+    try{
+      const {data, error} = await sb.rpc('release_revision', {p_rev: id});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Sending the letter'); await reload(); }
+  },
+
+  async withdrawRevision(id, why){
+    try{
+      const {data, error} = await sb.rpc('withdraw_revision',
+        {p_rev: id, p_why: why || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Withdrawing the draft'); await reload(); }
+  },
+
+  async confirmEmployee(id, on){
+    try{
+      const {data, error} = await sb.rpc('confirm_employee',
+        {p_emp: id, p_on: on || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Confirming them'); await reload(); }
+  },
+
+  async extendProbation(id, until, why){
+    try{
+      const {data, error} = await sb.rpc('extend_probation',
+        {p_emp: id, p_until: until, p_why: why || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Extending probation'); await reload(); }
+  },
+
+  async correctJoining(p){
+    try{
+      const {data, error} = await sb.rpc('correct_joining', {
+        p_emp: p.emp,
+        p_doj: p.doj || null,
+        p_basic: p.basic === '' || p.basic == null ? null : Number(p.basic),
+        p_allowance: p.allow === '' || p.allow == null ? null : Number(p.allow),
+        p_name: p.name || null, p_legal_name: p.legal || null,
+        p_email: p.email || null, p_title: p.title || null,
+        p_department: p.dept || null, p_company: p.company || null,
+        p_visa_company: p.visa || null, p_paid_by: p.paidBy || null,
+        p_shift: p.shift || null, p_manager: p.manager || null,
+        p_country: p.country || null,
+        p_ticket_rate: p.rate === '' || p.rate == null ? null : Number(p.rate)});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Correcting the joining'); await reload(); }
   },
 
   async addEmployee(p){
@@ -454,7 +517,10 @@ window.__db = {
         p_department: p.dept || null, p_visa_company: p.visa || null,
         p_paid_by: p.paidBy || null, p_legal_name: p.legal || null,
         p_manager: p.manager || null, p_shift: p.shift || 'S2',
-        p_country: p.country || null, p_ticket_rate: p.rate || null});
+        p_country: p.country || null, p_ticket_rate: p.rate || null,
+        // Left blank, the database picks the next in the series — which is the
+        // only place that knows where the series has got to, leavers included.
+        p_staff_no: p.staffNo || null});
       if(error) throw error;
       await reload();
       return data;

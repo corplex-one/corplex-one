@@ -1959,6 +1959,10 @@ function vGratuity(){
   </section>`:''}`;
 }
 
+const REVS = () => HR().revisions || [];
+const DRAFTS = () => REVS().filter(r => r.status === 'draft');
+const SENTREV = () => REVS().filter(r => r.status === 'issued');
+
 function vRevisions(){
   const g = state.revForm || (state.revForm = {who:'', eff:'', basic:'', allow:''});
     const roll = USERS.map(x=>x.name).filter(n=>payrollRowFor(n));
@@ -1978,8 +1982,8 @@ function vRevisions(){
           <div class="field"><label for="rvBasic">New basic (AED)</label><input id="rvBasic" inputmode="decimal" placeholder="0.00" value="${esc(g.basic)}"></div>
           <div class="field"><label for="rvAllow">New other allowance</label><input id="rvAllow" inputmode="decimal" placeholder="0.00" value="${esc(g.allow)}"></div>
         </div>
-        <button class="btn wide" id="rvIssue" type="button"${ok?'':' disabled'}>Issue and email it</button>
-        ${state.revSent?`<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Issued.</b> ${esc(state.revSent)} has been emailed and the letter is on their Letters page. Payslips, the salary certificate and the gratuity provision now use the new basic.</div>`:''}
+        <button class="btn wide" id="rvIssue" type="button"${ok?'':' disabled'}>Write the draft</button>
+        ${state.revSent?`<div class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Drafted. Nothing has moved.</b> ${esc(state.revSent)}'s letter is waiting below. The salary on file, the payslip and the gratuity provision all still read the old figure until you send it.</div>`:''}
       </div>
       <div>
         ${g.who?`<dl class="kv">
@@ -1995,6 +1999,58 @@ function vRevisions(){
       </div>
     </div>
   </section>
+
+  <section class="panel">
+    <header><h3>Waiting to be sent</h3>
+      <span class="pill ${DRAFTS().length?'warn':'good'}"><span class="dt"></span>${DRAFTS().length||'none'}</span>
+      <span class="hint" style="margin-left:auto">a draft changes nothing until you send it</span></header>
+    <div class="pad">
+      ${DRAFTS().length ? DRAFTS().map(r => `
+        <div class="draft">
+          <div class="dhead">
+            <div><b>${nm(r.who)}</b>
+              <span class="dsub">${esc(r.ref)} &middot; with effect from ${esc(dayLabel(r.eff))} ${esc(r.eff.slice(0,4))}${r.why?' &middot; '+esc(r.why):''}</span></div>
+            <div class="dfig">
+              <span class="was">${r.was==null?'&mdash;':money(r.was,2)}</span>
+              <span class="arw">&rarr;</span>
+              <b class="n">${money(r.now,2)}</b>
+              <span class="dsub">basic ${money(r.basic,2)} &middot; other ${money(r.allow,2)}</span>
+            </div>
+            <div class="dact">
+              ${state.revAsk===r.revId ? '' : `<button class="btn sm" data-rvsend="${esc(r.revId)}" type="button">Send it</button>
+              <button class="btn ghost sm" data-rvdrop="${esc(r.revId)}" type="button">Withdraw</button>`}
+            </div>
+          </div>
+          ${state.revAsk===r.revId ? `<div class="dask">
+            <p>Sending this moves <b>${nm(r.who)}</b> from <b>${r.was==null?'no salary on file':money(r.was,2)}</b>
+              to <b>${money(r.now,2)}</b> from <b>${esc(dayLabel(r.eff))} ${esc(r.eff.slice(0,4))}</b>,
+              on a basic of <b>${money(r.basic,2)}</b>.
+              From that date the payslip, the salary certificate, the gratuity provision and
+              every payroll month still open all read the new figure. It cannot be undone by
+              deleting it &mdash; only by another letter.</p>
+            <div class="drow">
+              <button class="btn" data-rvyes="${esc(r.revId)}" type="button">Yes, send it</button>
+              <button class="btn ghost" id="rvNo" type="button">Not yet</button>
+            </div></div>` : ''}
+        </div>`).join('')
+      : '<p style="margin:0;color:var(--ink3);font-size:13.5px">No letters waiting. Anything you write above lands here first.</p>'}
+    </div>
+  </section>
+
+  ${SENTREV().length ? `<section class="panel">
+    <header><h3>Sent</h3><span class="hint" style="margin-left:auto">the last few letters that went out</span></header>
+    <div class="tw"><table>
+      <thead><tr><th class="s1">Employee</th><th>Letter</th><th>From</th><th class="r">Was</th><th class="r">Now</th><th class="r">Basic</th><th>Sent</th></tr></thead>
+      <tbody>${SENTREV().slice(0,12).map(r => `<tr>
+        <td class="s1 nw">${nm(r.who)}</td>
+        <td class="nw" style="color:var(--ink2)">${esc(r.ref)}</td>
+        <td class="nw" style="color:var(--ink2)">${esc(dayLabel(r.eff))} ${esc(r.eff.slice(0,4))}</td>
+        <td class="n r" style="color:var(--ink3)">${r.was==null?'&mdash;':money(r.was,2)}</td>
+        <td class="n r netcol">${money(r.now,2)}</td>
+        <td class="n r">${money(r.basic,2)}</td>
+        <td class="nw" style="color:var(--ink2)">${r.sentAt?esc(dayLabel(r.sentAt))+' '+esc(r.sentAt.slice(0,4)):'&mdash;'}${r.sentBy?' by '+nm(r.sentBy):''}</td></tr>`).join('')}
+      </tbody></table></div>
+  </section>` : ''}
 
   <section class="panel">
     <header><h3>Salary on file</h3>
@@ -5314,11 +5370,134 @@ function vDigest(){
   </div>`;
 }
 
+const JF = () => state.jf || (state.jf = {name:'', legal:'', email:'', email2:'',
+  doj:'', staffNo:'', company:'corplex', visa:'', paidBy:'', title:'', dept:'',
+  manager:'', basis:'salaried', basic:'', allow:'', shift:'S2', country:'', rate:'',
+  noTicket:false});
+
+// Why the button is off. A disabled control that will not say what it wants is
+// the most irritating thing a form can do.
+function jWhy(){
+  const f = JF();
+  if(!f.name.trim())                       return 'A name, first.';
+  if(!f.doj)                               return 'And a joining date.';
+  if(f.email.trim() !== f.email2.trim())   return 'The two addresses do not match.';
+  if(f.basis !== 'commission' && !(+f.basic > 0))
+                                           return 'A salaried joiner needs a basic. Choose commission only if they have none.';
+  if(!f.noTicket && !f.country.trim())     return 'Home country, or tick that there is no ticket entitlement.';
+  return '';
+}
+const jReady = () => !jWhy();
+
+// Probation still running, soonest to lapse first.
+function PROB(){
+  const p = HR().probation || {}, j = HR().joined || {}, t = HR().today;
+  return Object.keys(p).filter(n => !p[n].confirmed && p[n].until >= t && !(HR().left||{})[n])
+    .map(n => ({who:n, until:p[n].until, doj:j[n] || '',
+      days: Math.round((new Date(p[n].until) - new Date(t)) / 86400000)}))
+    .filter(x => x.doj)
+    .sort((a,b) => a.until.localeCompare(b.until));
+}
+
 function vAdmin(){
   const staff = USERS.map(u=>u.name).concat(FORMER);
   const upl = canUpload(state.user);
   const W = WHERE(), O = OFFICE();
   return `
+  <section class="panel">
+    <header><h3>Add somebody to the staff list</h3>
+      <span class="hint" style="margin-left:auto">accounts only</span></header>
+    <div class="pad">
+      ${state.jDone ? `<div class="note" style="border-left-color:var(--good);margin-bottom:18px">
+        <b>${esc(state.jDone.name)} is on the staff list as ${esc(state.jDone.staff_no||'')}.</b>
+        ${state.jDone.email ? `They cannot sign in yet. Invite <b>${esc(state.jDone.email)}</b> from
+        Supabase &rarr; Authentication &rarr; Users &rarr; Invite. The sign-in attaches itself to this
+        record by the address, so it has to match exactly &mdash; a typo lets them in to an empty portal
+        with no error at all.` : 'They have no work address yet, so they cannot be invited until one is added.'}
+        ${state.jDone.probation_until ? ` Probation runs to <b>${esc(dayLabel(state.jDone.probation_until))} ${esc(String(state.jDone.probation_until).slice(0,4))}</b>.` : ''}
+        Refresh any open payroll month to put them on it.</div>` : ''}
+      <p style="margin:0 0 18px;color:var(--ink2);font-size:14.5px;max-width:74ch">
+        This writes the whole of them at once: the staff record, an appointment
+        letter carrying the opening salary, a leave opening, the air ticket
+        clock and a place on the gratuity sheet. It does not create a sign-in
+        &mdash; that is an invitation from Supabase, and it is yours to send.</p>
+      <div class="jform">
+        <label class="wide"><span>Name the portal uses</span>
+          <input id="jName" value="${esc(JF().name)}" placeholder="as everybody says it"></label>
+        <label class="wide"><span>Name on the visa &mdash; if it differs</span>
+          <input id="jLegal" value="${esc(JF().legal)}" placeholder="what payslips and letters will carry"></label>
+        <label><span>Work email &mdash; this is their sign-in</span>
+          <input id="jEmail" type="email" value="${esc(JF().email)}" placeholder="name@corplex.ae"></label>
+        <label><span>The same address again</span>
+          <input id="jEmail2" type="email" value="${esc(JF().email2)}" placeholder="to catch a typo"></label>
+        <label><span>Joining date</span><input id="jDoj" type="date" value="${esc(JF().doj)}"></label>
+
+        <label><span>Who employs them</span><select id="jCo">${
+          ['corplex','poa','lex'].map(k=>`<option value="${k}"${JF().company===k?' selected':''}>${esc((DATA.companies[k]||{}).name||k)}</option>`).join('')}</select></label>
+        <label><span>Whose visa they are on</span><select id="jVisa">${
+          ['corplex','poa','lex'].map(k=>`<option value="${k}"${(JF().visa||JF().company)===k?' selected':''}>${esc((DATA.companies[k]||{}).name||k)}</option>`).join('')}</select></label>
+        <label><span>Who pays them</span><select id="jPay">${
+          ['corplex','poa','lex'].map(k=>`<option value="${k}"${(JF().paidBy||JF().company)===k?' selected':''}>${esc((DATA.companies[k]||{}).name||k)}</option>`).join('')}</select></label>
+        <p class="jnote wide">The visa entity decides who carries the gratuity and whose letterhead the payslip
+          uses; the paying entity decides which company's payroll they appear on. They are often the same and
+          sometimes not &mdash; Shannan and Abdullokh are both cases where they diverge.</p>
+
+        <label><span>Staff number</span><input id="jNo" value="${esc(JF().staffNo)}" placeholder="left blank, the next in the series"></label>
+        <label><span>Job title</span><input id="jTitle" value="${esc(JF().title)}"></label>
+        <label><span>Department</span><input id="jDept" value="${esc(JF().dept)}"></label>
+        <label><span>Reports to</span><select id="jMgr"><option value="">nobody yet</option>${
+          USERS.map(u=>u.name).sort().map(n=>`<option value="${esc(n)}"${JF().manager===n?' selected':''}>${esc(n)}</option>`).join('')}</select></label>
+        <label><span>Shift</span><select id="jShift">${
+          (SHIFTS().length?SHIFTS():[{id:'S2',label:'S2'}]).map(s=>`<option value="${esc(s.id)}"${JF().shift===s.id?' selected':''}>${esc(s.id)}${s.from?' · '+esc(s.from)+'–'+esc(s.to):''}</option>`).join('')}</select></label>
+
+        <label><span>Paid how</span><select id="jBasis">
+          <option value="salaried"${JF().basis!=='commission'?' selected':''}>A fixed salary</option>
+          <option value="commission"${JF().basis==='commission'?' selected':''}>Commission only, no fixed salary</option>
+        </select></label>
+        <label><span>Basic (AED)</span><input id="jBasic" inputmode="decimal" value="${esc(JF().basic)}"${JF().basis==='commission'?' disabled':''}></label>
+        <label><span>Other allowance</span><input id="jAllow" inputmode="decimal" value="${esc(JF().allow)}"${JF().basis==='commission'?' disabled':''}></label>
+        <p class="jnote wide">Gratuity accrues on the <b>basic</b> alone. The house split is 60/40, so on a
+          salary of 10,000 that is a 6,000 basic — entering the whole salary as basic over-provides for the
+          entire life of their employment before anybody notices.${JF().basis==='commission'?' A commission-only joiner gets no salary letter and no gratuity row, because there is no basic to accrue on.':''}</p>
+
+        <label><span>Home country &mdash; for the air ticket</span>
+          <input id="jCountry" value="${esc(JF().country)}"${JF().noTicket?' disabled':''} placeholder="India"></label>
+        <label><span>Ticket allowance (AED)</span>
+          <input id="jRate" inputmode="decimal" value="${esc(JF().rate)}"${JF().noTicket?' disabled':''}></label>
+        <label class="wide tick"><input id="jNoTicket" type="checkbox"${JF().noTicket?' checked':''}>
+          <span>No air ticket entitlement</span></label>
+        <p class="jnote wide">Leave the country blank without ticking that and no entitlement is ever created
+          &mdash; not in eleven months, not ever. The first ticket falls due eleven months after joining.</p>
+      </div>
+      <div class="drow" style="margin-top:6px">
+        <button class="btn" id="jSave" type="button"${jReady()?'':' disabled'}>Add them</button>
+        <button class="btn ghost" id="jClear" type="button">Clear the form</button>
+        <span class="jwhy">${esc(jWhy())}</span>
+      </div>
+    </div>
+  </section>
+
+  ${PROB().length ? `<section class="panel">
+    <header><h3>Probation</h3>
+      <span class="pill ${PROB().some(p=>p.days<=30)?'warn':'good'}"><span class="dt"></span>${PROB().length} running</span>
+      <span class="hint" style="margin-left:auto">six months from joining &mdash; nothing accrues differently, but somebody has to decide</span></header>
+    <div class="tw"><table>
+      <thead><tr><th class="s1">Employee</th><th>Joined</th><th>Probation ends</th><th class="r">Days left</th><th></th></tr></thead>
+      <tbody>${PROB().map(p=>`<tr>
+        <td class="s1 nw">${nm(p.who)}</td>
+        <td class="nw" style="color:var(--ink2)">${esc(dayLabel(p.doj))} ${esc(p.doj.slice(0,4))}</td>
+        <td class="nw" style="color:var(--ink2)">${esc(dayLabel(p.until))} ${esc(p.until.slice(0,4))}</td>
+        <td class="n r"${p.days<=30?' style="color:var(--warn)"':''}>${p.days}</td>
+        <td class="r nw">
+          <button class="btn sm" data-pbok="${esc(p.who)}" type="button">Confirm</button>
+          <input class="pbdate" type="date" data-pbext="${esc(p.who)}" value="" title="extend to">
+        </td></tr>`).join('')}
+      </tbody></table></div>
+    <p class="cap">Confirming records the decision on the day it is taken. Setting a later date in the box
+      extends probation instead. Neither changes what has accrued: leave, the gratuity provision and the air
+      ticket clock have all run from day one, which is what the law and the sheet both do.</p>
+  </section>` : ''}
+
   <section class="panel">
     <header><h3>Where the office is</h3>
       <span class="pill ${O.set?'good':'warn'}"><span class="dt"></span>${O.set?'set':'not set yet'}</span>
@@ -5883,6 +6062,47 @@ function render(){
       render(); };
     document.querySelectorAll('[data-offdrop]').forEach(b=>b.onclick=()=>{
       b.disabled=true; window.__db.forgetOfficeIp(b.dataset.offdrop); }); }
+  [['jName','name'],['jLegal','legal'],['jEmail','email'],['jEmail2','email2'],
+   ['jDoj','doj'],['jNo','staffNo'],['jCo','company'],['jVisa','visa'],['jPay','paidBy'],
+   ['jTitle','title'],['jDept','dept'],['jMgr','manager'],['jBasis','basis'],
+   ['jBasic','basic'],['jAllow','allow'],['jShift','shift'],['jCountry','country'],
+   ['jRate','rate']].forEach(([id,key])=>{
+    const el = document.getElementById(id); if(!el) return;
+    const h = ()=>{ JF()[key] = el.value; state.jDone = null; render();
+      const e2 = document.getElementById(id);
+      if(e2 && e2.tagName==='INPUT' && e2.type!=='date'){ e2.focus();
+        try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} } };
+    if(el.tagName==='SELECT' || el.type==='date') el.onchange = h;
+    else { let tm; el.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(h, 300); }; }
+  });
+  const jnt = document.getElementById('jNoTicket');
+  if(jnt) jnt.onchange = ()=>{ JF().noTicket = jnt.checked; state.jDone = null; render(); };
+  const jcl = document.getElementById('jClear');
+  if(jcl) jcl.onclick = ()=>{ state.jf = null; state.jDone = null; render(); };
+  const jsv = document.getElementById('jSave');
+  if(jsv) jsv.onclick = async ()=>{
+    const f = JF(); jsv.disabled = true; jsv.textContent = 'Adding\u2026';
+    const r = await window.__db.addEmployee({
+      name: f.name.trim(), legal: f.legal.trim() || null,
+      email: f.email.trim() || null, doj: f.doj,
+      company: f.company, visa: f.visa || f.company, paidBy: f.paidBy || f.company,
+      title: f.title.trim() || null, dept: f.dept.trim() || null,
+      manager: (HR().ids||{})[f.manager] || null,
+      basis: f.basis, basic: f.basis==='commission' ? 0 : +f.basic||0,
+      allow: f.basis==='commission' ? 0 : +f.allow||0,
+      shift: f.shift || 'S2',
+      country: f.noTicket ? null : (f.country.trim() || null),
+      rate: f.noTicket ? null : (+f.rate || 0),
+      staffNo: f.staffNo.trim() || null});
+    if(r){ state.jDone = r; state.jf = null; }
+    render(); };
+  document.querySelectorAll('[data-pbok]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true;
+    await window.__db.confirmEmployee((HR().ids||{})[b.dataset.pbok]); render(); });
+  document.querySelectorAll('[data-pbext]').forEach(el=>el.onchange=async ()=>{
+    if(!el.value) return; el.disabled = true;
+    await window.__db.extendProbation((HR().ids||{})[el.dataset.pbext], el.value,
+      'extended from Rules & staff'); render(); });
   ['rqType','rqFrom','rqTo','rqReason'].forEach(id=>{
     const el=document.getElementById(id); if(!el) return;
     const key=id.slice(2).toLowerCase();
@@ -6018,18 +6238,24 @@ function render(){
     else { let tm; el.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(h, 300); }; }
   });
   const rvb = document.getElementById('rvIssue');
-  if(rvb) rvb.onclick = ()=>{
-    const g = state.revForm, basic = +g.basic||0, allow = +g.allow||0;
-    const L = HR().letters;
-    L.unshift({id:'LT-'+(4002+L.length), who:g.who, type:'revision', to:'', why:'Salary revision',
-      status:'Issued', asked:HDATE(), decided:HDATE(), by:state.user,
-      eff:g.eff, salary:Math.round((basic+allow)*100)/100, basic, allow});
-    (DATA.master.parts || (DATA.master.parts={}))[g.who] =
-      {salary:Math.round((basic+allow)*100)/100, basic, allow, from:g.eff,
-       src:'Salary revision letter dated '+dayLabel(HDATE())+' '+HDATE().slice(0,4)};
-    state.revSent = g.who; state.ltOpen = L[0].id;
-    state.revForm = {who:'', eff:'', basic:'', allow:''};
+  if(rvb) rvb.onclick = async ()=>{
+    const g = state.revForm, who = g.who;
+    rvb.disabled = true;
+    const r = await window.__db.issueRevision({
+      emp: (HR().ids||{})[who], basic: +g.basic||0, allow: +g.allow||0,
+      from: g.eff, reason: g.reason || 'Salary revision'});
+    if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:''}; }
     render(); };
+  document.querySelectorAll('[data-rvsend]').forEach(b=>b.onclick=()=>{
+    state.revAsk = b.dataset.rvsend; state.revSent=''; render(); });
+  const rvn = document.getElementById('rvNo');
+  if(rvn) rvn.onclick = ()=>{ state.revAsk = null; render(); };
+  document.querySelectorAll('[data-rvyes]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; state.revAsk = null;
+    await window.__db.releaseRevision(b.dataset.rvyes); render(); });
+  document.querySelectorAll('[data-rvdrop]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true;
+    await window.__db.withdrawRevision(b.dataset.rvdrop, 'withdrawn before sending'); render(); });
   document.querySelectorAll('[data-lt-ok]').forEach(b=>b.onclick=()=>{
     const x=HR().letters.find(y=>y.id===b.dataset.ltOk); if(x){x.status='Issued'; x.decided=HDATE(); window.__db.decideLetter(x.id,'Issued'); state.ltOpen=x.id;} render(); });
   document.querySelectorAll('[data-lt-no]').forEach(b=>b.onclick=()=>{

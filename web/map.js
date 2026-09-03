@@ -72,6 +72,11 @@ export function buildData(db, meId){
     loans:[], advances:[], letters:[], exits:[], docs:{}, files:{}, eid:{},
     companyDocs:[], docTypes:[], letterTypes:[], uploadTypes:[], mail:{},
     orgTree:{}, loanThreshold: 0,
+    // The database's own identifier for each person, kept so the screens that
+    // ACT on somebody — confirm them, correct their joining, send their letter
+    // — have something to name them by that a rename cannot break. It is never
+    // printed: checkscreens fails the build if a UUID reaches a screen.
+    ids:{}, joined:{}, probation:{}, revisions:[],
     // the rules that decide who counts as sales. Empty here reads as "nobody
     // qualifies", which is why these must come from settings, not a placeholder.
     revDept:     S.rev_dept     || {},
@@ -95,6 +100,14 @@ export function buildData(db, meId){
     set(hr.phones, n, e.work_phone);
     if(e.manager_id) hr.managers[n] = name(e.manager_id);
     else if(e.active) hr.managers[n] = '';
+    hr.ids[n] = e.id;
+    if(e.doj) hr.joined[n] = String(e.doj).slice(0,10);
+    // Probation is six months from joining and changes no accrual — it is a
+    // date somebody has to act on before it lapses, and nothing more.
+    if(e.probation_until) hr.probation[n] = {
+      until: String(e.probation_until).slice(0,10),
+      confirmed: e.confirmed_on ? String(e.confirmed_on).slice(0,10) : ''
+    };
     if(e.birthday) hr.birthdays[n] = {d: e.birthday, sample:false};
     if(e.last_day) hr.left[n] = e.last_day;
     if(e.no_leave)      hr.noLeave.push(n);
@@ -422,6 +435,23 @@ export function buildData(db, meId){
   (db.salary_revisions || []).forEach(r => {
     if(r.letter_ref) revByLetter[r.letter_ref] = r;
   });
+
+  // Revisions in their own right, because since a letter can now WAIT there is
+  // a screen that lists the ones not yet sent. A draft has written nothing to
+  // the salary on file, so this list is the only place it exists.
+  hr.revisions = (db.salary_revisions || []).map(r => ({
+    revId: r.id, ref: r.letter_ref || '', who: name(r.employee_id),
+    company: r.company || '',
+    eff: r.effective_from ? String(r.effective_from).slice(0,10) : '',
+    status: r.status || 'issued',
+    was: r.old_salary == null ? null : +r.old_salary,
+    now: +r.new_salary, basic: +r.new_basic, allow: +r.new_allowance,
+    why: r.reason || '',
+    by: name(r.issued_by), at: r.issued_at ? String(r.issued_at).slice(0,10) : '',
+    sentBy: name(r.released_by),
+    sentAt: r.released_at ? String(r.released_at).slice(0,10) : ''
+  })).filter(r => r.who)
+    .sort((a,b) => (b.at || '').localeCompare(a.at || ''));
   hr.letters = (db.letters || []).map(l => Object.assign({
     id: l.ref, who: name(l.employee_id), type: l.kind, to: l.addressee || '',
     why: l.why || '', status: l.status,

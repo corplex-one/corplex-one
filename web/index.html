@@ -1245,6 +1245,37 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .rgform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
   .btn.sm{padding:5px 12px;font-size:12.5px}
 
+  /* a revision letter waiting to be sent */
+  .draft{border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
+    padding:14px 16px;margin-bottom:12px;background:var(--card)}
+  .draft:last-child{margin-bottom:0}
+  .dhead{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+  .dhead>div:first-child{flex:1;min-width:180px}
+  .dsub{display:block;font-size:12.5px;color:var(--ink3);margin-top:2px}
+  .dfig{text-align:right;white-space:nowrap}
+  .dfig .was{color:var(--ink3);font-size:14px}
+  .dfig .arw{color:var(--ink3);margin:0 7px}
+  .dfig b{font-size:18px}
+  .dact{display:flex;gap:8px}
+  .dask{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+  .dask p{margin:0 0 12px;font-size:14px;color:var(--ink2);max-width:76ch}
+  .drow{display:flex;gap:10px;align-items:center}
+
+  /* adding somebody */
+  .jform{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px 18px;
+    margin-bottom:18px}
+  .jform label{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .jform label.wide{grid-column:1/-1}
+  .jform label.tick{flex-direction:row;align-items:center;gap:9px}
+  .jform label.tick input{width:auto}
+  .jform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .jform label.tick span{text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink2)}
+  .jnote{grid-column:1/-1;margin:-4px 0 4px;font-size:13px;color:var(--ink3);
+    max-width:82ch;line-height:1.55}
+  .jnote b{color:var(--ink2)}
+  .jwhy{font-size:13px;color:var(--ink3)}
+  .pbdate{width:150px;margin-left:8px;vertical-align:middle}
+
   /* where the office is */
   .offrow{display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap}
   .offrow>div{display:flex;flex-direction:column;gap:4px}
@@ -1256,6 +1287,9 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
     .rgform{grid-template-columns:1fr 1fr}
     .rgform label:first-child{grid-column:1/-1}
     .ciwrow{flex-direction:column}
+    .jform{grid-template-columns:1fr 1fr}
+    .dhead{gap:12px}
+    .dfig{text-align:left}
   }
 </style>
 
@@ -1344,8 +1378,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609030950';</script>
-<script src="config.js?v=202609030950"></script>
-<script type="module" src="boot.js?v=202609030950"></script>
+<script>window.__BUILD = '202609031128';</script>
+<script src="config.js?v=202609031128"></script>
+<script type="module" src="boot.js?v=202609031128"></script>
 </body>
 </html>
