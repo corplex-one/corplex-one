@@ -729,6 +729,19 @@ window.__db = {
     }catch(e){ oops(e, 'That document'); await reload(); return false; }
   },
 
+  /* Marking your own decisions read. Deliberately quiet: it is housekeeping,
+   * not an action, and a failure here should never interrupt somebody who has
+   * just come to look at their request. It returns how many it cleared so the
+   * screen only redraws when something actually changed. */
+  async seenPayments(){
+    try{
+      const {data, error} = await sb.rpc('mark_payments_seen');
+      if(error) throw error;
+      if(data) await reload();
+      return data || 0;
+    }catch(e){ return 0; }
+  },
+
   async withdrawPayment(id){
     try{
       const {error} = await sb.rpc('withdraw_payment_request', {p_id: id});

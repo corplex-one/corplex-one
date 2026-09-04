@@ -650,6 +650,7 @@ function buildSales(db, byId, name, companies){
     status: STATUS[r.status] || r.status,
     decidedBy: name(r.decided_by), why: r.decided_why || '',
     self: !!(r.decided_by && r.raised_by && r.decided_by === r.raised_by),
+    seen: !!r.seen_at,
     payStatus: PAYSTAT[r.pay_status] || '', account: r.account || '',
     remarks: r.remark || '',
     files: filesOf[r.id] || [],

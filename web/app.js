@@ -2632,6 +2632,23 @@ function alertsFor(u){
     add('pay-req', `${pend.length} payment request${pend.length===1?'':'s'} waiting on you`,
       `AED ${money(pend.reduce((x,r)=>x+r.amount,0),2)} · oldest from ${pend[pend.length-1].by}`, 'payment');
 
+  // and what happened to mine, once and once only
+  reqs().filter(r=>r.by===u && !r.seen && (r.status==='Approved' || r.status==='Rejected'))
+    .forEach(r=>{
+      if(r.status==='Rejected')
+        add('pay-no-'+r.id, `${r.ref} was turned down`,
+          r.why || 'No reason was given', 'payment', 'bad');
+      else
+        add('pay-ok-'+r.id, `${r.ref} was approved — AED ${money(r.amount,2)}`,
+          r.remarks || (r.payStatus ? r.payStatus : 'Accounts will record the payment shortly'),
+          'payment', 'good');
+    });
+
+  // a request of mine that nobody has looked at yet, so it is not forgotten
+  reqs().filter(r=>r.by===u && r.status==='Pending').forEach(r=>
+    add('pay-wait-'+r.id, `${r.ref} is with accounts`,
+      `${r.payee} · AED ${money(r.amount,2)} · raised ${r.date}`, 'payment', 'warn'));
+
   H.requests.filter(r=>r.mgr===u && r.status==='Pending').forEach(r=>
     add('req-'+r.id, `${r.who} — ${reqLabel(r.type).toLowerCase()}`,
       `${dayLabel(r.from)}${r.from!==r.to?' – '+dayLabel(r.to):''} · ${r.days} working day${r.days===1?'':'s'}`, 'requests'));
@@ -6266,6 +6283,7 @@ function render(){
   if(mk && !mk.dataset.wired){ mk.dataset.wired='1'; mk.title='Home';
     mk.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); }; }
   CHARTS = {};
+  if(state.tab !== 'payment') state.pqSeen = false;
   const v = document.getElementById('view');
   const mainEl = document.querySelector('main');
   mainEl.classList.toggle('fixed', ['payment','invoices'].includes(state.tab));
@@ -6273,7 +6291,7 @@ function render(){
   mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile'].includes(state.tab));
   const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
   const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
-  if(!yearHeld && !['admin','payroll','tickets','myticket','payslips','myslip','tools','payment','attend','requests','people','hradmin','profile','docsadmin','revisions','loans','exits'].includes(state.tab)){
+  if(SALESTABS.includes(state.tab) && activeCo().sales && !yearHeld){
     v.innerHTML = `<section class="panel"><div class="pad" style="text-align:center;padding:56px 24px">
       <h3 style="font-size:22px;margin-bottom:8px">${state.year} has not been uploaded yet</h3>
       <p style="color:var(--ink2);max-width:52ch;margin:0 auto 18px">Upload the ${state.year} workbook under <b>Sales &rarr; Weekly upload</b> and this selector switches the whole portal — dashboard, commission, invoices and leaderboard — to that year.</p>
@@ -6729,6 +6747,12 @@ function render(){
       cs.addEventListener('focus',pqList);
       cs.addEventListener('blur',()=>setTimeout(()=>{const b=document.getElementById('pqList'); if(b) b.classList.add('hidden');},120));
       pqBadge();
+    }
+    if(!state.pqSeen){
+      state.pqSeen = true;
+      const unread = reqs().some(r=>r.by===state.user && !r.seen
+        && (r.status==='Approved' || r.status==='Rejected'));
+      if(unread && window.__db && window.__db.seenPayments) window.__db.seenPayments();
     }
     const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
     const again=document.getElementById('pqAnother');
