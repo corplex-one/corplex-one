@@ -3905,6 +3905,37 @@ const ACCOUNTS = [
    who:['Miraziz Makhamatzhanov — provides the OTP']}
 ];
 const OFFERED = () => ACCOUNTS.filter(a => !a.retired);
+/* Who authorises a Mashreq transfer in the banking portal — the owner. Asked
+ * of the roster rather than written down twice. */
+function payAuthoriser(){
+  const u = (USERS || []).find(x => roleOf(x.name) === 'owner');
+  return u ? u.name : '';
+}
+function authoriserWa(){ return waNumber(phoneOf(payAuthoriser())); }
+
+/* Exactly the six lines Avin asked for, in his order and his wording, for
+ * copying out of the table and pasting into a chat. Deliberately not the
+ * longer approval message below: this one is what a payment IS, and nothing
+ * about who raised it or where it stands. */
+const DOCICO = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" '
+  + 'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+
+function orderMessage(r){
+  const amt = Number(r.amount) === Math.round(Number(r.amount))
+    ? String(Math.round(Number(r.amount)))
+    : Number(r.amount).toFixed(2);
+  const ccy = (r.ccy && r.ccy !== 'AED') ? r.ccy + ' ' : '';
+  return [
+    `Order number:  ${r.order || '—'}`,
+    `Amount: ${ccy}${amt}`,
+    `Client name: ${r.client || '—'}`,
+    `Purpose of payment: ${r.purpose || '—'}`,
+    `Mode of payment: ${(MODES.find(m=>m.id===r.mode)||{}).label || r.mode}`,
+    `Vendor Name: ${r.payee || '—'}`
+  ].join('\n');
+}
+
 function waMessage(r){
   const acct = ACCOUNTS.find(x=>x.id===r.account);
   return [
@@ -4058,7 +4089,8 @@ function cellHover(){
     const td = e.target && e.target.closest && e.target.closest('[data-full]');
     if(!td) return;
     // nothing to say if it all fits
-    if(td.scrollWidth <= td.clientWidth + 1) return;
+    // a cell marked data-always has something to say even when nothing is cut
+    if(!td.hasAttribute('data-always') && td.scrollWidth <= td.clientWidth + 1) return;
     clearTimeout(timer);
     current = td.dataset.full;
     txt.textContent = current;
@@ -4097,8 +4129,68 @@ function modeLabel(id){ return (MODES.find(m=>m.id===id)||{}).label || id; }
 const MODESHORT = {card:'Card', transfer:'Transfer', link:'Link', cash:'Cash'};
 function modeShort(id){ return MODESHORT[id] || modeLabel(id); }
 
+/* The rows the export panel is offering: decided, not withdrawn, inside the
+ * dates if any are set, and matching whatever is in the search box — because
+ * the panel opened from a table that was already filtered, and exporting
+ * something you cannot see would be a surprise. */
+function exportRows(){
+  const e = state.exp || {};
+  const find = (state.paySearch || '').trim().toLowerCase();
+  return (reqs() || [])
+    .filter(r => r.status !== 'Pending' && r.status !== 'Withdrawn')
+    .filter(r => !e.from || String(r.at || '').slice(0, 10) >= e.from)
+    .filter(r => !e.to   || String(r.at || '').slice(0, 10) <= e.to)
+    .filter(r => !find || ((r.order||'') + ' ' + (r.client||'')).toLowerCase().includes(find));
+}
+const exportPicked = () => exportRows().filter(r => !(state.exp && state.exp.off || {})[r.id]);
+
+function vExport(){
+  const e = state.exp;
+  if(!e || !e.open) return '';
+  const rows = exportRows(), picked = exportPicked();
+  return `
+  <div class="docpop" id="expPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="Export to CSV" style="height:auto;max-height:86vh">
+      <header>
+        <b>Export to CSV</b>
+        <button class="btn ghost sm" id="expShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody" style="display:block;padding:16px;background:var(--panel);overflow:auto">
+        <div class="expdates">
+          <label>From <input type="date" id="expFrom" value="${esc(e.from||'')}"></label>
+          <label>To <input type="date" id="expTo" value="${esc(e.to||'')}"></label>
+          ${(e.from||e.to)?'<button class="btn ghost sm" id="expClear" type="button">Any date</button>':''}
+          <span class="hint" style="margin-left:auto">${state.paySearch
+            ? 'matching &ldquo;' + esc(state.paySearch) + '&rdquo;' : 'every decided request'}</span>
+        </div>
+        ${rows.length ? `
+        <div class="exphead">
+          <label class="pfchk"><input type="checkbox" id="expAll"${picked.length===rows.length?' checked':''}><span>${
+            picked.length} of ${rows.length} selected</span></label>
+        </div>
+        <div class="tw"><table class="paytab"><colgroup><col style="width:7%"><col style="width:15%"><col style="width:15%"><col style="width:18%"><col style="width:45%"></colgroup>
+          <thead><tr><th></th><th>Date</th><th class="r">Amount</th><th>Order no.</th><th>Client</th></tr></thead>
+          <tbody>${rows.map(r => `<tr>
+            <td class="c"><input type="checkbox" class="rtick" data-exprow="${esc(r.id)}"${
+              (e.off||{})[r.id] ? '' : ' checked'}></td>
+            <td class="n nw">${esc(r.date)}</td>
+            <td class="n r nw">${payAmt(r)}</td>
+            <td class="n nw">${esc(r.order||'—')}</td>
+            <td class="cell"${full(r.client)}>${esc(r.client||'—')}</td></tr>`).join('')}
+          </tbody></table></div>` : '<p class="cap" style="padding:18px 2px">Nothing falls in that range.</p>'}
+      </div>
+      <div class="expfoot">
+        <button class="btn" id="expGo" type="button"${picked.length?'':' disabled'}>Download ${
+          picked.length} row${picked.length===1?'':'s'}</button>
+        <button class="btn ghost" id="expCancel" type="button">Never mind</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function exportPayments(){
-  const rows = (reqs() || []).filter(r => r.status !== 'Pending' && r.status !== 'Withdrawn');
+  const rows = exportPicked();
+  if(!rows.length) return;
   const cell = v => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -4112,7 +4204,9 @@ function exportPayments(){
   const blob = new Blob(['\ufeff' + lines.join('\r\n')], {type: 'text/csv;charset=utf-8'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'CorpLex payments ' + HDATE() + '.csv';
+  const e = state.exp || {};
+  a.download = 'CorpLex payments ' +
+    (e.from || e.to ? (e.from || 'start') + ' to ' + (e.to || HDATE()) : HDATE()) + '.csv';
   document.body.appendChild(a); a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
@@ -4165,16 +4259,20 @@ function vWaPop(){
   <div class="docpop" id="waPop">
     <div class="docbox" role="dialog" aria-modal="true" aria-label="Message for Miraziz" style="height:auto;max-height:86vh">
       <header>
-        <b>For the payments group</b>
+        <b>${state.waTitle ? esc(state.waTitle)
+            : authoriserWa() ? 'For ' + esc(firstName(payAuthoriser()))
+            : 'For the payments group'}</b>
         <button class="btn ghost sm" id="waCopy" type="button">Copy</button>
-        <a class="btn sm" id="waGo" href="https://wa.me/?text=${encodeURIComponent(state.waMsg)}"
-           target="_blank" rel="noopener">Open WhatsApp</a>
+        <a class="btn sm" id="waGo" href="https://wa.me/${authoriserWa()}?text=${encodeURIComponent(state.waMsg)}"
+           target="_blank" rel="noopener">${authoriserWa()
+             ? 'Open the chat with ' + esc(firstName(payAuthoriser())) : 'Open WhatsApp'}</a>
         <button class="btn ghost sm" id="waShut" type="button" aria-label="Close">&times;</button>
       </header>
       <div class="docbody" style="display:block;padding:16px;background:var(--panel)">
         <pre class="wamsg">${esc(state.waMsg)}</pre>
-        <p class="cap" style="padding:12px 2px 0">WhatsApp does not let an app post into a group by itself,
-          so this opens with the message ready and the send stays yours.</p>
+        <p class="cap" style="padding:12px 2px 0">${authoriserWa()
+          ? 'This opens the chat with ' + esc(firstName(payAuthoriser())) + ' on ' + esc(phoneOf(payAuthoriser())) + ' with the message ready. Pressing send stays yours.'
+          : 'No work number is on file for the owner, so this opens the share sheet instead. Add one on their profile and it will go straight to the chat.'}</p>
       </div>
     </div>
   </div>`;
@@ -4241,7 +4339,7 @@ function vPayApprove(){
     if(r.status !== 'Approved')
       return `<td${full(r.status === 'Rejected' && r.why ? 'Turned down: ' + r.why : r.status)}>${
         statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>`;
-    const busy = state.reconBusy === r.id;
+    const busy = false;   // nothing is disabled while it saves — see recon()
     // A bare box under a named column, the way it is on the sheet Avin keeps.
     const tick = k => `<td class="c"><input type="checkbox" class="rtick"
       data-recon="${esc(r.id)}" data-field="${k}"${r[k]?' checked':''}${busy?' disabled':''}></td>`;
@@ -4262,15 +4360,18 @@ function vPayApprove(){
     return `<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
       <td class="n nw"${full(r.date)}>${esc(payDate(r.date))}</td>
       <td${full(r.by)}>${esc(firstName(r.by))}</td>
-      <td class="n nw"${full(r.order)}>${esc(r.order||'—')}</td>
+      <td class="n nw"${full(r.order)}>${r.order
+        ? `<button type="button" class="ordbtn" data-ordmsg="${esc(r.id)}"
+             title="Copy the payment details">${esc(r.order)}</button>`
+        : '<span style="color:var(--ink3)">—</span>'}</td>
       <td class="n r nw"${full(payFull(r))}>${payAmt(r)}</td>
       <td class="cell"${full(r.client)}>${esc(r.client||'—')}</td>
       <td class="cell"${full(r.purpose)}>${esc(r.purpose)}</td>
       <td${full(modeShort(r.mode))}>${esc(modeShort(r.mode))}</td>
       <td class="cell"${full(r.payee)}>${esc(r.payee||'—')}</td>
-      <td>${r.files.length ? r.files.map(f=>f.url
-            ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
-            : `<span class="doc">${esc(f.name)}</span>`).join('')
+      <td class="c">${r.files.length ? r.files.map(f=>f.url
+            ? `<button type="button" class="docico" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}" aria-label="Open ${esc(f.name)}">${DOCICO}</button>`
+            : `<span class="docico off" title="${esc(f.name)}">${DOCICO}</span>`).join('')
           : '<span style="color:var(--ink3)">—</span>'}</td>
       <td class="cell"${full(r.note)}>${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
       ${withRecon ? recon(r) : ''}
@@ -4317,7 +4418,7 @@ function vPayApprove(){
    * to fit — so the numbers said one thing and the screen showed another, and
    * the tick columns ended up a pixel narrower than the two letters over
    * them. A share here is now the share the column actually gets. */
-  const SHARES = [5.10, 5.20, 5.75, 6.68, 11.44, 10.58, 5.66, 7.19, 4.83, 9.04,
+  const SHARES = [5.10, 5.20, 5.75, 6.68, 12.10, 11.10, 5.66, 7.19, 3.45, 9.10,
                   8.40, 8.35, 2.69, 2.69, 2.69, 3.71];
   const colgroup = ws => `<colgroup>${ws.map(w =>
     `<col style="width:${(w * 0.99).toFixed(2)}%">`).join('')}</colgroup>`;
@@ -4340,7 +4441,7 @@ function vPayApprove(){
       <th class="c" title="Receipt">Rc</th><th class="act"></th></tr></thead>`;
 
   return `
-  ${vDocPop()}${vWaPop()}${vPayEdit()}
+  ${vDocPop()}${vWaPop()}${vPayEdit()}${vExport()}
   ${payBar()}
   ${state.approve.ref ? vApprovePanel() : ''}
   <section class="panel">
@@ -4355,16 +4456,16 @@ function vPayApprove(){
 
   <section class="panel">
     <header><h3>Already decided</h3>
+      <span class="hint" style="margin-left:0">${find
+        ? `${done.length} of ${all.length}`
+        : (all.length ? `${all.length} request${all.length===1?'':'s'}` : 'none yet')}</span>
       <div class="dechead">
         ${forMiraziz.length ? `<button class="btn ghost sm" id="payWa" type="button">
           Ask Miraziz to approve ${forMiraziz.length}</button>` : ''}
         <button class="btn ghost sm" id="payCsv" type="button"${all.length?'':' disabled'}>Export CSV</button>
         <input id="paySearch" class="paysearch" type="search" placeholder="Order number or client"
           value="${esc(state.paySearch || '')}" aria-label="Search the decided payments">
-      </div>
-      <span class="hint">${find
-        ? `${done.length} of ${all.length}`
-        : (all.length ? `${all.length} request${all.length===1?'':'s'}` : 'none yet')}</span></header>
+      </div></header>
     <div class="tw paytab recon"><table>${head2}
       <tbody>${done.length ? done.map(r=>row(r,true)).join('')
         : `<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">${
@@ -4372,6 +4473,7 @@ function vPayApprove(){
     </table></div>
     <p class="cap"><b>Bk</b> Books &middot; <b>Bg</b> Bigin &middot; <b>Rc</b> Receipt.
       Amounts are dirhams unless the row says otherwise, and a date without a year is this year.
+      <b>Click an order number</b> to copy that payment's details. The icon under <b>Doc</b> opens the document.
       A cell that is cut off says the rest when you hover it, with a Copy beside it.
       The pencil at the end corrects a request.</p>
   </section>`;
@@ -4460,9 +4562,9 @@ function vPayment(){
         <td class="cell"${full(r.note)}>${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
         <td class="cell"${full(r.status==='Rejected' && r.why ? 'Turned down: ' + r.why
             : r.remarks ? r.remarks
-            : r.status==='Pending' ? 'With accounts' : '')}>${statusPill2(r.status)}${
-          r.status==='Rejected' && r.why ? ` <span class="why">${esc(r.why)}</span>`
-          : r.remarks ? ` <span class="why">${esc(r.remarks)}</span>` : ''}</td>
+            : r.status==='Pending' ? 'With accounts'
+            : r.status==='Withdrawn' ? 'You took this one back' : '')} data-always>${
+          statusPill2(r.status)}</td>
         <td>${r.status==='Pending'
           ? `<button class="btn ghost sm" data-pqpull="${esc(r.id)}" type="button">Withdraw</button>`
           : (r.payStatus ? `<span class="pill ${r.payStatus==='Paid'?'good':(r.payStatus==='Initiated'?'warn':'mute')}">${esc(r.payStatus)}</span>`
@@ -7353,9 +7455,31 @@ function render(){
           if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); } };
       }
       const csv = document.getElementById('payCsv');
-      if(csv) csv.onclick = () => exportPayments();
+      if(csv) csv.onclick = () => { state.exp = {open:true, from:'', to:'', off:{}}; render(); };
+      const expShut = () => { state.exp = null; render(); };
+      const xs = document.getElementById('expShut');   if(xs) xs.onclick = expShut;
+      const xc = document.getElementById('expCancel'); if(xc) xc.onclick = expShut;
+      const xf = document.getElementById('expFrom');
+      if(xf) xf.onchange = () => { state.exp.from = xf.value; render(); };
+      const xt = document.getElementById('expTo');
+      if(xt) xt.onchange = () => { state.exp.to = xt.value; render(); };
+      const xcl = document.getElementById('expClear');
+      if(xcl) xcl.onclick = () => { state.exp.from = ''; state.exp.to = ''; render(); };
+      const xa = document.getElementById('expAll');
+      if(xa) xa.onchange = () => {
+        state.exp.off = xa.checked ? {} :
+          exportRows().reduce((m, r) => (m[r.id] = true, m), {});
+        render();
+      };
+      document.querySelectorAll('[data-exprow]').forEach(cb => cb.onchange = () => {
+        const off = state.exp.off || (state.exp.off = {});
+        if(cb.checked) delete off[cb.dataset.exprow]; else off[cb.dataset.exprow] = true;
+        render();
+      });
+      const xg = document.getElementById('expGo');
+      if(xg) xg.onclick = () => { exportPayments(); state.exp = null; render(); };
       const wa = document.getElementById('payWa');
-      if(wa) wa.onclick = () => { state.waMsg = window.__mirazizMsg || ''; render(); };
+      if(wa) wa.onclick = () => { state.waMsg = window.__mirazizMsg || ''; state.waTitle = ''; render(); };
       document.querySelectorAll('[data-payedit]').forEach(b => b.onclick = () => {
         state.payEdit = b.dataset.payedit; state.payEditForm = null; state.payEditErr = ''; render(); });
       const edGrab = () => {
@@ -7433,18 +7557,37 @@ function render(){
     });
     document.querySelectorAll('[data-ps]').forEach(b=>b.onclick=()=>{ state.approve.payStatus=b.dataset.ps; render(); });
 
-    const recon = async (id, patch) => {
-      state.reconBusy = id; render();
-      await window.__db.reconcilePayment(id, patch);
-      state.reconBusy = null; render();
+    const recon = async (id, patch, box) => {
+      const row = (reqs() || []).find(x => x.id === id);
+      const was = row ? {books:row.books, bigin:row.bigin, receipt:row.receipt,
+                         payStatus:row.payStatus, account:row.account} : null;
+      if(row) Object.assign(row, patch);        // the screen agrees with you at once
+      const ok = await window.__db.reconcilePayment(id, patch);
+      if(!ok){                                   // it did not take — put it back
+        if(row && was) Object.assign(row, was);
+        if(box) box.checked = !box.checked;
+        render();
+      }
     };
+    document.querySelectorAll('[data-ordmsg]').forEach(b=>b.onclick=async()=>{
+      const r = (reqs()||[]).find(x=>x.id===b.dataset.ordmsg); if(!r) return;
+      const msg = orderMessage(r), said = b.textContent;
+      try{
+        await navigator.clipboard.writeText(msg);
+        b.textContent = 'Copied'; b.classList.add('copied');
+        setTimeout(()=>{ b.textContent = said; b.classList.remove('copied'); }, 1400);
+      }catch(e){
+        // no clipboard here — show it instead, where it can be selected
+        state.waMsg = msg; state.waTitle = r.order || 'This payment'; render();
+      }
+    });
     document.querySelectorAll('[data-paystat]').forEach(sel=>sel.onchange=()=>
       recon(sel.dataset.paystat, {payStatus: sel.value.toLowerCase()}));
     document.querySelectorAll('[data-acct]').forEach(sel=>sel.onchange=()=>{
       if(!sel.value) return;              // '— not yet —' is not a change to make
       recon(sel.dataset.acct, {account: sel.value}); });
     document.querySelectorAll('[data-recon]').forEach(cb=>cb.onchange=()=>
-      recon(cb.dataset.recon, {[cb.dataset.field]: cb.checked}));
+      recon(cb.dataset.recon, {[cb.dataset.field]: cb.checked}, cb));
     document.querySelectorAll('[data-ac]').forEach(b=>b.onclick=()=>{
       const r = reqs().find(x=>x.ref===state.approve.ref);   // remark names the requester
       const acct = ACCOUNTS.find(x=>x.id===b.dataset.ac);
@@ -7477,7 +7620,7 @@ function render(){
       wa.disabled=true;
       const r=await commit();
       if(!r){ if(tab) tab.close(); wa.disabled=false; return; }
-      if(tab) tab.location='https://wa.me/?text='+encodeURIComponent(waMessage(r));
+      if(tab) tab.location='https://wa.me/'+authoriserWa()+'?text='+encodeURIComponent(waMessage(r));
       state.approve={ref:null,payStatus:'',account:'',remarks:''}; render();
     };
     const cp=document.getElementById('apCopy'); if(cp) cp.onclick=async()=>{
