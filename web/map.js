@@ -18,8 +18,13 @@ export function longDate(iso){
   return `${d} ${MONTHS[+m-1]} ${y}`;
 }
 
+/* The reverse of boot.js's KIND. Both lists have to hold every kind of leave
+ * the portal offers: a gap here labels a stored request as its raw enum value
+ * on screen, and a gap there stores it as the wrong kind entirely. */
 const TYPE   = {annual:'Annual', sick:'Sick', unpaid:'Unpaid', birthday:'Birthday',
-                wfh:'WFH', offsite:'Off-site'};
+                wfh:'WFH', offsite:'Off-site', bereavement:'Bereavement',
+                maternity:'Maternity', paternity:'Paternity', hajj:'Hajj',
+                umrah:'Umrah', study:'Study'};
 const STATUS = {pending:'Pending', approved:'Approved', declined:'Declined',
                 cancelled:'Cancelled', draft:'Draft'};
 

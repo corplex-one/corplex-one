@@ -1239,9 +1239,9 @@ function vRequests(){
 
   /* The two lines Avin wanted under the three columns rather than inside one
    * of them: what expires and when, and what a working day means. */
-  const leaveNotes = noLeave(u) ? '' : `
-${B.expiring>0?`<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>${B.expiring} day${B.expiring===1?'':'s'} expire on ${esc(dayLabel(B.expiresOn))} ${B.expiresOn.slice(0,4)}.</b> Days earned in one leave year can be used until the end of the next one, and the oldest days go first &mdash; so anything still unused from last year is lost at your anniversary.</p>`:''}
-        <p class="note" style="margin-top:16px">${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.${B.yearEnd?` Your leave year runs to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}.`:''}</p>`;
+  const leaveNotes = noLeave(u) ? '' : `<div class="lvnotes">
+${B.expiring>0?`<p class="note" style="border-left-color:var(--warn)"><b>${B.expiring} day${B.expiring===1?'':'s'} expire on ${esc(dayLabel(B.expiresOn))} ${B.expiresOn.slice(0,4)}.</b> Days earned in one leave year can be used until the end of the next one, and the oldest days go first &mdash; so anything still unused from last year is lost at your anniversary.</p>`:''}
+        <p class="note">${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.${B.yearEnd?` Your leave year runs to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}.`:''}</p></div>`;
 
   return LV.bar + `
   <div class="strip">
@@ -1458,20 +1458,27 @@ function orgDeptNode(co, dept, people, owner){
 }
 function vOrg(){
   const owner = (USERS.find(u=>u.role==='owner')||{}).name;
+  /* The colours, said where they are being looked at rather than in a caption
+   * under the whole page. Orange earns; grey supports. */
+  const legend = `<div class="orglgd">
+    <span><i class="rev"></i>earns revenue &mdash; appears in that company&rsquo;s performance pages</span>
+    <span><i></i>support &mdash; does not sell, and never shows a sales figure</span>
+  </div>`;
   const coOfOrg = n => ((HR().orgCo||{})[n]) || companyOf(n).key;
   return ['corplex','poa','lex'].map(k=>DATA.companies[k]).filter(Boolean).map(c=>{
     const roll = USERS.map(x=>x.name).filter(n => coOfOrg(n) === c.key);
     const byDept = {};
     roll.forEach(n => { const d = orgDeptOf(n) || 'No department set'; (byDept[d]=byDept[d]||[]).push(n); });
     const rev = REVDEPT(c.key);
-    const order = Object.keys(byDept).sort((a,b)=>{
+    const order = Object.keys(byDept).filter(d => byDept[d].length).sort((a,b)=>{
       const r = d => rev.includes(d) ? 0 : 1;
       return r(a)-r(b) || a.localeCompare(b);
     });
     return `
     <section class="panel">
       <header><h3>${esc(c.name)}</h3>
-        <span class="hint">${roll.length} ${roll.length===1?'person':'people'} &middot; ${order.length} department${order.length===1?'':'s'}</span></header>
+        <span class="hint">${roll.length} ${roll.length===1?'person':'people'} &middot; ${order.length} department${order.length===1?'':'s'}</span>
+        ${legend}</header>
       <div class="pad orgwrap">
         <ul class="ot">
           <li>${orgBox(owner, 'col', true)}
@@ -1727,8 +1734,9 @@ function vHRAdmin(){
           <td><select class="ff" data-shift="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
             ${SHIFTS().map(s=>`<option value="${esc(s.id)}"${shiftOf(n).id===s.id?' selected':''}>${esc(s.label)} &middot; ${esc(s.start)}&ndash;${esc(s.end)}</option>`).join('')}
           </select></td>
-          <td><select class="ff" data-mgr="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
-            <option value="">Nobody</option>
+          <td>${mgrName(n) ? '' : '<span class="pill warn" style="margin-right:6px"><span class="dt"></span>nobody yet</span>'}
+            <select class="ff" data-mgr="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            <option value="">Nobody &mdash; requests have nowhere to go</option>
             ${list.filter(m=>m!==n).map(m=>`<option value="${esc(m)}"${mgrName(n)===m?' selected':''}>${esc(m)}</option>`).join('')}
           </select></td></tr>`,
         empty: 'Nobody on the shift list yet.'
@@ -2398,7 +2406,7 @@ function vLetters(){
         <dt>Who issues it</dt><dd>${esc(ADMIN)} in accounts. Nobody else sees your request.</dd>
         <dt>How long</dt><dd>Same day in most cases — you are emailed the moment it is ready.</dd>
         <dt>What it says</dt><dd>Your name, designation, joining date and, on a salary certificate, your salary breakdown — printed on your company's letterhead.</dd>
-        <dt>Getting it</dt><dd>Accounts create the letter, sign it and send it to you &mdash; it also stays here to open, print or save as a PDF. Stamping is separate and is usually Admin&rsquo;s job, so ask them if you need a stamp.</dd>
+        <dt>Getting it</dt><dd>Accounts write it, sign it and send it to you. It stays here too, so you can open it, print it or save it as a PDF any time. If you need it stamped, ask Admin.</dd>
       </dl></div>
     </section>
   </div>
@@ -4654,7 +4662,11 @@ function vPayApprove(){
    * to fit — so the numbers said one thing and the screen showed another, and
    * the tick columns ended up a pixel narrower than the two letters over
    * them. A share here is now the share the column actually gets. */
-  const SHARES = [5.10, 5.20, 5.75, 6.68, 12.10, 11.10, 5.66, 7.19, 3.45, 9.10,
+  /* These summed to 98.68, not 100 — a percent and a third of the table
+   * belonging to nothing, which at 1920 is thirty-seven pixels of white space
+   * on a row where the client's name is cut. It goes to the four columns that
+   * hold sentences, most of it to the client. */
+  const SHARES = [5.10, 5.20, 5.75, 6.68, 13.20, 9.90, 5.66, 8.10, 3.45, 8.43,
                   8.40, 8.35, 2.69, 2.69, 2.69, 3.71];
   const colgroup = ws => `<colgroup>${ws.map(w =>
     `<col style="width:${(w * 0.99).toFixed(2)}%">`).join('')}</colgroup>`;

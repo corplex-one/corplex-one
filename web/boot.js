@@ -248,8 +248,18 @@ const reload = async () => {
   if(typeof window.render === 'function') window.render();
 };
 
+/* Every kind of leave the portal offers, and the enum value it is stored as.
+ *
+ * This used to hold six of the ten and fall through to 'annual' for the rest,
+ * so a request for Hajj leave was silently recorded as annual leave — the one
+ * kind that comes off the balance, on a screen that had just said it would
+ * not. 0036_leave_kinds adds the missing enum values; this maps them, and
+ * anything not on the list now fails loudly rather than quietly becoming the
+ * kind with money attached. */
 const KIND = {Annual:'annual', Sick:'sick', Unpaid:'unpaid', Birthday:'birthday',
-              WFH:'wfh', 'Off-site':'offsite'};
+              WFH:'wfh', 'Off-site':'offsite', Bereavement:'bereavement',
+              Maternity:'maternity', Paternity:'paternity', Hajj:'hajj',
+              Umrah:'umrah', Study:'study'};
 
 /* One act of the payroll month.
  *
@@ -272,9 +282,14 @@ window.__db = {
 
   async newRequest(r){
     try{
+      /* No fallback. A kind this does not know is a bug in the pair of lists,
+       * and the person finding out should be me here rather than somebody
+       * three months from now wondering where their annual leave went. */
+      if(!KIND[r.type]) throw new Error(
+        r.type + ' is not a kind of leave the portal can store yet. Nothing has been sent.');
       const {data, error} = await sb.from('leave_requests').insert({
         employee_id: ME.id,
-        kind: KIND[r.type] || 'annual',
+        kind: KIND[r.type],
         from_date: r.from, to_date: r.to,
         half: r.half === 'am' ? 'first' : r.half === 'pm' ? 'second' : (r.half || 'full'),
         days: r.days, reason: r.reason
