@@ -4248,19 +4248,26 @@ function vPayment(){
   const clients = Object.keys(DATA.clients).sort();
   // statusPill2 and modeLabel are declared once, beside vPayApprove
 
+  const raised = state.pqDone ? `<div class="pqok">
+    <b>${esc(state.pqDone.order || 'Your request')} raised</b> &mdash; it is at the top of the list, with accounts.
+    ${state.pqDone.notAttached && state.pqDone.notAttached.length
+      ? `<br><span class="bad">${esc(state.pqDone.notAttached.join(', '))} did not go up &mdash; open the request and attach it again.</span>`
+      : ''}</div>` : '';
+
   const form = `
   <section class="panel payform">
     <header><h3>Raise a payment request</h3></header>
     <div class="pad formbody">
+      ${raised}
       <div class="field"><label>Name of the employee</label>
         <input value="${esc(u)}" disabled style="opacity:.7"></div>
-      <div class="frow">
+      <div class="frow amtfrow">
         <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431" value="${esc(KEPT().order)}"></div>
         <div class="field"><label for="pqAmount">Amount <i>*</i></label>
           <div class="amtrow">
+            <input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="${esc(KEPT().amount ? String(KEPT().amount) : '')}">
             <select id="pqCcy" aria-label="Currency">${['AED','EUR','USD'].map(c=>
               `<option value="${c}"${(KEPT().ccy||'AED')===c?' selected':''}>${c}</option>`).join('')}</select>
-            <input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="${esc(KEPT().amount ? String(KEPT().amount) : '')}">
           </div></div>
       </div>
       <div class="field"><label for="pqClient">Client name <i>*</i></label>
@@ -4294,11 +4301,11 @@ function vPayment(){
   <section class="panel grow">
     <header><h3>My requests</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
     <div class="tw paytab"><table>
-      <colgroup>${[8.6, 7.6, 10.0, 11.4, 10.6, 7.0, 11.0, 8.6, 10.6, 10.2, 4.4]
+      <colgroup>${[9.6, 6.2, 10.2, 12.0, 9.8, 6.6, 9.6, 9.2, 10.2, 9.6, 7.0]
         .map(w => `<col style="width:${(w*0.97).toFixed(2)}%">`).join('')}</colgroup>
-      <thead><tr><th>Date</th><th>Order number</th><th class="r">Amount</th><th>Client</th>
+      <thead><tr><th>Date</th><th>Order #</th><th>Amount</th><th>Client</th>
         <th>Purpose</th><th>Mode</th><th>Vendor</th><th>Document</th>
-        <th>Additional information</th><th>Status</th><th class="act"></th></tr></thead>
+        <th>Additional information</th><th>Status</th><th>Payment</th></tr></thead>
       <tbody>${mine.length?mine.map(r=>`<tr>
         <td class="n nw">${esc(r.date)}</td>
         <td class="n nw">${esc(r.order||'—')}</td>
@@ -4315,14 +4322,15 @@ function vPayment(){
               ? `<button type="button" class="adddoc" data-pqadd="${esc(r.id)}">${r.files.length?'+ another':'+ document'}</button>`
               : (r.files.length ? '' : '<span style="color:var(--ink3)">—</span>')}</td>
         <td class="cell">${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
-        <td>${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${
+        <td>${statusPill2(r.status)}${
           r.status==='Rejected' && r.why ? `<div class="sub bad">${esc(r.why)}</div>`
           : r.remarks ? `<div class="sub">${esc(r.remarks)}</div>`
           : r.status==='Pending' ? '<div class="sub">with accounts</div>'
           : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>
-        <td class="act">${r.status==='Pending'
+        <td>${r.status==='Pending'
           ? `<button class="btn ghost sm" data-pqpull="${esc(r.id)}" type="button">Withdraw</button>`
-          : '<span style="color:var(--ink3)">—</span>'}</td></tr>`).join('')
+          : (r.payStatus ? `<span class="pill ${r.payStatus==='Paid'?'good':(r.payStatus==='Initiated'?'warn':'mute')}">${esc(r.payStatus)}</span>`
+                         : '<span style="color:var(--ink3)">—</span>')}</td></tr>`).join('')
         :'<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>
     <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.</p>
   </section>`;
@@ -4330,7 +4338,7 @@ function vPayment(){
   return `${vDocPop()}${payBar()}
   <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
   <div class="payone">
-    <div>${form}${state.pqDone ? vPaymentSent() : ''}</div>
+    <div>${form}</div>
     <div>${minePanel}</div>
   </div>`;
 }

@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041150">
+<link rel="manifest" href="manifest.webmanifest?v=202609041208">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1346,10 +1346,32 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   /* A heading that breaks mid-word — BOO / KS — reads as damage. These three
      are one short word each and get the width to stay one. */
   .paytab th.c{font-size:9px;letter-spacing:.03em}
+  /* Every heading reads from the left, including the amount, which was the one
+     right-aligned one and looked like a mistake next to ten that were not.
+     Bottom-aligned so a heading that takes two lines still sits on the same
+     baseline as the ones that take one. */
+  .paytab th{text-align:left;vertical-align:bottom}
+  .paytab th.c{text-align:center}
+  .paytab th.r,.paytab td.r{text-align:left}
+
+  /* the amount leads, the currency follows, and the order number is short */
+  .amtfrow{grid-template-columns:minmax(0,0.72fr) minmax(0,1fr)}
+  .amtrow select{order:2;width:66px}
+  .amtrow input{order:1}
+
+  /* raised, said once and quietly: the row appearing beside it is the proof */
+  .pqok{border-left:3px solid var(--good);background:var(--goodBg);color:var(--ink);
+    border-radius:0 8px 8px 0;padding:9px 13px;font-size:12.5px;line-height:1.6;margin:-2px 0 4px}
+  .pqok b{font-weight:600}
+  .pqok .bad{color:var(--bad)}
   .paytab td,.paytab th{overflow-wrap:break-word;word-break:normal}
   .paytab td.cell{max-width:none}
   .paytab.recon table{font-size:12.5px}
   .paytab.recon td,.paytab.recon th{padding:8px 7px}
+  /* My requests sits in half a screen beside the form, so it takes the same
+     compact type as the reconciliation table rather than the roomy default. */
+  .payone .paytab table{font-size:12.5px}
+  .payone .paytab td,.payone .paytab th{padding:8px 7px}
   /* a control in a fixed column takes the column's width, not its own */
   .paytab select.acsel{width:100%;max-width:none;min-width:0}
   .paytab .doc{max-width:100%}
@@ -1595,8 +1617,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041150';</script>
-<script src="config.js?v=202609041150"></script>
-<script type="module" src="boot.js?v=202609041150"></script>
+<script>window.__BUILD = '202609041208';</script>
+<script src="config.js?v=202609041208"></script>
+<script type="module" src="boot.js?v=202609041208"></script>
 </body>
 </html>
