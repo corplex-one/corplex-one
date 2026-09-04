@@ -99,7 +99,7 @@ const state = {
   invFilter: {q:'Q2', status:'all', text:'', type:'all', sp:'all', pm:'all', role:'all'},
   invSort: {key:null, dir:1},
   payCompany: 'all',
-  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, reqForm: null, reqSent: false, onOfficeNet: true,
+  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null, reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
   lnForm: null, lnSent: false, exitWho: '', exitLwd: '', exitSettle: '', mailPick: 'weekly', mailWeek: null,
@@ -815,6 +815,170 @@ function celebsWithin(fromISO, days){
    balance as it stood on 31 Aug 2026, with every earlier accrual and every day taken
    already inside them, so the portal only adds what has happened since. */
 const OPENAT = () => (HR().leavePolicy || {}).openingAt || '2026-08-31';
+
+/* ---------- one way to change anything in the console ----------
+ *
+ * A table declares itself here: how to read a cell's value now, what to call
+ * that cell in the list of changes, how to print a value so a person can
+ * check it, and how to write the whole draft at once. Everything else — the
+ * Edit button, the draft, the count, the confirmation, the undo — is shared,
+ * which is the point: a safeguard that has to be remembered per screen is a
+ * safeguard that will be forgotten on one.
+ *
+ * A draft key is whatever the table wants; where a row has more than one
+ * editable cell the key carries which, as 's|Rana Amine' or 'Rana|passport'.
+ */
+const EDTABLES = {
+  carry: {
+    title: 'Carried-forward leave',
+    now:  k => { const b = (HR().balances||{})[k] || {}; return b.carriedSet ? String(b.carried) : ''; },
+    name: k => NM(k) + ' \u2014 carried forward',
+    fmt:  v => String(v).trim() === '' ? 'not recorded'
+             : (Math.round((+v || 0) * 100) / 100) + (Math.abs(+v) === 1 ? ' day' : ' days'),
+    /* Blank means "nothing recorded" and is not the same as nought, so the
+       two are only equal when both are blank; otherwise compare the numbers,
+       so 12 and 12.0 are one figure rather than a change. */
+    same: (a, b) => (String(a).trim() === '') === (String(b).trim() === '')
+            && (String(a).trim() === '' || (+a || 0) === (+b || 0)),
+    save: d => window.__db.setCarried(d, OPENAT())
+  },
+  shifts: {
+    title: 'Shifts and reporting lines',
+    now:  k => k[0] === 's' ? (shiftOf(k.slice(2)) || {}).id || '' : (mgrName(k.slice(2)) || ''),
+    name: k => NM(k.slice(2)) + (k[0] === 's' ? ' \u2014 shift' : ' \u2014 reports to'),
+    fmt:  (v, k) => k && k[0] === 'm'
+            ? (v ? NM(v) : 'nobody')
+            : (() => { const s = SHIFTS().find(x => x.id === v);
+                       return s ? s.label + ' \u00b7 ' + s.start + '\u2013' + s.end : 'none'; })(),
+    save: d => window.__db.saveShiftLines(d)
+  },
+  hols: {
+    title: 'Public holidays',
+    now:  k => { const h = (HR().holidays||[]).find(x => x.d === k.slice(2)) || {};
+                 return k[0] === 'd' ? (h.d || '') : k[0] === 'n' ? (h.n || '')
+                      : k[0] === 'k' ? (h.fixed ? '1' : '0') : ''; },
+    name: k => { const h = (HR().holidays||[]).find(x => x.d === k.slice(2)) || {};
+                 const who = h.n || k.slice(2);
+                 return who + (k[0] === 'd' ? ' \u2014 date' : k[0] === 'n' ? ' \u2014 name'
+                             : k[0] === 'k' ? ' \u2014 fixed or moving' : ''); },
+    fmt:  (v, k) => k && k[0] === 'x' ? 'removed from the calendar'
+            : k && k[0] === 'k' ? (v === '1' ? 'a fixed date' : 'moves with the moon')
+            : k && k[0] === 'd' ? (v ? dayLabel(v) + ' ' + String(v).slice(0,4) : '\u2014')
+            : String(v || '\u2014'),
+    save: d => window.__db.saveHolidays(d, HR().holidays || [])
+  },
+  docdates: {
+    title: 'Document expiry dates',
+    now:  k => { const i = k.lastIndexOf('|');
+                 return (((HR().docs||{})[k.slice(0,i)] || {})[k.slice(i+1)]) || ''; },
+    name: k => { const i = k.lastIndexOf('|'), t = DOCTYPES().find(x => x.k === k.slice(i+1));
+                 return NM(k.slice(0,i)) + ' \u2014 ' + ((t && t.label) || k.slice(i+1)); },
+    fmt:  v => v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file',
+    save: d => window.__db.saveDocDates(d)
+  },
+  payline: {
+    title: 'Payroll figures',
+    /* A key is '<line id>|<database field>'. The column list already pairs the
+       field with the name the screen uses for it and the words on the heading,
+       so the confirmation reads 'Rana Amine \u2014 Advance' rather than
+       'a1b2c3|advance'. */
+    now:  k => { const i = k.lastIndexOf('|'), id = k.slice(0,i), f = k.slice(i+1);
+                 const c = PAYCOLS.find(x => x.f === f) || {k:f};
+                 for(const run of (DATA.payroll.runs||[]))
+                   for(const r of run.rows) if(r.lineId === id) return String(+r[c.k] || 0);
+                 return '0'; },
+    name: k => { const i = k.lastIndexOf('|'), id = k.slice(0,i), f = k.slice(i+1);
+                 const c = PAYCOLS.find(x => x.f === f) || {label:f};
+                 let who = id;
+                 for(const run of (DATA.payroll.runs||[]))
+                   for(const r of run.rows) if(r.lineId === id) who = NM(r.portalName || r.name);
+                 return who + ' \u2014 ' + (c.label || f); },
+    fmt:  (v, k) => (k && k.slice(k.lastIndexOf('|') + 1) === 'days')
+            ? (+v || 0) + ((+v || 0) === 1 ? ' day' : ' days')
+            : money(+v || 0, 2),
+    // an empty box and a nought are the same figure
+    same: (a, b) => (+a || 0) === (+b || 0),
+    save: d => window.__db.savePayLines(d)
+  }
+};
+
+const EDITING = id => !!(state.edit && state.edit.table === id);
+const EDANY   = () => !!state.edit;
+const edNow   = (id, k) => { const t = EDTABLES[id]; return t ? t.now(k) : ''; };
+function edVal(id, k){
+  if(!EDITING(id)) return edNow(id, k);
+  return (k in state.edit.draft) ? state.edit.draft[k] : edNow(id, k);
+}
+/* A cell is only a change if it differs from what is there, and "differs" is
+   not always string equality. An empty money box and a nought are the same
+   figure: the box shows blank where the value is zero, so comparing the two
+   as text made every untouched cell on the payroll a change — three hundred
+   and sixty-eight of them, all reading 0.00 to 0.00. A table that says you
+   are about to change nothing, three hundred times, teaches you to press Yes
+   without reading, which is the exact habit this whole mechanism exists to
+   prevent. */
+function edSame(id, a, b){
+  const t = EDTABLES[id];
+  return t && t.same ? t.same(a, b) : String(a) === String(b);
+}
+function edSet(id, k, v){
+  if(!EDITING(id)) return;
+  if(edSame(id, v, edNow(id, k))) delete state.edit.draft[k];
+  else state.edit.draft[k] = v;
+}
+function edList(id){
+  if(!EDITING(id)) return [];
+  const t = EDTABLES[id];
+  return Object.keys(state.edit.draft).sort().map(k => ({
+    key: k, what: t.name(k),
+    was: t.fmt(edNow(id, k), k), now: t.fmt(state.edit.draft[k], k)}));
+}
+const edPhrase = n => n ? n + (n === 1 ? ' change not saved yet' : ' changes not saved yet')
+                        : 'nothing changed yet';
+/* The buttons that turn a table from something you read into something you
+   are changing. Only one table at a time, so an unsaved draft on one screen
+   cannot be forgotten while a second is being edited on another. */
+function edBar(id){
+  if(!EDTABLES[id]) return '';
+  if(!EDITING(id)) return `<button class="btn ghost edbtn" data-edon="${esc(id)}" type="button"${
+    EDANY() ? ' disabled title="Finish the other table first"' : ''}>Edit</button>`;
+  const n = edList(id).length;
+  return `<span class="edmsg${n ? ' on' : ''}">${edPhrase(n)}</span>
+    <button class="btn edbtn" data-edsave="${esc(id)}" type="button"${n ? '' : ' disabled'}>Save${n ? ' ' + n : ''}</button>
+    <button class="btn ghost edbtn" data-edoff="1" type="button">Cancel</button>`;
+}
+/* What you are about to do, in words, before it happens. This is the whole
+   point of the exercise: a wrong key press is caught here, where the old
+   value is printed beside the new one, and not a month later in a balance
+   nobody can explain. */
+function edConfirm(id){
+  if(!EDITING(id) || !state.edit.confirm) return '';
+  const rows = edList(id);
+  return `<div class="edconf">
+    <h4>About to change ${rows.length} ${rows.length === 1 ? 'thing' : 'things'}</h4>
+    <div class="tw"><table class="edtab">
+      <thead><tr><th>What</th><th>From</th><th>To</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${esc(r.what)}</td>
+        <td class="edwas">${esc(r.was)}</td><td class="ednow">${esc(r.now)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="edconfb">
+      <button class="btn" id="edGo" type="button"${state.edit.busy ? ' disabled' : ''}>${
+        state.edit.busy ? 'Saving\u2026' : 'Yes, save ' + (rows.length === 1 ? 'it' : 'them')}</button>
+      <button class="btn ghost" id="edBack" type="button"${state.edit.busy ? ' disabled' : ''}>Back</button>
+      <span>Nothing has been written yet. <b>Back</b> returns you to the table with your changes still on it.</span>
+    </div>
+  </div>`;
+}
+function edSaved(id){
+  const s = state.edSaved;
+  if(!s || s.table !== id) return '';
+  return `<div class="edok"><b>Saved.</b> ${s.n} ${s.n === 1 ? 'change' : 'changes'} written.</div>`;
+}
+/* A cell, in whichever of the two states the table is in. */
+function edCell(id, key, control, show){
+  return EDITING(id) ? control(edVal(id, key)) : show(edNow(id, key));
+}
+const edAttr = (id, key) => ` data-edt="${esc(id)}" data-edk="${esc(key)}"`;
 const dayIn = (y, m, d) => `${y}-${String(m).padStart(2,'0')}-${String(Math.min(d, new Date(y, m, 0).getDate())).padStart(2,'0')}`;
 // every credit date strictly after `after` and on or before `to`
 function accrualDates(j, after, to){
@@ -1779,20 +1943,29 @@ function vHRAdmin(){
 
   <div class="grid g2">
     <section class="panel">
-      <header><h3>Shifts and reporting lines</h3><span class="hint" style="margin-left:auto">both columns save as you change them</span></header>
+      <header><h3>Shifts and reporting lines</h3>
+        <span class="hint">${EDITING('shifts') ? 'change a shift or a reporting line' : 'who receives whose requests'}</span>
+        ${edBar('shifts')}</header>
+      ${edSaved('shifts')}${edConfirm('shifts')}
       ${byCompany(list, {
         who: n => n,
         cols: colsOf([30, 34, 36]),
         head: `<thead><tr><th>Employee</th><th>Shift</th><th>Reports to</th></tr></thead>`,
-        row: n => `<tr><td class="nw">${esc(n)}</td>
-          <td><select class="ff" data-shift="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
-            ${SHIFTS().map(s=>`<option value="${esc(s.id)}"${shiftOf(n).id===s.id?' selected':''}>${esc(s.label)} &middot; ${esc(s.start)}&ndash;${esc(s.end)}</option>`).join('')}
-          </select></td>
-          <td>${mgrName(n) ? '' : '<span class="pill warn" style="margin-right:6px"><span class="dt"></span>nobody yet</span>'}
-            <select class="ff" data-mgr="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
-            <option value="">Nobody &mdash; requests have nowhere to go</option>
-            ${USERS.map(x=>x.name).filter(m=>m!==n).map(m=>`<option value="${esc(m)}"${mgrName(n)===m?' selected':''}>${esc(m)}</option>`).join('')}
-          </select></td></tr>`,
+        row: n => `<tr><td class="nw">${nm(n)}</td>
+          <td>${edCell('shifts', 's|' + n,
+            v => `<select class="ff"${edAttr('shifts', 's|' + n)} style="padding:3px 8px;font-size:12.5px">
+              ${SHIFTS().map(s=>`<option value="${esc(s.id)}"${v===s.id?' selected':''}>${esc(s.label)} &middot; ${esc(s.start)}&ndash;${esc(s.end)}</option>`).join('')}
+            </select>`,
+            v => { const s = SHIFTS().find(x=>x.id===v);
+                   return s ? `<span class="edread">${esc(s.label)} &middot; ${esc(s.start)}&ndash;${esc(s.end)}</span>`
+                            : '<span class="edread none">none set</span>'; })}</td>
+          <td>${edCell('shifts', 'm|' + n,
+            v => `<select class="ff"${edAttr('shifts', 'm|' + n)} style="padding:3px 8px;font-size:12.5px">
+              <option value="">Nobody &mdash; requests have nowhere to go</option>
+              ${USERS.map(x=>x.name).filter(m=>m!==n).map(m=>`<option value="${esc(m)}"${v===m?' selected':''}>${esc(NM(m))}</option>`).join('')}
+            </select>`,
+            v => v ? `<span class="edread">${nm(v)}</span>`
+                   : '<span class="pill warn"><span class="dt"></span>nobody yet</span>')}</td></tr>`,
         empty: 'Nobody on the shift list yet.'
       })}
       <p class="cap">Three shifts: ${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus ${HR().hours.grace} minutes.
@@ -1810,7 +1983,9 @@ function vHRAdmin(){
   <section class="panel">
     <header><h3>Annual leave balances</h3>
       <span class="pill mute">${HR().leavePolicy.annualDays} working days &middot; ${HR().leavePolicy.accrualPerMonth} a month</span>
-      <span class="hint">set what each person carried forward</span></header>
+      <span class="hint">${EDITING('carry') ? 'change what each person carried forward' : 'what each person carried forward'}</span>
+      ${edBar('carry')}</header>
+    ${edSaved('carry')}${edConfirm('carry')}
     ${byCompany(list.filter(n=>!noLeave(n)), {
       who: n => n,
       cols: colsOf([19, 11, 20, 11, 10, 10, 9.5, 9.5]),
@@ -1821,8 +1996,9 @@ function vHRAdmin(){
         <td>${esc(n)}</td>
         <td class="n nw">${esc(B.doj)||'<span style="color:var(--ink3)">not on file</span>'}</td>
         <td class="nw"${full(B.yearNo?`Year ${B.yearNo}, to ${dayLabel(B.yearEnd)} ${B.yearEnd.slice(0,4)}`:'')}>${B.yearNo?`Year ${B.yearNo}, to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}`:'<span style="color:var(--ink3)">needs a joining date</span>'}</td>
-        <td class="r"><input class="ff cfin" type="number" step="0.01"
-          data-carry="${esc(n)}" value="${B.carriedSet?B.carried:''}" placeholder="—"></td>
+        <td class="n r">${edCell('carry', n,
+          v => `<input class="ff cfin" type="number" step="0.01"${edAttr('carry', n)} value="${esc(String(v))}" placeholder="\u2014">`,
+          v => String(v) === '' ? '<span class="edread none">\u2014</span>' : '<span class="edread">' + money(+v, 2) + '</span>')}</td>
         <td class="n r">${B.noDoj?'—':B.accrued}</td><td class="n r">${B.taken||'—'}</td>
         <td class="n r netcol"${B.left<0?' style="color:var(--bad)"':''}>${B.noDoj?'—':B.left}</td>
         <td class="n r">${B.pendDays||'—'}</td></tr>`; },
@@ -1889,28 +2065,34 @@ function vHRAdmin(){
   <section class="panel">
     <header><h3>Public holidays ${String(HDATE()).slice(0,4)}</h3>
       <span class="pill mute">${(HR().holidays||[]).length} days</span>
-      <span class="hint" style="margin-left:auto">${canUpload(state.user)
-        ? 'change a date and it saves' : 'accounts keeps these'}</span></header>
+      <span class="hint">${canUpload(state.user)
+        ? 'the dates that move need confirming each year' : 'accounts keeps these'}</span>
+      ${canUpload(state.user) ? edBar('hols') : ''}</header>
+    ${edSaved('hols')}${edConfirm('hols')}
     <div class="tw"><table class="cotab">
       ${colsOf([16, 11, 34, 21, 12])}
       <thead><tr><th>Date</th><th>Day</th><th>Holiday</th><th>Kind</th><th></th></tr></thead>
-      <tbody>${(HR().holidays||[]).map(h=>`<tr${h.d<HDATE()?' style="color:var(--ink3)"':''}>
-        <td>${canUpload(state.user)
-          ? `<input class="ff" type="date" data-holdate="${esc(h.d)}" value="${esc(h.d)}">`
-          : esc(dayLabel(h.d)) + ' ' + h.d.slice(0,4)}</td>
+      <tbody>${(HR().holidays||[]).map(h=>{
+        const gone = EDITING('hols') && state.edit.draft['x|' + h.d] === 'x';
+        return `<tr${gone ? ' class="edgone"' : (h.d<HDATE()?' style="color:var(--ink3)"':'')}>
+        <td>${edCell('hols', 'd|' + h.d,
+          v => `<input class="ff" type="date"${edAttr('hols', 'd|' + h.d)} value="${esc(v)}">`,
+          v => '<span class="edread">' + esc(dayLabel(v || h.d)) + ' ' + String(v || h.d).slice(0,4) + '</span>')}</td>
         <td class="nw">${esc(dayName(h.d))}</td>
-        <td>${canUpload(state.user)
-          ? `<input class="ff" data-holname="${esc(h.d)}" value="${esc(h.n)}">`
-          : esc(h.n)}</td>
-        <td>${canUpload(state.user)
-          ? `<select class="ff" data-holfixed="${esc(h.d)}">
-              <option value="1"${h.fixed?' selected':''}>Fixed date</option>
-              <option value="0"${h.fixed?'':' selected'}>Moves with the moon</option>
-            </select>`
-          : (h.fixed?'<span class="pill good"><span class="dt"></span>Fixed date</span>'
-                    :'<span class="pill warn"><span class="dt"></span>Moves with the moon</span>')}</td>
-        <td class="r">${canUpload(state.user)
-          ? `<button class="btn ghost sm" data-holdrop="${esc(h.d)}" type="button">Remove</button>` : ''}</td></tr>`).join('')}
+        <td>${edCell('hols', 'n|' + h.d,
+          v => `<input class="ff"${edAttr('hols', 'n|' + h.d)} value="${esc(v)}">`,
+          v => '<span class="edread">' + esc(v) + '</span>')}</td>
+        <td>${edCell('hols', 'k|' + h.d,
+          v => `<select class="ff"${edAttr('hols', 'k|' + h.d)}>
+              <option value="1"${v==='1'?' selected':''}>Fixed date</option>
+              <option value="0"${v==='1'?'':' selected'}>Moves with the moon</option>
+            </select>`,
+          v => v==='1' ? '<span class="pill good"><span class="dt"></span>Fixed date</span>'
+                       : '<span class="pill warn"><span class="dt"></span>Moves with the moon</span>')}</td>
+        <td class="r">${EDITING('hols')
+          ? `<button class="btn ghost sm" data-edt="hols" data-edrm="x|${esc(h.d)}" type="button">${
+              gone ? 'Keep it' : 'Remove'}</button>`
+          : ''}</td></tr>`;}).join('')}
       </tbody></table></div>
     ${canUpload(state.user) ? `<div class="pad" style="padding-top:14px">
       <div class="grid g3" style="gap:12px;align-items:end">
@@ -2083,14 +2265,19 @@ function vDocsEdit(){
     const v = ((HR().docs||{})[n]||{})[k] || '';
     const d = v ? dTo(v) : null;
     const col = d===null ? '' : d<0 ? 'var(--bad)' : d<=60 ? 'var(--warn)' : '';
-    return `<td class="r"><input class="ff dt" type="date" data-dexp="${esc(n)}" data-k="${esc(k)}" value="${esc(v)}"${col?` style="border-color:${col};color:${col}"`:''}></td>`;
+    return `<td class="r">${edCell('docdates', n + '|' + k,
+      x => `<input class="ff dt" type="date"${edAttr('docdates', n + '|' + k)} value="${esc(x)}"${col?` style="border-color:${col};color:${col}"`:''}>`,
+      x => x ? `<span class="edread"${col?` style="color:${col}"`:''}>${esc(dayLabel(x))} ${esc(String(x).slice(0,4))}</span>`
+             : '<span class="edread none">\u2014</span>')}</td>`;
   };
   return `
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>Fill in document dates</h3>
       <span class="pill ${left?'warn':'good'}"><span class="dt"></span>${left} still blank</span>
       <input id="docQ" placeholder="Find a name" value="${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+      ${edBar('docdates')}
     </header>
+    ${edSaved('docdates')}${edConfirm('docdates')}
     ${byCompany(rows, {
       who: n => n, cls: 'invtable',
       cols: colsOf([25, 23].concat(types.map(() => 52 / types.length))),
@@ -7620,7 +7807,7 @@ function render(){
   document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
     const first = secTabs(b.dataset.csec)[0];
     if(first){ state.tab = first.id; state.slipOpen = null; render(); } });
-  document.querySelectorAll('[data-dexp]').forEach(el=>el.onchange=()=>{
+  document.querySelectorAll('[data-dexp-gone]').forEach(el=>el.onchange=()=>{
     const n = el.dataset.dexp, k = el.dataset.k;
     const D = HR().docs || (HR().docs = {});
     const rec = D[n] || (D[n] = {});
@@ -7654,29 +7841,6 @@ function render(){
   document.querySelectorAll('#peopleSeg button').forEach(b=>b.onclick=()=>{ state.peopleTab=b.dataset.pt; state.who=null; render(); });
   document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });
   document.querySelectorAll('#calcSeg button').forEach(b=>b.onclick=()=>{ state.calcTab=b.dataset.ct; render(); });
-  document.querySelectorAll('[data-holdate]').forEach(el=>el.onchange=async()=>{
-    const was = el.dataset.holdate;
-    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value) return;
-    await window.__db.editHoliday(was, {on_date: el.value, name: h.n, fixed: h.fixed});
-    render();
-  });
-  document.querySelectorAll('[data-holname]').forEach(el=>el.onchange=async()=>{
-    const was = el.dataset.holname;
-    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value.trim()) return;
-    await window.__db.editHoliday(was, {on_date: was, name: el.value.trim(), fixed: h.fixed});
-    render();
-  });
-  document.querySelectorAll('[data-holfixed]').forEach(el=>el.onchange=async()=>{
-    const was = el.dataset.holfixed;
-    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h) return;
-    await window.__db.editHoliday(was, {on_date: was, name: h.n, fixed: el.value === '1'});
-    render();
-  });
-  document.querySelectorAll('[data-holdrop]').forEach(b=>b.onclick=async()=>{
-    b.disabled = true;
-    await window.__db.removeHoliday(b.dataset.holdrop);
-    render();
-  });
   {
     const d = document.getElementById('holNewD'), n = document.getElementById('holNewN'),
           go = document.getElementById('holAdd');
@@ -8017,6 +8181,60 @@ function render(){
     const x=HR().loans.find(y=>y.id===b.dataset.lnOk); if(x){x.status='Approved'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Approved');} render(); });
   document.querySelectorAll('[data-ln-no]').forEach(b=>b.onclick=()=>{
     const x=HR().loans.find(y=>y.id===b.dataset.lnNo); if(x){x.status='Declined'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Declined');} render(); });
+  document.querySelectorAll('[data-edon]').forEach(b=>b.onclick=()=>{
+    state.edit = {table:b.dataset.edon, draft:{}, confirm:false, busy:false};
+    state.edSaved = null; render(); });
+  document.querySelectorAll('[data-edoff]').forEach(b=>b.onclick=()=>{
+    state.edit = null; render(); });
+  document.querySelectorAll('[data-edsave]').forEach(b=>b.onclick=()=>{
+    if(!EDITING(b.dataset.edsave) || !edList(b.dataset.edsave).length) return;
+    state.edit.confirm = true; render(); });
+  {
+    const back=document.getElementById('edBack');
+    if(back) back.onclick=()=>{ state.edit.confirm=false; render(); };
+    const go=document.getElementById('edGo');
+    if(go) go.onclick=async ()=>{
+      const id = state.edit.table, draft = Object.assign({}, state.edit.draft);
+      const n = Object.keys(draft).length;
+      state.edit.busy = true; render();
+      const ok = await EDTABLES[id].save(draft);
+      if(ok){ state.edit = null; state.edSaved = {table:id, n}; }
+      else if(state.edit){ state.edit.busy = false; state.edit.confirm = false; }
+      render();
+    };
+  }
+  /* Typing does not redraw the table: on thirty rows that loses the cursor
+     and the scroll. The draft is updated, the cell is marked, and the count
+     in the header is corrected in place. */
+  const edCount = id => {
+    const n = edList(id).length;
+    document.querySelectorAll('.edmsg').forEach(s=>{
+      s.textContent = edPhrase(n); s.classList.toggle('on', !!n); });
+    document.querySelectorAll('[data-edsave]').forEach(b=>{
+      b.disabled = !n; b.textContent = 'Save' + (n ? ' ' + n : ''); });
+  };
+  document.querySelectorAll('[data-edk]').forEach(el=>{
+    const id = el.dataset.edt, key = el.dataset.edk;
+    const upd = ()=>{
+      edSet(id, key, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value);
+      el.classList.toggle('edchanged', key in ((state.edit||{}).draft||{}));
+      const row = el.closest('tr'); if(row) row.classList.toggle('edrow', key in ((state.edit||{}).draft||{}));
+      edCount(id);
+    };
+    el.oninput = upd; el.onchange = upd;
+    /* Paint what the draft already holds, but do not run the updater: binding
+       is not typing, and treating it as typing is what put every untouched
+       cell into the change list. */
+    const on = key in ((state.edit||{}).draft||{});
+    el.classList.toggle('edchanged', on);
+    const row0 = el.closest('tr'); if(row0) row0.classList.toggle('edrow', on);
+  });
+  document.querySelectorAll('[data-edrm]').forEach(b=>b.onclick=()=>{
+    const id = b.dataset.edt, key = b.dataset.edrm;
+    if(!EDITING(id)) return;
+    if(key in state.edit.draft) delete state.edit.draft[key];
+    else state.edit.draft[key] = 'x';
+    render(); });
   const mvw=document.getElementById('mvWho'); if(mvw) mvw.onchange=()=>{
     state.mvWho=mvw.value; state.mvDept=null; state.mvDone=''; render(); };
   const mvd=document.getElementById('mvDept'); if(mvd) mvd.oninput=()=>{
@@ -8051,27 +8269,6 @@ function render(){
     HR().announcements.unshift(ANN);
     window.__db.postAnnouncement(ANN);
     state.annNew=false; state.annT=''; state.annB=''; render(); };
-  document.querySelectorAll('[data-carry]').forEach(el=>el.onchange=()=>{
-    const b = HR().balances[el.dataset.carry] || (HR().balances[el.dataset.carry]={carried:0,carriedSet:false,doj:''});
-    if(el.value===''){ b.carried=0; b.carriedSet=false; }
-    else { b.carried = Math.round((+el.value || 0) * 100) / 100; b.carriedSet = true; }
-    render(); });
-  document.querySelectorAll('[data-shift]').forEach(s=>s.onchange=async ()=>{
-    const who = s.dataset.shift, was = HR().assign[who];
-    HR().assign[who] = s.value; render();
-    const ok = await window.__db.setShift(who, s.value);
-    if(!ok){ HR().assign[who] = was; render(); }
-  });
-  document.querySelectorAll('[data-mgr]').forEach(s=>s.onchange=async ()=>{
-    const who = s.dataset.mgr, was = HR().managers[who];
-    const wasReq = HR().requests.filter(r=>r.who===who && r.status==='Pending').map(r=>[r, r.mgr]);
-    HR().managers[who] = s.value;
-    // a request already waiting goes to whoever the line now points at
-    wasReq.forEach(([r]) => { r.mgr = s.value; });
-    render();
-    const ok = await window.__db.setManager(who, s.value);
-    if(!ok){ HR().managers[who] = was; wasReq.forEach(([r, m]) => { r.mgr = m; }); render(); }
-  });
   const cb=document.getElementById('conBack'); if(cb) cb.onclick=()=>{ state.mode='staff'; state.tab='home'; render(); };
   document.querySelectorAll('#view [data-go]').forEach(b=>b.onclick=()=>{
     if(b.dataset.mode==='console'){ state.mode='console'; } else if(!(TABS.find(t=>t.id===b.dataset.go)||{}).con){ state.mode='staff'; }
@@ -8369,18 +8566,6 @@ function render(){
     document.querySelectorAll('.payin').forEach(el => {
       el.onfocus = () => el.select();
       el.onkeydown = ev => { if(ev.key === 'Enter') el.blur(); };
-      el.onchange = async () => {
-        const was = el.defaultValue;
-        el.disabled = true;
-        const said = await window.__db.setLine(el.dataset.line, el.dataset.field, el.value || 0);
-        el.disabled = false;
-        if(!said){ el.value = was; return; }
-        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.lineId===el.dataset.line));
-        const row = run && run.rows.find(x=>x.lineId===el.dataset.line);
-        if(row){ row[el.dataset.k] = +el.value || 0;
-                 row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
-        const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
-      };
     });
     document.querySelectorAll('.attday').forEach(b => b.onclick = async () => {
       b.disabled = true;
@@ -8913,10 +9098,11 @@ function vPayrollDraft(run){
   const cell = (r, c) => {
     const v = +r[c.k] || 0;
     if(!prep) return `<td class="n r${c.rule?' rule':''}">${v?money(v,2):'\u2014'}</td>`;
-    return `<td class="n r payc${c.rule?' rule':''}"><input class="payin${v?' has':''}" type="number" step="0.01" min="0"
-      value="${v||''}" placeholder="\u2014"
-      data-line="${esc(r.lineId)}" data-field="${c.f}" data-k="${c.k}"
-      aria-label="${esc(c.label)} for ${esc(r.portalName)}">${
+    return `<td class="n r payc${c.rule?' rule':''}">${edCell('payline', r.lineId + '|' + c.f,
+      x => `<input class="payin${(+x)?' has':''}" type="number" step="0.01" min="0"
+        value="${(+x)||''}" placeholder="\u2014"${edAttr('payline', r.lineId + '|' + c.f)}
+        aria-label="${esc(c.label)} for ${esc(r.portalName)}">`,
+      x => (+x) ? '<span class="edread">' + money(+x, 2) + '</span>' : '<span class="edread none">\u2014</span>')}${
       // On the days column, what check-in made of the month sits under the
       // box. A missed tap is not an absence — that is what regularization is
       // for — so it is a second opinion to accept or ignore, never the figure
@@ -8957,14 +9143,19 @@ function vPayrollDraft(run){
     <header><h3>${esc(run.label)}</h3>
       <span class="pill warn"><span class="dt"></span>Draft</span>
       ${runSeg()}
-      ${prep?`<button class="btn ghost" id="payGen" type="button" style="margin-left:auto;padding:5px 13px;font-size:12.5px">Refresh from the records</button>`:''}
+      ${prep?`<button class="btn ghost" id="payGen" type="button" style="margin-left:auto;padding:5px 13px;font-size:12.5px"${
+        EDANY()?' disabled':''}>Refresh from the records</button>`:''}
+      ${prep ? edBar('payline') : ''}
     </header>
+    ${edSaved('payline')}${edConfirm('payline')}
     <div class="pad">
       <p style="margin:0;color:var(--ink2);font-size:14.5px;max-width:88ch">
         The salary, the days and the air ticket come from the records and refresh
         whenever you press the button above &mdash; after a joiner, a revision letter, or a
         correction. Everything else is yours to type, and refreshing never touches it.
-        Each figure saves as you leave the box.</p>
+        ${EDITING('payline')
+          ? 'You are editing. Nothing you type here reaches the payroll until you press Save and agree to the list of changes.'
+          : 'Press <b>Edit</b> to change a figure. Nothing is written until you have seen the list of what will change and agreed to it.'}</p>
       ${noSalary.length?`<p class="note" style="margin-top:14px"><b>${noSalary.length}
         ${noSalary.length===1?'person has':'people have'} nothing on their line yet</b> &mdash;
         ${esc(noSalary.map(r=>nm(r.portalName)).join(', '))}. Commission-only staff are

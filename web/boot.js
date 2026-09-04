@@ -1034,6 +1034,129 @@ window.__db = {
     }catch(e){ oops(e, 'That reporting line'); await reload(); return null; }
   },
 
+  /* Saving a whole table at once, having been shown what will change.
+   *
+   * Avin: 'I am finding this risky... Imagine leave balance increased by a
+   * wrong key press.' Every editable table in the console used to write on
+   * the spot — focus a box, brush a key, and the number was in the database
+   * before you had looked at it, with no moment in between when the change
+   * existed only on screen and could be thrown away.
+   *
+   * These take the whole draft at once, so what is written is exactly the
+   * list the person was shown and agreed to. Each returns true only if every
+   * row went in; a failure part-way leaves the rest unwritten and reloads, so
+   * the screen shows what the database actually holds rather than what was
+   * hoped for.
+   */
+  async saveAll(what, jobs){
+    try{
+      for(const job of jobs){ const {error} = await job(); if(error) throw error; }
+      await reload();
+      return true;
+    }catch(e){ oops(e, what); await reload(); return null; }
+  },
+
+  // {name: '' | '12.5'} — '' means nothing carried forward is recorded
+  async setCarried(map, asAt){
+    const day = asAt || '2026-08-31';
+    const jobs = [];
+    for(const [who, v] of Object.entries(map)){
+      const id = this.empId(who);
+      if(!id){ oops(new Error(who + ' is not in the staff list'), 'Carried-forward leave'); return null; }
+      const set = String(v).trim() !== '';
+      jobs.push(() => sb.from('leave_opening').upsert(
+        {employee_id: id, as_at: day, carried: set ? Number(v) || 0 : 0, carried_set: set},
+        {onConflict: 'employee_id'}));
+    }
+    return this.saveAll('Carried-forward leave', jobs);
+  },
+
+  /* The shift and the reporting line arrive together, because they are two
+   * columns of one table. A key is 's|Name' or 'm|Name'. */
+  async saveShiftLines(map){
+    const jobs = [];
+    for(const [k, v] of Object.entries(map)){
+      const who = k.slice(2), id = this.empId(who);
+      if(!id){ oops(new Error(who + ' is not in the staff list'), 'That table'); return null; }
+      if(k[0] === 's'){
+        jobs.push(() => sb.from('employees').update({shift_id: v || null}).eq('id', id));
+      } else {
+        const mgr = v ? this.empId(v) : null;
+        if(v && !mgr){ oops(new Error(v + ' is not in the staff list'), 'That table'); return null; }
+        if(mgr === id){ oops(new Error('Nobody can report to themselves'), 'That table'); return null; }
+        let up = mgr, hops = 0;
+        while(up && hops++ < 100){
+          if(up === id){
+            oops(new Error(v + ' already reports to ' + who + ', directly or through somebody else'), 'That table');
+            return null;
+          }
+          up = (DB.employees.find(e => e.id === up) || {}).manager_id || null;
+        }
+        jobs.push(() => sb.from('employees').update({manager_id: mgr}).eq('id', id));
+      }
+    }
+    return this.saveAll('That table', jobs);
+  },
+
+  /* Holidays. A key is 'd|<date>', 'n|<date>', 'k|<date>' or 'x|<date>' for a
+   * removal. The date is the primary key, so changing one is a delete and an
+   * insert — which is also the honest description of moving a holiday. */
+  async saveHolidays(map, now){
+    const by = {};
+    for(const [k, v] of Object.entries(map)){
+      const d = k.slice(2);
+      (by[d] = by[d] || {})[k[0]] = v;
+    }
+    const jobs = [];
+    for(const [d, ch] of Object.entries(by)){
+      const was = (now || []).find(h => h.d === d);
+      if(!was){ oops(new Error('That holiday is no longer there'), 'Public holidays'); return null; }
+      if('x' in ch){ jobs.push(() => sb.from('holidays').delete().eq('on_date', d)); continue; }
+      const to = {on_date: 'd' in ch ? ch.d : d,
+                  name:    'n' in ch ? String(ch.n).trim() : was.n,
+                  fixed:   'k' in ch ? ch.k === '1' : !!was.fixed};
+      if(to.on_date !== d){
+        jobs.push(() => sb.from('holidays').delete().eq('on_date', d));
+        jobs.push(() => sb.from('holidays').insert(to));
+      } else {
+        jobs.push(() => sb.from('holidays').update({name: to.name, fixed: to.fixed}).eq('on_date', d));
+      }
+    }
+    return this.saveAll('Public holidays', jobs);
+  },
+
+  // {'Name|kind': '2027-01-31' | ''}
+  async saveDocDates(map){
+    const jobs = [];
+    for(const [k, v] of Object.entries(map)){
+      const i = k.lastIndexOf('|'), who = k.slice(0, i), kind = k.slice(i + 1);
+      const id = this.empId(who);
+      if(!id){ oops(new Error(who + ' is not in the staff list'), 'Document dates'); return null; }
+      jobs.push(() => v
+        ? sb.from('document_dates').upsert(
+            {employee_id: id, kind, expires_on: v, updated_at: new Date().toISOString()},
+            {onConflict: 'employee_id,kind'})
+        : sb.from('document_dates').delete().eq('employee_id', id).eq('kind', kind));
+    }
+    return this.saveAll('Document dates', jobs);
+  },
+
+  /* The payroll figures. Each one goes through set_payroll_line, which is
+   * what recalculates the gross and the net in the database rather than here,
+   * so the arithmetic is the same whether one figure moved or ten. */
+  async savePayLines(map){
+    try{
+      for(const [k, v] of Object.entries(map)){
+        const i = k.lastIndexOf('|'), line = k.slice(0, i), field = k.slice(i + 1);
+        const {error} = await sb.rpc('set_payroll_line',
+          {p_line: line, p_field: field, p_value: Number(v) || 0});
+        if(error) throw error;
+      }
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Those figures'); await reload(); return null; }
+  },
+
   /* Which department somebody is in.
    *
    * Avin, on the sales staff list: 'Not really completed. Tomorrow if someone
