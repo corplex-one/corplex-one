@@ -99,7 +99,7 @@ const state = {
   invFilter: {q:'Q2', status:'all', text:'', type:'all', sp:'all', pm:'all', role:'all'},
   invSort: {key:null, dir:1},
   payCompany: 'all',
-  deptView: null, company: null, attMonth: null, reqForm: null, reqSent: false, onOfficeNet: true,
+  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
   lnForm: null, lnSent: false, exitWho: '', exitLwd: '', exitSettle: '', mailPick: 'weekly', mailWeek: null,
@@ -431,6 +431,17 @@ const SALESTABS = ['dashboard','commission','invoices','team','leaderboard','com
 const coOf = n => companyOf(n).key;
 // the company a tab should answer to: the one an admin is looking at, else their own
 const coInView = u => (canAdmin(u) && state.company) ? state.company : companyOf(u).key;
+/* Does the company being looked at sell through the portal? Only one with its
+   own sales figures does. The others have no bands, no referral rates and no
+   consultants, and showing them CorpLex's would be presenting one company's
+   commercial arrangements as another's. */
+const salesHere = () => !!(DATA.companies[coInView(state.user)] || {}).sales;
+const coNameInView = () => (DATA.companies[coInView(state.user)] || {}).name || 'This company';
+const noSalesHere = what => `<div class="pad"><p class="note" style="margin:0">
+  <b>${esc(coNameInView())} has no ${esc(what)} in the portal.</b>
+  ${esc((DATA.companies.corplex || {}).name || 'CorpLex')}'s are deliberately not shown here, because
+  they are not ${esc(coNameInView())}'s. Change the company at the top of the screen to see them, or
+  send me ${esc(coNameInView())}'s and this page fills in.</p></div>`;
 function inCoScope(n, u){
   if(canAdmin(u)) return coOf(n) === activeCo().key;
   return coOf(n) === coOf(u);
@@ -1727,13 +1738,6 @@ function vHRAdmin(){
   });
   const flags = rows.filter(r=>r.diff!==null && r.diff!==0);
   const pend = HR().requests.filter(r=>r.status==='Pending');
-  const exc = [];
-  list.forEach(n=>monthDays(ym).filter(d=>d<=HDATE()).forEach(ds=>{
-    const s = dayStatus(n, ds);
-    if(s.k==='Absent') exc.push({n, ds, why:'No check-in and no approved leave'});
-    const a = attOf(n, ds);
-    if(a && a.segs.some(g=>!g.out) && ds<HDATE()) exc.push({n, ds, why:'Checked in but never checked out'});
-  }));
 
   return `
   <div class="strip">
@@ -1741,8 +1745,6 @@ function vHRAdmin(){
       <span class="n">of ${list.length} people</span></div>
     <div class="stat"><span class="k">Requests waiting</span><span class="v" style="color:var(--${pend.length?'warn':'good'})">${pend.length}</span>
       <span class="n">with their managers, not with you</span></div>
-    <div class="stat"><span class="k">Exceptions this month</span><span class="v" style="color:var(--${exc.length?'bad':'good'})">${exc.length}</span>
-      <span class="n">missing check-outs and unexplained days</span></div>
     <div class="stat"><span class="k">Payroll differences</span><span class="v" style="color:var(--${flags.length?'warn':'good'})">${flags.length}</span>
       <span class="n">calculated days vs the file you uploaded</span></div>
   </div>
@@ -1777,21 +1779,7 @@ function vHRAdmin(){
 
   <div class="grid g2">
     <section class="panel">
-      <header><h3>Exceptions</h3><span class="hint">worth a word with the person</span></header>
-      ${byCompany(exc.slice(0, 24), {
-        who: x => x.n,
-        cols: colsOf([26, 16, 58]),
-        head: `<thead><tr><th>Employee</th><th>Date</th><th>What happened</th></tr></thead>`,
-        row: x => `<tr><td>${nm(x.n)}</td>
-          <td class="n nw">${esc(dayLabel(x.ds))}</td>
-          <td style="color:var(--ink2)"${full(x.why)}>${esc(x.why)}</td></tr>`,
-        empty: 'Nothing out of place this month.'
-      })}
-      ${exc.length>24?`<p class="cap">and ${exc.length-24} more</p>`:''}
-    </section>
-
-    <section class="panel">
-      <header><h3>Shifts and reporting lines</h3><span class="hint">confirm these</span></header>
+      <header><h3>Shifts and reporting lines</h3><span class="hint" style="margin-left:auto">both columns save as you change them</span></header>
       ${byCompany(list, {
         who: n => n,
         cols: colsOf([30, 34, 36]),
@@ -1803,14 +1791,19 @@ function vHRAdmin(){
           <td>${mgrName(n) ? '' : '<span class="pill warn" style="margin-right:6px"><span class="dt"></span>nobody yet</span>'}
             <select class="ff" data-mgr="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
             <option value="">Nobody &mdash; requests have nowhere to go</option>
-            ${list.filter(m=>m!==n).map(m=>`<option value="${esc(m)}"${mgrName(n)===m?' selected':''}>${esc(m)}</option>`).join('')}
+            ${USERS.map(x=>x.name).filter(m=>m!==n).map(m=>`<option value="${esc(m)}"${mgrName(n)===m?' selected':''}>${esc(m)}</option>`).join('')}
           </select></td></tr>`,
         empty: 'Nobody on the shift list yet.'
       })}
       <p class="cap">Three shifts: ${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus ${HR().hours.grace} minutes.
-        <b>A shift needs no approval</b> &mdash; set it and it applies. The second column is the reporting line, which is a
-        different thing: it is who receives that person's leave and work-from-home requests. I have assumed consultants
-        report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the requests follow it.</p>
+        <b>Both columns save the moment you change them</b> \u2014 there is no button, and nothing here needs approving.
+        The second column is the reporting line: it is who receives that person's leave and work-from-home requests, and
+        anything already waiting moves with it. Nobody can be set to report to themselves, or into a circle.${
+        (() => { /* Somebody with no line above them and people below is the top of the
+                    tree and is meant to be blank; anybody else with a blank line has
+                    requests going nowhere. */
+          const none = list.filter(n => !mgrName(n) && reportsTo(n).length === 0);
+          return none.length ? ` <b style="color:var(--warn)">${none.length} ${none.length === 1 ? 'person has' : 'people have'} nobody to send requests to</b> \u2014 ${esc(none.map(n => NM(n)).join(', '))}.` : ''; })()}</p>
     </section>
   </div>
 
@@ -6950,12 +6943,15 @@ function vAdmin(){
     </section>
 
     <section class="panel">
-      <header><h3>Commission rules</h3><span class="hint">edit once, everyone recalculates</span></header>
+      <header><h3>Commission rules</h3>
+        <span class="pill mute">${esc(coNameInView())}</span>
+        <span class="hint" style="margin-left:auto">edit once, everyone recalculates</span></header>
+      ${!salesHere() ? noSalesHere('commission rules') : `
       <div class="tw"><table>
         <thead><tr><th>Band</th><th class="r">Eligible net sales</th><th class="r">New</th><th class="r">Existing</th><th class="r">PM shared</th></tr></thead>
         <tbody>${DATA.bands.map(b=>`<tr><td>Band ${b[0]}</td><td class="n r">${money(b[1])} – ${b[2]>1e8?'above':money(b[2])}</td><td class="n r">${pct(b[3],0)}</td><td class="n r">${pct(b[4],0)}</td><td class="n r">${pct(b[5],0)}</td></tr>`).join('')}</tbody>
       </table></div>
-      <p class="cap">Special arrangements: <b>Avin Mascarenhas</b> — flat 20%, no target. <b>Accounting &amp; Tax</b> earns no commission, so Janine and Shamsiddin see their own sales and their department in full, and nothing from Corporate &amp; Legal.</p>
+      <p class="cap">Special arrangements: <b>Avin Mascarenhas</b> — flat 20%, no target. <b>Accounting &amp; Tax</b> earns no commission, so Janine and Shamsiddin see their own sales and their department in full, and nothing from Corporate &amp; Legal.</p>`}
     </section>
   </div>
 
@@ -6974,22 +6970,69 @@ function vAdmin(){
           return `<tr${fmr?' style="color:var(--ink3)"':''}><td>${esc(n)}${mg?' <span class="pill" style="background:var(--accentSoft);color:var(--accent2)">Override '+pct(mg.rate,0)+'</span>':''}</td><td>${esc(ROLELABEL[roleOf(n)])}</td><td>${fmr?'<span class="pill mute">Deactivated</span>':(isFlat(e)?'<span class="pill mute">Flat 20%</span>':'<span class="pill good"><span class="dt"></span>Banded</span>')}</td><td class="n r">${money(e.netTot||0)}</td></tr>`}).join('')}</tbody>
       </table></div>
       <p class="cap">Somebody appears here when their department is one that earns revenue for their
-        company &mdash; ${Object.entries(HR().revDept||{}).map(([k,v])=>
+        company \u2014 use the panel below to move somebody in or out \u2014 ${Object.entries(HR().revDept||{}).map(([k,v])=>
           esc((DATA.companies[k]||{}).name || k) + ': ' + v.map(esc).join(', ')).join(' &middot; ')}
         &mdash; or when they are named as an exception. Support departments do not appear, because a
         marketing specialist showing zero net sales reads as a consultant who sold nothing.</p>
     </section>
 
     <section class="panel">
+      <header><h3>Move somebody between departments</h3>
+        <span class="hint" style="margin-left:auto">this is what puts them in or out of sales</span></header>
+      ${(() => {
+        const roll = USERS.map(x => x.name).slice().sort();
+        const who  = state.mvWho;
+        /* Every department anybody is actually in, so the list is the
+           organisation as it stands rather than one I wrote down once. */
+        const all  = [...new Set(roll.map(orgDeptOf).filter(Boolean)
+                       .concat(Object.values(HR().revDept || {}).flat()))].sort();
+        const now  = who ? orgDeptOf(who) : '';
+        const want = state.mvDept === null ? now : state.mvDept;
+        const co   = who ? (((HR().orgCo || {})[who]) || companyOf(who).key) : '';
+        const earns = d => REVDEPT(co).includes(d);
+        const same = String(want).trim() === String(now).trim();
+        return `<div class="pad">
+          <div class="jform">
+            <label><span>Who</span><select id="mvWho">
+              <option value="">Choose somebody</option>
+              ${roll.map(n => `<option value="${esc(n)}"${who === n ? ' selected' : ''}>${esc(NM(n))}${
+                orgDeptOf(n) ? ' \u2014 ' + esc(orgDeptOf(n)) : ' \u2014 no department'}</option>`).join('')}
+            </select></label>
+            <label><span>Department</span>
+              <input id="mvDept" list="mvDepts" value="${esc(want)}" placeholder="${who ? 'type a new one, or pick' : 'choose somebody first'}"${who ? '' : ' disabled'}>
+              <datalist id="mvDepts">${all.map(d => `<option value="${esc(d)}">`).join('')}</datalist></label>
+            <label><span>&nbsp;</span>
+              <button class="btn" id="mvSave" type="button"${(!who || same || state.mvBusy) ? ' disabled' : ''}>${
+                state.mvBusy ? 'Saving\u2026' : 'Move them'}</button></label>
+          </div>
+          ${!who ? `<p class="cap" style="padding:0;margin-top:14px">Pick somebody to see where they sit now and what moving them would do.</p>`
+          : `<p class="note" style="margin-top:16px${earns(String(want).trim()) === earns(now) ? '' : ';border-left-color:var(--warn)'}">
+              <b>${nm(who)}</b> is in <b>${esc(now || 'no department')}</b> at ${esc((DATA.companies[co] || {}).name || co)},
+              which ${earns(now) ? '<b>does</b>' : 'does <b>not</b>'} earn commission there.
+              ${same ? 'Change the department to move them.'
+                : `Moving them to <b>${esc(String(want).trim() || 'no department')}</b> would ${
+                    earns(String(want).trim())
+                      ? '<b>put them into</b> the sales tables, the leaderboard and the commission run'
+                      : '<b>take them out of</b> the sales tables, the leaderboard and the commission run'}.
+                   It also moves them on the organisation chart and on People.`}</p>`}
+        </div>`;
+      })()}
+      ${(() => { const x = state.mvDone; return x ? `<p class="cap"><b>${esc(x)}</b> has been moved.</p>` : ''; })()}
+    </section>
+  </div>
+
+  <div class="grid g2">
+    <section class="panel">
       <header><h3>Referral partners</h3>
-        <span class="pill mute">CorpLex only</span>
+        <span class="pill mute">${esc(coNameInView())}</span>
         <span class="hint" style="margin-left:auto">Company Master</span></header>
+      ${!salesHere() ? noSalesHere('referral partners') : `
       <div class="tw"><table>
         <thead><tr><th>Client</th><th class="r">Partner rate</th></tr></thead>
         <tbody>${DATA.partners.map(p=>`<tr><td>${esc(p.name)}</td><td class="n r">${pct(p.rate,0)}</td></tr>`).join('')}</tbody>
       </table></div>
       <p class="cap">Clients not listed here attract no partner commission. These rates are CorpLex&rsquo;s
-        and come from its Company Master; POA and Lex Estates have no referral arrangement in the portal.</p>
+        and come from its Company Master; POA and Lex Estates have no referral arrangement in the portal.</p>`}
     </section>
   </div>`;
 }
@@ -7030,7 +7073,8 @@ const TABS = [
   {id:'shifts',     group:'con', sec:'people', label:'Shifts',         title:'Shifts and reporting lines', gate:canAdmin, con:true},
   {id:'holidays',   group:'con', sec:'people', label:'Holidays',       title:'Public holidays', gate:canAdmin, con:true},
   {id:'leaverules', group:'con', sec:'people', label:'Leave policy',   title:'Leave policy', gate:canUpload, con:true},
-  {id:'leavebal',   group:'con', sec:'people', label:'Leave balances', title:'Annual leave balances', gate:canAdmin, con:true},
+  {id:'leavebal',   group:'con', sec:'people', label:'Annual leave',   title:'Annual leave balances', gate:canAdmin, con:true},
+  {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},
   // ---- Sales: was buried at the bottom of Rules & staff
   {id:'salesup',    group:'con', sec:'sales',  label:'Weekly upload',  title:'Weekly sales upload', gate:canUpload, con:true},
   {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:canAdmin, con:true},
@@ -7439,11 +7483,12 @@ const PAGE = {
   salesup:    ['admin',   ['Weekly upload']],
   salestpl:   ['admin',   ['Upload template']],
   salesrules: ['admin',   ['Commission rules']],
-  salesstaff: ['admin',   ['Staff accounts']],
+  salesstaff: ['admin',   ['Staff accounts', 'Move somebody between departments']],
   salesptr:   ['admin',   ['Referral partners']],
-  hradmin:    ['hradmin', ['attendance', 'Exceptions'], true],
+  hradmin:    ['hradmin', ['attendance'], true],
   shifts:     ['hradmin', ['Shifts and reporting lines']],
-  leavebal:   ['hradmin', ['Annual leave balances', 'Other leave balances'], true],
+  leavebal:   ['hradmin', ['Annual leave balances'], true],
+  leaveother: ['hradmin', ['Other leave balances'], true],
   holidays:   ['hradmin', ['Public holidays']],
   // Avin: 'once opened, keep the hero of expired, expiring etc' — so the four
   // document pages all carry the same strip, and moving between them does not
@@ -7972,6 +8017,20 @@ function render(){
     const x=HR().loans.find(y=>y.id===b.dataset.lnOk); if(x){x.status='Approved'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Approved');} render(); });
   document.querySelectorAll('[data-ln-no]').forEach(b=>b.onclick=()=>{
     const x=HR().loans.find(y=>y.id===b.dataset.lnNo); if(x){x.status='Declined'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Declined');} render(); });
+  const mvw=document.getElementById('mvWho'); if(mvw) mvw.onchange=()=>{
+    state.mvWho=mvw.value; state.mvDept=null; state.mvDone=''; render(); };
+  const mvd=document.getElementById('mvDept'); if(mvd) mvd.oninput=()=>{
+    state.mvDept=mvd.value; const at=mvd.selectionStart; render();
+    const e2=document.getElementById('mvDept'); if(e2){ e2.focus(); e2.setSelectionRange(at,at); } };
+  const mvs=document.getElementById('mvSave'); if(mvs) mvs.onclick=async ()=>{
+    const who=state.mvWho, to=String(state.mvDept===null?orgDeptOf(who):state.mvDept).trim();
+    if(!who) return;
+    state.mvBusy=true; render();
+    const ok=await window.__db.setDepartment(who, to);
+    state.mvBusy=false;
+    if(ok){ state.mvDept=null; state.mvDone=NM(who); }
+    render();
+  };
   const exw=document.getElementById('exWho'); if(exw) exw.onchange=()=>{ state.exitWho=exw.value; render(); };
   const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; state.exitSettle=''; render(); };
   const exs=document.getElementById('exSettle'); if(exs) exs.onchange=()=>{ state.exitSettle=exs.value; render(); };
@@ -7997,12 +8056,22 @@ function render(){
     if(el.value===''){ b.carried=0; b.carriedSet=false; }
     else { b.carried = Math.round((+el.value || 0) * 100) / 100; b.carriedSet = true; }
     render(); });
-  document.querySelectorAll('[data-shift]').forEach(s=>s.onchange=()=>{
-    HR().assign[s.dataset.shift]=s.value; render(); });
-  document.querySelectorAll('[data-mgr]').forEach(s=>s.onchange=()=>{
-    HR().managers[s.dataset.mgr]=s.value;
-    HR().requests.forEach(r=>{ if(r.who===s.dataset.mgr && r.status==='Pending') r.mgr=s.value; });
-    render(); });
+  document.querySelectorAll('[data-shift]').forEach(s=>s.onchange=async ()=>{
+    const who = s.dataset.shift, was = HR().assign[who];
+    HR().assign[who] = s.value; render();
+    const ok = await window.__db.setShift(who, s.value);
+    if(!ok){ HR().assign[who] = was; render(); }
+  });
+  document.querySelectorAll('[data-mgr]').forEach(s=>s.onchange=async ()=>{
+    const who = s.dataset.mgr, was = HR().managers[who];
+    const wasReq = HR().requests.filter(r=>r.who===who && r.status==='Pending').map(r=>[r, r.mgr]);
+    HR().managers[who] = s.value;
+    // a request already waiting goes to whoever the line now points at
+    wasReq.forEach(([r]) => { r.mgr = s.value; });
+    render();
+    const ok = await window.__db.setManager(who, s.value);
+    if(!ok){ HR().managers[who] = was; wasReq.forEach(([r, m]) => { r.mgr = m; }); render(); }
+  });
   const cb=document.getElementById('conBack'); if(cb) cb.onclick=()=>{ state.mode='staff'; state.tab='home'; render(); };
   document.querySelectorAll('#view [data-go]').forEach(b=>b.onclick=()=>{
     if(b.dataset.mode==='console'){ state.mode='console'; } else if(!(TABS.find(t=>t.id===b.dataset.go)||{}).con){ state.mode='staff'; }

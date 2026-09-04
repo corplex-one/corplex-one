@@ -977,6 +977,87 @@ window.__db = {
     }catch(e){ oops(e, 'That expiry date'); await reload(); }
   },
 
+  /* The shift, and who a person reports to.
+   *
+   * Both dropdowns on the Shifts screen have always changed the screen and
+   * nothing else: the choice was written into the in-memory copy, the page
+   * redrew as though it had taken, and the next reload put it back. Avin ran
+   * 0037 to fill the blank reporting lines and said the name still would not
+   * show — and it could not have, because nothing here was ever writing one.
+   * A control that pretends to save is worse than no control, because you
+   * stop checking.
+   *
+   * Accounts has been allowed to update any employee row since 0002_security
+   * — admin_employees, for all, guarded by is_admin() — so this needs no new
+   * permission. It needed a writer.
+   */
+  empId(name){ return (DB.employees.find(e => e.full_name === name) || {}).id || null; },
+
+  async setShift(who, shiftId){
+    const id = this.empId(who);
+    if(!id){ oops(new Error(who + ' is not in the staff list'), 'That shift'); return null; }
+    try{
+      const {error} = await sb.from('employees').update({shift_id: shiftId || null}).eq('id', id);
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That shift'); await reload(); return null; }
+  },
+
+  async setManager(who, manager){
+    const id = this.empId(who);
+    if(!id){ oops(new Error(who + ' is not in the staff list'), 'That reporting line'); return null; }
+    const mgr = manager ? this.empId(manager) : null;
+    if(manager && !mgr){
+      oops(new Error(manager + ' is not in the staff list'), 'That reporting line'); return null;
+    }
+    if(mgr && mgr === id){
+      oops(new Error('Nobody can report to themselves'), 'That reporting line'); return null;
+    }
+    /* A loop would give the organisation chart no top and no bottom, and the
+     * database has no constraint that would stop one being made. Walking up
+     * from the proposed manager costs one pass over a list of thirty. */
+    let up = mgr, hops = 0;
+    while(up && hops++ < 100){
+      if(up === id){
+        oops(new Error(manager + ' already reports to ' + who + ', directly or through somebody else'),
+             'That reporting line');
+        return null;
+      }
+      up = (DB.employees.find(e => e.id === up) || {}).manager_id || null;
+    }
+    try{
+      const {error} = await sb.from('employees').update({manager_id: mgr}).eq('id', id);
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That reporting line'); await reload(); return null; }
+  },
+
+  /* Which department somebody is in.
+   *
+   * Avin, on the sales staff list: 'Not really completed. Tomorrow if someone
+   * changes to sales, i cant see their report.' He is right that the list was
+   * read-only, but the thing that needs to change is not a sales list — it is
+   * the person's department. Who appears in the sales tables is worked out
+   * from it, and so is the organisation chart and the People page, so moving
+   * somebody by hand in one place and not the others would put the portal at
+   * odds with itself.
+   *
+   * One column, therefore, and everything that reads it follows.
+   */
+  async setDepartment(who, department){
+    const id = this.empId(who);
+    if(!id){ oops(new Error(who + ' is not in the staff list'), 'That department'); return null; }
+    try{
+      const {error} = await sb.from('employees')
+        .update({department: String(department || '').trim() || null}).eq('id', id);
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That department'); await reload(); return null; }
+  },
+
   // accounts recording an expiry against somebody else
   async saveDocDateFor(who, kind, value){
     const id  = (DB.employees.find(e => e.full_name === who) || {}).id;
