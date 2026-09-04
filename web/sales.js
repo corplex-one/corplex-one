@@ -125,7 +125,20 @@ export function readMasters(sheets){
     if(e && !blank(v)) flat[e] = num(v);
   }
 
-  return {dept, partner, bands, eligible, flat};
+  /* Commission already handed over, per person per quarter. This is the one
+   * figure on the Commission Engine sheet that is not calculated — Avin types
+   * it in as he pays people, and the sheet's own instructions say so. Every
+   * other column there we derive; this one we have to read, and the first
+   * version of this reader did not, which made every balance on every screen
+   * read as the whole commission owing when most of it had been paid. */
+  const paid = {};
+  (sheets.engine || []).slice(4).forEach(r => {
+    if(!r) return;
+    const who = txt(r[0]), q = txt(r[2]);
+    if(who && q) paid[who + '|' + q] = num(r[22]);
+  });
+
+  return {dept, partner, bands, eligible, flat, paid};
 }
 
 /** The last band whose minimum the figure reaches. Excel's VLOOKUP(...,TRUE). */
@@ -268,7 +281,7 @@ export function runEngine(invoices, masters, people){
         pmForf:  sum(asPm,  'forfeit'),
         netTot: sum(asNew, 'net') + sum(asOld, 'net') + sum(asPm, 'net'),
         deptOk: eligibleDept,
-        paid: 0
+        paid: (masters.paid || {})[who + '|' + q] || 0
       };
 
       f.totElig  = f.newElig + f.exElig + f.pmElig;
@@ -284,7 +297,15 @@ export function runEngine(invoices, masters, people){
       f.exComm  = eligibleDept ? f.exElig  * r.exist : 0;
       f.pmComm  = eligibleDept ? f.pmElig  * r.pm : 0;
       f.comm    = f.newComm + f.exComm + f.pmComm;
-      f.bal     = f.comm - f.paid;
+      /* The workbook's own formula, Y = V - W. A negative balance is somebody
+       * slightly overpaid, and it is left negative rather than floored at nil,
+       * because that is money to set against the next quarter.
+       *
+       * Rounded, and this is the one place rounding belongs: a balance is not
+       * an input to anything, it is the last figure in the chain. Unrounded it
+       * printed '-0.00' beside people who had been paid to the fils, which
+       * reads as a bug rather than as nothing owing. */
+      f.bal     = round2(f.comm - f.paid);
 
       // What the quarter would have paid had everything been collected on time,
       // and therefore what late payment actually cost.
@@ -473,7 +494,10 @@ export function sheetsFromBook(XLSX, wb){
     sales:     grab('Sales Data'),
     employees: grab('Employee Master'),
     companies: grab('Company Master'),
-    rules:     grab('Commission Rules')
+    rules:     grab('Commission Rules'),
+    // Commission Engine is derived from Sales Data in every column but one,
+    // and that one is the reason it has to come across: 'Paid' is typed.
+    engine:    grab('Commission Engine')
   };
 }
 

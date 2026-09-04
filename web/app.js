@@ -4121,7 +4121,7 @@ function vTeam(){
     <div class="tw"><table>
       <thead><tr>
         <th>Consultant</th><th>Role</th><th class="r">Invoices</th><th class="r">Invoiced</th><th class="r">Costs</th>
-        <th class="r">Net sales</th><th class="r">Not counted</th><th class="r">Outstanding</th>
+        <th class="r">Net sales</th><th class="r">Eligible</th><th class="r">Not counted</th><th class="r">Outstanding</th>
         ${showComm?'<th class="r">Commission</th><th class="r">Paid</th><th class="r">Balance</th>':''}
       </tr></thead>
       <tbody>
@@ -4132,6 +4132,7 @@ function vTeam(){
           <td class="n r">${money(x.inv)}</td>
           <td class="n r">${money(x.cost)}</td>
           <td class="n r">${money(x.e.netTot)}</td>
+          <td class="n r"${x.e.totElig>0?' style="color:var(--good)"':''}>${x.e.totElig>0?money(x.e.totElig):'—'}</td>
           <td class="n r"${x.e.notColl>0?' style="color:var(--warn)"':''}>${x.e.notColl>0?money(x.e.notColl):'—'}</td>
           <td class="n r"${x.out>0?' style="color:var(--bad)"':''}>${x.out>0?money(x.out):'—'}</td>
           ${showComm?`<td class="n r">${money(x.e.comm + (x.mo?x.mo.earned:0),2)}${x.mo?' <span class="pill mute">incl. override</span>':''}</td>
@@ -4143,6 +4144,7 @@ function vTeam(){
           <td class="n r">${money(people.reduce((s,x)=>s+x.inv,0))}</td>
           <td class="n r">${money(people.reduce((s,x)=>s+x.cost,0))}</td>
           <td class="n r">${money(people.reduce((s,x)=>s+x.e.netTot,0))}</td>
+          <td class="n r">${money(people.reduce((s,x)=>s+x.e.totElig,0))}</td>
           <td class="n r">${money(totUnq)}</td>
           <td class="n r">${money(totOut)}</td>
           ${showComm?`<td class="n r">${money(people.reduce((s,x)=>s+x.e.comm+(x.mo?x.mo.earned:0),0),2)}</td>
@@ -4150,7 +4152,7 @@ function vTeam(){
                       <td class="n r">${money(people.reduce((s,x)=>s+x.e.bal+(x.mo?x.mo.bal:0),0),2)}</td>`:''}
         </tr>
       </tbody></table></div>
-    <p class="cap">Rows greyed as <b>Left the firm</b> are people who have gone; their 2026 sales stay in the department's figures because the department earned them, but they have no login. A shared invoice is credited to both the consultant who sold it and the project manager, so the team row adds up to more than the department's AED ${money(dn)} of net sales. ${showComm?'':'<b>Commission is deliberately absent from this page.</b> It is visible only to the person it belongs to, to the accounts manager and to the owner.'}</p>
+    <p class="cap">Rows greyed as <b>Left the firm</b> are people who have gone; their ${esc(state.year)} sales stay in the department's figures because the department earned them, but they have no login. A shared invoice is credited to both the consultant who sold it and the project manager, so the team row adds up to more than the department's AED ${money(dn)} of net sales. <b>Eligible</b> and <b>Not counted</b> are the two halves of net sales: eligible is settled and paid on time and is what the commission band and every rate are worked out on; not counted is the rest, either still outstanding or collected too late to earn on. ${showComm?'':'<b>Commission is deliberately absent from this page.</b> It is visible only to the person it belongs to, to the accounts manager and to the owner.'}</p>
   </section>
 
   <div class="grid g2">
@@ -6021,7 +6023,11 @@ function renderChrome(){
   const periodic = state.mode!=='console' && PERIODTABS.includes(state.tab);
   ys.classList.toggle('hidden', !periodic);
   document.getElementById('qSeg').classList.toggle('hidden', !periodic);
-  ys.innerHTML = ['2025','2026'].map(y=>`<button data-y="${y}" aria-pressed="${state.year===y}" type="button">${y}</button>`).join('');
+  // The years the portal actually holds, newest first, plus whichever year is
+  // being looked at so the selector never loses the button you just pressed.
+  const heldYears = [...new Set(Object.keys(DATA.yearFigures || {}).concat(state.year))]
+    .filter(Boolean).sort().reverse();
+  ys.innerHTML = heldYears.map(y=>`<button data-y="${y}" aria-pressed="${state.year===y}" type="button">${y}</button>`).join('');
   ys.querySelectorAll('button').forEach(b=>b.onclick=()=>{ state.year=b.dataset.y; render(); });
   const qs = document.getElementById('qSeg');
   qs.innerHTML = PERIODS.map(q=>`<button data-q="${q}" aria-pressed="${state.period===q}" type="button">${q==='FY'?'Year':q}</button>`).join('');
@@ -6208,15 +6214,19 @@ function render(){
   CHARTS = {};
   const v = document.getElementById('view');
   const mainEl = document.querySelector('main');
-  mainEl.classList.toggle('fixed', ['payment','invoices'].includes(state.tab) && state.year==='2026');
+  mainEl.classList.toggle('fixed', ['payment','invoices'].includes(state.tab));
   document.body.classList.toggle('printinv', !!state.invPrint);
   mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile'].includes(state.tab));
-  if(state.year !== '2026' && !['admin','payroll','tickets','myticket','payslips','myslip','tools','payment','attend','requests','people','hradmin','profile','docsadmin','revisions','loans','exits'].includes(state.tab)){
+  const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
+  const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
+  if(!yearHeld && !['admin','payroll','tickets','myticket','payslips','myslip','tools','payment','attend','requests','people','hradmin','profile','docsadmin','revisions','loans','exits'].includes(state.tab)){
     v.innerHTML = `<section class="panel"><div class="pad" style="text-align:center;padding:56px 24px">
       <h3 style="font-size:22px;margin-bottom:8px">${state.year} has not been uploaded yet</h3>
-      <p style="color:var(--ink2);max-width:52ch;margin:0 auto 18px">Once the ${state.year} workbook is uploaded on the admin screen, this selector switches the whole portal — dashboard, commission, invoices and leaderboard — to that year, and the company view gains a year-on-year comparison.</p>
-      <button class="btn" type="button" onclick="state.year='2026';render()">Back to 2026</button>
+      <p style="color:var(--ink2);max-width:52ch;margin:0 auto 18px">Upload the ${state.year} workbook under <b>Sales &rarr; Weekly upload</b> and this selector switches the whole portal — dashboard, commission, invoices and leaderboard — to that year.</p>
+      <button class="btn" type="button" data-backyear="${esc(newestYear)}">Back to ${esc(newestYear)}</button>
     </div></section>`;
+    v.querySelectorAll('[data-backyear]').forEach(bt =>
+      bt.onclick = () => { state.year = bt.dataset.backyear; render(); });
     return;
   }
   const CON = state.mode==='console';
