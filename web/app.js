@@ -3796,7 +3796,8 @@ function calcCard(){
         <span>${esc(ch.name)} <span style="opacity:.8">(${esc(ch.kind)})</span></span>
         ${isBest?'<span class="pill" style="background:rgba(255,255,255,.22);color:#fff"><span class="dt"></span>Cheaper for this card type</span>':''}
       </div>
-      <table>
+      <table style="table-layout:fixed;width:100%">
+        ${colsOf([49, 17, 14, 20])}
         <thead><tr><th>${esc(CUR)}</th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
         <tbody>
           <tr><td>Service fee</td><td></td><td></td><td class="n r">${money(r.inv,2)}</td></tr>
@@ -3962,7 +3963,28 @@ function firstName(n){ return String(NM(n) || '').trim().split(/\s+/)[0] || n; }
 
 /* Amounts on this screen carry their currency, because not all of them are
  * dirhams and a bare number that might be euros is not a figure at all. */
-function payAmt(r){ return `${esc(r.ccy || 'AED')} ${money(r.amount, 2)}`; }
+/* AED is the default and the overwhelming majority, so it goes unsaid and
+ * the column gets its width back. A euro or a dollar still says which. */
+function payAmt(r){ const c = r.ccy || 'AED';
+  return (c === 'AED' ? '' : esc(c) + ' ') + money(r.amount, 2); }
+/* …but the hover card, and anything read out of the table, says it in full. */
+function payFull(r){ return `${r.ccy || 'AED'} ${money(r.amount, 2)}`; }
+
+/* The year is this year on all but a handful of rows, and eleven characters
+ * of date in a column that has room for six is how '04 Sep 2026' became
+ * '04 Sep 2...'. An older one keeps its year, because that is the row where
+ * the year is the interesting part. */
+/* A colgroup from a list of shares. One per cent of slack, so a scrollbar
+ * never appears over blank space. */
+function colsOf(ws){
+  return '<colgroup>' + ws.map(w =>
+    `<col style="width:${(w * 0.99).toFixed(2)}%">`).join('') + '</colgroup>';
+}
+
+function payDate(d){
+  const s = String(d || ''), y = ' ' + new Date().getFullYear();
+  return s.endsWith(y) ? s.slice(0, -y.length) : s;
+}
 function sumBy(list){
   const per = {};
   list.forEach(r => { per[r.ccy || 'AED'] = (per[r.ccy || 'AED'] || 0) + r.amount; });
@@ -4176,7 +4198,8 @@ function vPayApprove(){
    * they happen rather than guessed at the moment of the decision. */
   const recon = r => {
     if(r.status !== 'Approved')
-      return `<td>${statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>`;
+      return `<td${full(r.status === 'Rejected' && r.why ? 'Turned down: ' + r.why : r.status)}>${
+        statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>`;
     const busy = state.reconBusy === r.id;
     // A bare box under a named column, the way it is on the sheet Avin keeps.
     const tick = k => `<td class="c"><input type="checkbox" class="rtick"
@@ -4196,13 +4219,13 @@ function vPayApprove(){
 
   const row = (r, withRecon) => {
     return `<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
-      <td class="n nw">${esc(r.date)}</td>
-      <td>${esc(firstName(r.by))}</td>
-      <td class="n nw">${esc(r.order||'—')}</td>
-      <td class="n r nw">${payAmt(r)}</td>
+      <td class="n nw"${full(r.date)}>${esc(payDate(r.date))}</td>
+      <td${full(r.by)}>${esc(firstName(r.by))}</td>
+      <td class="n nw"${full(r.order)}>${esc(r.order||'—')}</td>
+      <td class="n r nw"${full(payFull(r))}>${payAmt(r)}</td>
       <td class="cell"${full(r.client)}>${esc(r.client||'—')}</td>
       <td class="cell"${full(r.purpose)}>${esc(r.purpose)}</td>
-      <td>${esc(modeShort(r.mode))}</td>
+      <td${full(modeShort(r.mode))}>${esc(modeShort(r.mode))}</td>
       <td class="cell"${full(r.payee)}>${esc(r.payee||'—')}</td>
       <td>${r.files.length ? r.files.map(f=>f.url
             ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
@@ -4231,7 +4254,7 @@ function vPayApprove(){
 
   const cols = `<th>Date</th><th>By</th><th>Order no.</th><th class="r">Amount</th>
       <th>Client</th><th>Purpose</th><th>Mode</th><th>Vendor</th>
-      <th>Document</th><th>Additional information</th>`;
+      <th title="Document">Doc</th><th>Additional information</th>`;
 
   /* Percentages, with table-layout:fixed. A table sized by its content has a
    * minimum width it will not go below, and sixteen columns of it came to
@@ -4248,10 +4271,15 @@ function vPayApprove(){
   /* One set of shares for both payment tables:
    *   date, by, order, amount, client, purpose, mode, vendor, document, note,
    *   then status, paid through, Bk, Bg, Rc and the pencil. */
-  const SHARES = [5.4, 3.8, 5.0, 6.4, 12.9, 12.2, 4.0, 8.1, 5.8, 12.4,
-                  6.6, 7.4, 2.2, 2.2, 2.4, 3.2];
+  /* These sum to a hundred, and the 0.99 below is the only slack. The old
+   * set summed to a hundred and eight, which the browser quietly scaled back
+   * to fit — so the numbers said one thing and the screen showed another, and
+   * the tick columns ended up a pixel narrower than the two letters over
+   * them. A share here is now the share the column actually gets. */
+  const SHARES = [5.10, 5.20, 5.75, 6.68, 11.44, 10.58, 5.66, 7.19, 4.83, 9.04,
+                  8.40, 8.35, 2.69, 2.69, 2.69, 3.71];
   const colgroup = ws => `<colgroup>${ws.map(w =>
-    `<col style="width:${(w * 0.94).toFixed(2)}%">`).join('')}</colgroup>`;
+    `<col style="width:${(w * 0.99).toFixed(2)}%">`).join('')}</colgroup>`;
   /* The two tables sit one above the other, so their columns line up: the
    * first ten are the same shares in both, and the queue's action column is
    * exactly as wide as the six reconciliation columns it sits above. Two
@@ -4302,6 +4330,7 @@ function vPayApprove(){
             find ? 'Nothing matches &ldquo;' + esc(state.paySearch) + '&rdquo;.' : 'Nothing has been decided yet.'}</td></tr>`}</tbody>
     </table></div>
     <p class="cap"><b>Bk</b> Books &middot; <b>Bg</b> Bigin &middot; <b>Rc</b> Receipt.
+      Amounts are dirhams unless the row says otherwise, and a date without a year is this year.
       A cell that is cut off says the rest when you hover it, with a Copy beside it.
       The pencil at the end corrects a request.</p>
   </section>`;
@@ -4367,18 +4396,18 @@ function vPayment(){
   <section class="panel grow">
     <header><h3>My requests</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
     <div class="tw paytab"><table>
-      <colgroup>${[9.6, 6.2, 10.2, 12.0, 9.8, 6.6, 9.6, 9.2, 10.2, 9.6, 7.0]
+      <colgroup>${[5.8, 6.0, 7.0, 14.5, 13.5, 5.8, 9.0, 8.0, 12.4, 9.0, 9.0]
         .map(w => `<col style="width:${(w*0.97).toFixed(2)}%">`).join('')}</colgroup>
-      <thead><tr><th>Date</th><th>Order #</th><th>Amount</th><th>Client</th>
-        <th>Purpose</th><th>Mode</th><th>Vendor</th><th>Document</th>
+      <thead><tr><th>Date</th><th>Order #</th><th class="r">Amount</th><th>Client</th>
+        <th>Purpose</th><th>Mode</th><th>Vendor</th><th title="Document">Doc</th>
         <th>Additional information</th><th>Status</th><th>Payment</th></tr></thead>
       <tbody>${mine.length?mine.map(r=>`<tr>
-        <td class="n nw">${esc(r.date)}</td>
-        <td class="n nw">${esc(r.order||'—')}</td>
-        <td class="n r nw">${payAmt(r)}</td>
+        <td class="n nw"${full(r.date)}>${esc(payDate(r.date))}</td>
+        <td class="n nw"${full(r.order)}>${esc(r.order||'—')}</td>
+        <td class="n r nw"${full(payFull(r))}>${payAmt(r)}</td>
         <td class="cell"${full(r.client)}>${esc(r.client||'—')}</td>
         <td class="cell"${full(r.purpose)}>${esc(r.purpose)}</td>
-        <td>${esc(modeShort(r.mode))}</td>
+        <td${full(modeShort(r.mode))}>${esc(modeShort(r.mode))}</td>
         <td class="cell"${full(r.payee)}>${esc(r.payee||'—')}</td>
         <td>${r.files.map(f=>`<span class="docwrap">${f.url
               ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
@@ -4398,15 +4427,16 @@ function vPayment(){
           : (r.payStatus ? `<span class="pill ${r.payStatus==='Paid'?'good':(r.payStatus==='Initiated'?'warn':'mute')}">${esc(r.payStatus)}</span>`
                          : '<span style="color:var(--ink3)">—</span>')}</td></tr>`).join('')
         :'<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>
-    <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.</p>
+    <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.
+      Amounts are dirhams unless the row says otherwise. A cell that is cut off says the rest when you hover it.</p>
   </section>`;
 
   return `${vDocPop()}${payBar()}
   <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
-  <div class="payone">
+  <div class="payonew"><div class="payone">
     <div>${form}</div>
     <div>${minePanel}</div>
-  </div>`;
+  </div></div>`;
 }
 /* What actually happened, said plainly. No invented email, because no email
  * leaves the portal yet — that is waiting on a sending address, and claiming
@@ -4600,7 +4630,10 @@ function vTeam(){
   <section class="panel">
     <header><h3>Every consultant, ${esc(PLABEL[p])}</h3>
       <span class="hint" style="margin-left:0">${esc(DD.department)} &middot; ${showComm?'commission visible — accounts manager / owner':'sales only — commission is not shown to department managers'}</span>${deptSeg(viewer)}</header>
-    <div class="tw"><table>
+    <div class="tw"><table class="teamtab">
+      ${showComm
+        ? colsOf([11, 9.1, 7.1, 8.1, 8.1, 7.2, 7.2, 7.2, 9.6, 8.9, 8, 8.5])
+        : colsOf([15, 15, 9, 10, 10, 10, 10, 10, 11])}
       <thead><tr>
         <th>Consultant</th><th>Role</th><th class="r">Invoices</th><th class="r">Invoiced</th><th class="r">Costs</th>
         <th class="r">Net sales</th><th class="r">Eligible</th><th class="r">Not counted</th><th class="r">Outstanding</th>
@@ -4785,7 +4818,10 @@ function vPayroll(){
   const PF = state.payFilter, PS = state.paySort;
   const REGCOLS = () => (INT
     ? [14,5,9,8,4,6.5,5.5,5.5,6,5,7,6,5.5,6,7]
-    : [17,6,4.5,7.5,7,7,7,7,8,7,6.5,7.5,8]);
+    /* Salary, Gross and Net carry the bold company totals, which are wider
+     * than anything in the rows above them; the four optional columns beside
+     * them hold four figures at most. */
+    : [14,7,4.5,9,6.5,6.5,6.5,6.5,9,7,6.5,7,9.5]);
   const COLGROUP = () => `<colgroup>${REGCOLS().map(w=>`<col style="width:${w}%">`).join('')}</colgroup>`;
   const PSORT = {name:'name', id:'id', company:'company', visa:'visa', paidBy:'paidBy', days:'days',
     salary:'salary', claims:'claims', air:'air', comm:'comm', gross:'gross', adv:'adv', mob:'mob', ded:'ded', net:'net'};
@@ -4905,7 +4941,7 @@ function vPayroll(){
             ${pth('name','Name','s1')}${pth('id','Emp ID','s2')}${INT?pth('visa','Visa')+pth('paidBy','Paid from'):''}
             ${pth('days','Days','r')}${pth('salary','Salary','r')}${pth('claims','Claims','r')}${pth('air','Air Ticket','r')}
             ${pth('comm','Comm.','r')}<th class="r">Other</th>${pth('gross','Gross','r')}
-            ${pth('adv','Advance','r')}${pth('mob','Mobile','r')}${pth('ded','Deductions','r')}${pth('net','Net','r')}
+            ${pth('adv','Advance','r')}${pth('mob','Mobile','r')}${pth('ded','Ded.','r')}${pth('net','Net','r')}
           </tr></thead>
           <tbody>
             ${rs.map(r=>`<tr>

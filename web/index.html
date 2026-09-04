@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041232">
+<link rel="manifest" href="manifest.webmanifest?v=202609041307">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1199,6 +1199,22 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .paytable td.rule, .paytable th.rule{border-right:1px solid var(--line)}
   .paytable th{font-size:10px;line-height:1.25;white-space:normal;vertical-align:bottom}
   .paytable td, .paytable th{padding-left:6px;padding-right:6px}
+  /* The register's headings wrap between words rather than being cut. They
+     inherit nowrap and a 36px line-height from .invtable, which is right for
+     a heading of one word and wrong for AIR TICKET, which came out as
+     'Air Ticke'. Two short lines cost one row of header and lose nothing. */
+  .invtable.regtable th{white-space:normal;line-height:1.25;height:auto;
+    padding-top:9px;padding-bottom:9px;vertical-align:bottom}
+  /* Every consultant: twelve columns to a fixed width, so the last one is on
+     the screen rather than twenty-three pixels past it. */
+  .teamtab{table-layout:fixed;width:100%}
+  .teamtab td,.teamtab th{overflow:hidden;text-overflow:ellipsis}
+  /* Headings wrap between their words rather than being cut, and the role
+     pill wraps too, a size down: OUTSTANDING and COMMISSION are single words
+     and set the width of their own columns, so the room has to come from
+     somewhere that can give it. */
+  .teamtab th{white-space:normal;line-height:1.3}
+  .teamtab .pill{white-space:normal;font-size:10px;padding:2px 6px}
   .paytable .payin{padding-left:5px;padding-right:6px;font-size:12.5px}
   .paytable td.n{font-size:12.5px}
   /* what check-in made of the month, offered rather than imposed */
@@ -1314,10 +1330,25 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   /* The raise screen: the form beside the confirmation, and the table across
      the page underneath both. My own requests carries eleven columns now, and
      in the old right-hand pane the last three fell off the edge. */
-  .payone{display:grid;grid-template-columns:minmax(300px,350px) minmax(0,1fr);
+  /* Side by side when there is room for both, stacked when there is not.
+     Eleven columns in the eight hundred pixels left over on a 1440 laptop is
+     not a table, it is a row of ellipses — the date, the order number and the
+     amount were all being cut. 'Room' is measured on the space this screen
+     actually has rather than the width of the window, so folding the rail
+     away is enough to bring the form back alongside the table. That is what
+     the fold is for. The wrapper exists only to be the thing measured: size
+     containment on anything larger would trap the document pop-up inside it. */
+  .payonew{container-type:inline-size}
+  .payone{display:grid;grid-template-columns:minmax(0,1fr);
     gap:14px;align-items:start;margin-bottom:14px}
   .payone > div:empty{display:none}
-  @media (max-width:1180px){ .payone{grid-template-columns:1fr} }
+  /* Stacked, the form has the whole page to spread across, and a one-line
+     Name of the employee eleven hundred pixels wide looks like a mistake.
+     Alongside the table its column is 350px, so this never applies there. */
+  .payone .payform{max-width:720px}
+  @container (min-width:1240px){
+    .payone{grid-template-columns:minmax(300px,350px) minmax(0,1fr)}
+  }
 
   /* Approve and the cross belong on one line. Wrapped, the cross read as a
      second separate thing rather than the other half of one choice. */
@@ -1649,8 +1680,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041232';</script>
-<script src="config.js?v=202609041232"></script>
-<script type="module" src="boot.js?v=202609041232"></script>
+<script>window.__BUILD = '202609041307';</script>
+<script src="config.js?v=202609041307"></script>
+<script type="module" src="boot.js?v=202609041307"></script>
 </body>
 </html>
