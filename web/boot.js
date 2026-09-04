@@ -658,6 +658,71 @@ window.__db = {
     }catch(e){ oops(e, 'The decision'); await reload(); }
   },
 
+  /* Public holidays. Accounts has been allowed to write these since
+   * 0002_security — admin_holidays, for all, guarded by is_admin() — and the
+   * screen only ever displayed them. The date is the primary key, so moving
+   * a holiday is a delete and an insert rather than an update, which is also
+   * the honest description of what moving one is. */
+  async addHoliday(h){
+    try{
+      const {error} = await sb.from('holidays')
+        .insert({on_date: h.on_date, name: h.name, fixed: !!h.fixed});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That holiday'); await reload(); return null; }
+  },
+
+  async editHoliday(was, h){
+    try{
+      if(was !== h.on_date){
+        const {error: e1} = await sb.from('holidays').delete().eq('on_date', was);
+        if(e1) throw e1;
+        const {error: e2} = await sb.from('holidays')
+          .insert({on_date: h.on_date, name: h.name, fixed: !!h.fixed});
+        if(e2) throw e2;
+      } else {
+        const {error} = await sb.from('holidays')
+          .update({name: h.name, fixed: !!h.fixed}).eq('on_date', was);
+        if(error) throw error;
+      }
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That holiday'); await reload(); return null; }
+  },
+
+  async removeHoliday(on_date){
+    try{
+      const {error} = await sb.from('holidays').delete().eq('on_date', on_date);
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That holiday'); await reload(); return null; }
+  },
+
+  /* Taking back your own request while it is still waiting. The database has
+   * allowed this since 0013_own_updates — cancel_own_loan and
+   * cancel_own_letter, which permit exactly this move and no other — and the
+   * screen simply never offered it. Status only: a cancellation is not a
+   * decision, so nothing is stamped with who decided or who issued it. */
+  async cancelLoan(ref){
+    try{
+      const {error} = await sb.from('loans').update({status: 'Cancelled'}).eq('ref', ref);
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Taking the request back'); await reload(); return null; }
+  },
+
+  async cancelLetter(ref){
+    try{
+      const {error} = await sb.from('letters').update({status: 'Cancelled'}).eq('ref', ref);
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Taking the request back'); await reload(); return null; }
+  },
+
   async postAnnouncement(a){
     try{
       const {error} = await sb.from('announcements').insert({

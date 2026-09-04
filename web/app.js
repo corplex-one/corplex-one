@@ -104,7 +104,7 @@ const state = {
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
   lnForm: null, lnSent: false, exitWho: '', exitLwd: '', mailPick: 'weekly', mailWeek: null,
   revForm: null, revSent: '', noteDone: [], who: null, peopleQ: '', askTab: 'loans',
-  askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: 'all', invRaw: null, invPrint: false,
+  askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: '', leaveTab: 'leave', calcTab: 'card', invRaw: null, invPrint: false,
   payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
   pfDirty: null, pfSaved: '', upBusy: null,
   payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',
@@ -550,6 +550,8 @@ const REQTYPES = [
   {id:'Paternity',    label:'Paternity leave',  pay:'full', max:5,
    need:{gender:'Male', marital:'Married'},
    note:'5 working days, to be taken within six months of the birth.'},
+  {id:'Study',        label:'Study leave',      pay:'full', max:10, minYears:2,
+   note:'10 working days a year to sit examinations, for anyone with two years of service who is enrolled at an educational institution in the UAE. Does not touch your annual balance.'},
   {id:'Hajj',         label:'Hajj leave',       pay:'none', max:30,
    note:'Up to 30 days, unpaid, once during your service.'},
   {id:'Umrah',        label:'Umrah leave',      pool:true, pay:'full',
@@ -630,6 +632,12 @@ function typeAllowed(u, t){
       return {ok:false, why: K.pending > 0 ? 'already requested, waiting on your manager' : 'already taken today'};
     if(!K.today) return {ok:false, why:'only on the day itself, ' + dayLabel(K.next)};
     if(isWeekend(K.on) || holOn(K.on)) return {ok:false, why:'your birthday is not a working day this year'};
+  }
+  if(t.minYears){
+    const y = yearsWith(u);
+    if(!y) return {ok:false, why:'your joining date is not on file yet'};
+    if(y.years < t.minYears)
+      return {ok:false, why:`after ${t.minYears} years of service`};
   }
   if(!t.need) return {ok:true};
   const p = PROF(u) || {};
@@ -892,6 +900,16 @@ function vAttend(){
   const onNet = onOfficeNet();
   const H = HR();
 
+  /* Everything closed today, and the day's target. A day is nine hours; the
+   * clock shows the whole of it and the line under it says what is left. */
+  const closedMins = (a && a.segs ? a.segs : []).filter(g => g.out)
+    .reduce((s, g) => s + (mins(g.out) - mins(g.in)), 0);
+  const doneToday = segMins(a, true);
+  const shortBy = Math.max(0, FULLDAY() - doneToday);
+  const leftLine = shortBy
+    ? hhmm(shortBy) + ' left of the ' + hhmm(FULLDAY()) + ' day'
+    : 'the full ' + hhmm(FULLDAY()) + ' is in';
+
   const segRow = g => `<tr><td class="n">${esc(g.in)}</td><td class="n">${g.out?esc(g.out):'<span class="pill warn"><span class="dt"></span>open</span>'}</td>
     <td>${esc(g.loc)}${whereMark(g)}</td><td class="n r">${g.out?hhmm(mins(g.out)-mins(g.in)):'—'}</td>
     <td style="color:var(--ink2);font-size:12.5px">${esc(g.note||'')}</td></tr>`;
@@ -910,6 +928,7 @@ function vAttend(){
       <span class="n">after ${esc(shiftOf(u).start)} plus ${H.hours.grace} minutes</span></div>
   </div>
 
+  <div class="grid g2 gtop attpair">
   <section class="panel">
     <header><h3>Check in and out</h3>
       <span class="pill ${onNet?'good':'mute'}">${!officeRules()?'Office network not set yet'
@@ -923,8 +942,13 @@ function vAttend(){
         : `<div class="ciwrap">
         <div class="cibox">
           <span class="cik">${open?'On the clock':'Not checked in'}</span>
-          ${open ? ciClock(open) : '<b>—</b>'}
-          <span class="cin">${open?esc(open.loc)+' · since '+esc(open.in):'press a button below to start the day'}</span>
+          ${open ? ciClock(open, closedMins) : '<b>—</b>'}
+          <span class="cin">${open
+            ? esc(open.loc) + ' · since ' + esc(open.in)
+              + (closedMins ? ' · ' + hhmm(closedMins) + ' earlier today' : '')
+            : (doneToday ? hhmm(doneToday) + ' recorded today · ' + leftLine
+               : 'press a button below to start the day')}</span>
+          <span class="cin" style="margin-top:2px">${open ? leftLine : ''}</span>
         </div>
         <div class="cibtns">
           ${open
@@ -954,7 +978,8 @@ function vAttend(){
       </tbody></table></div>`:''}
   </section>
 
-  ${regularPanel(u)}
+  ${regularPanel(u) || '<div></div>'}
+  </div>
 
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>${esc(MONTHNAME[+ym.slice(5)-1])} ${ym.slice(0,4)}</h3>
@@ -981,6 +1006,116 @@ function vAttend(){
           <td></td><td></td><td class="n r netcol">${hhmm(S.worked)}</td><td></td></tr>
       </tbody></table></div>
     <p class="cap">${HR().sample?'<b>Sample records.</b> The portal holds no attendance history until check-in goes live &mdash; these days are here to show the shape of the report. ':''}Only you, your manager and accounts can see your attendance.</p>
+  </section>`;
+}
+
+function leaveTabs(){
+  const T = [['leave','Leave'], ['wfh','Work from home'], ['policy','Leave policy']];
+  const cur = T.some(x => x[0] === state.leaveTab) ? state.leaveTab : 'leave';
+  return {cur, bar: `<div class="seg segbig" id="leaveSeg">${T.map(([v, l]) =>
+    `<button data-lv="${v}" aria-pressed="${cur === v}" type="button">${esc(l)}</button>`).join('')}</div>`};
+}
+
+/* The work-from-home tab. Two columns: apply on the left, what you have asked
+ * for before on the right. Nothing about annual leave appears here at all —
+ * a day at home does not come off a balance and never did. */
+function vWfhTab(u, B, f, mine, inbox){
+  const wfh = mine.filter(r => r.type === 'WFH');
+  const wait = inbox.filter(r => r.type === 'WFH');
+  const done = wfh.filter(r => r.status === 'Approved');
+  const strip = `<div class="strip">
+    <div class="stat"><span class="k">Days from home</span><span class="v">${done.reduce((s, r) => s + r.days, 0)}</span>
+      <span class="n">approved so far this year</span></div>
+    <div class="stat"><span class="k">Waiting on a decision</span><span class="v">${
+      wfh.filter(r => r.status === 'Pending').length}</span>
+      <span class="n">with ${nm2(mgrName(u) || 'your manager')}</span></div>
+    <div class="stat"><span class="k">Comes off your balance</span><span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Nothing</span>
+      <span class="n">a day at home is not leave</span></div>
+  </div>`;
+  const stPill = s => s === 'Approved' ? '<span class="pill good"><span class="dt"></span>Approved</span>'
+    : s === 'Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
+  return strip + `
+  ${wait.length ? `<section class="panel">
+    <header><h3>Waiting on you</h3><span class="pill warn"><span class="dt"></span>${wait.length}</span>
+      <span class="hint">days at home, waiting on your decision</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Who</th><th>Dates</th><th class="r">Days</th><th>Reason</th><th></th></tr></thead>
+      <tbody>${wait.map(r => `<tr>
+        <td class="nw">${nm(r.who)}</td>
+        <td class="n nw">${esc(dayText(r))}</td>
+        <td class="n r">${r.days}</td>
+        <td style="color:var(--ink2)">${esc(r.reason)}</td>
+        <td class="r nw"><button class="btn" data-approve-req="${esc(r.id)}" type="button" style="padding:3px 11px;font-size:12.5px">Approve</button>
+          <button class="btn ghost" data-decline-req="${esc(r.id)}" type="button" style="padding:3px 11px;font-size:12.5px;margin-left:6px">Decline</button></td></tr>`).join('')}
+      </tbody></table></div>
+  </section>` : ''}
+
+  <div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>Apply for work from home</h3>
+        <span class="hint">goes to ${nm2(mgrName(u) || 'your manager')}</span></header>
+      <div class="pad">${reqFormBody(u, B, f, false)}</div>
+    </section>
+
+    <section class="panel">
+      <header><h3>List of previous work from home</h3>
+        <span style="margin-left:auto;color:var(--ink3);font-size:12.5px">${wfh.length}</span></header>
+      <div class="tw"><table>
+        <thead><tr><th>Reference</th><th>Dates</th><th class="r">Days</th><th>Reason</th><th>Status</th></tr></thead>
+        <tbody>${wfh.length ? wfh.map(r => `<tr>
+          <td class="n nw">${esc(r.id)}</td>
+          <td class="n nw">${esc(dayLabel(r.from))}${r.from !== r.to ? ' &ndash; ' + esc(dayLabel(r.to)) : ''}</td>
+          <td class="n r">${r.days}</td>
+          <td style="color:var(--ink2)">${esc(r.reason)}</td>
+          <td>${stPill(r.status)}</td></tr>`).join('')
+          : '<tr><td colspan="5" style="color:var(--ink3)">You have not asked to work from home yet.</td></tr>'}
+        </tbody></table></div>
+      <p class="cap">Days at home do not come off any balance. They are shown on the team board so people know where you are.</p>
+    </section>
+  </div>`;
+}
+
+/* The policy itself, on the page the people it applies to are already on.
+ * Read from the same list of types the request form offers, so the two can
+ * never drift: a kind of leave that is not on this table cannot be asked
+ * for, and one that is, is. */
+function vLeavePolicyTab(u){
+  const P = (HR().leavePolicy || {});
+  const pay = t => t.pay === 'full' ? 'Full pay'
+    : t.pay === 'none' ? 'Unpaid'
+    : t.pay === 'scale' ? 'Full, then half, then unpaid' : '—';
+  return `
+  <section class="panel">
+    <header><h3>Leave policy</h3>
+      <span class="pill mute">${P.annualDays} working days a year &middot; ${P.accrualPerMonth} a month</span>
+      <span class="hint">the same rules for everyone</span></header>
+    <div class="tw"><table class="cotab">
+      ${colsOf([20, 17, 12, 17, 34])}
+      <thead><tr><th>Leave</th><th>Pay</th><th class="r">Days</th><th>Comes off your annual balance</th><th>Notes</th></tr></thead>
+      <tbody>${LEAVEONLY().map(t => `<tr>
+        <td><b>${esc(t.label)}</b></td>
+        <td>${esc(pay(t))}</td>
+        <td class="n r">${t.max ? t.max : t.pool ? P.annualDays : t.half ? '\u00bd' : '—'}</td>
+        <td>${t.pool ? '<span class="pill warn"><span class="dt"></span>Yes</span>'
+                     : '<span class="pill mute">No</span>'}</td>
+        <td style="color:var(--ink2)"${full(t.note || '')}>${esc(t.note || '—')}</td></tr>`).join('')}
+      </tbody></table></div>
+    <p class="cap">${esc(P.note || '')} Days are counted in <b>working days</b>, so a weekend or a public holiday
+      inside your dates does not come off the balance. Only <b>annual</b> and <b>Umrah</b> leave draw on the annual
+      balance; everything else is separate and does not touch it.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>How it works</h3></header>
+    <div class="pad"><dl class="kv wide">
+      <dt>Who decides</dt><dd>Your manager, ${nm2(mgrName(u) || '—')}. Accounts is copied so payroll stays right.</dd>
+      <dt>Who is told</dt><dd>Your manager decides it and you are emailed the answer. The team is told once it is approved and again on the first morning &mdash; the dates only, never the reason.</dd>
+      <dt>Carry forward</dt><dd>Days you earn in one leave year can be used until the end of the next one, and the oldest days are used first. Anything still unused from last year lapses on your joining anniversary.</dd>
+      <dt>Unpaid leave</dt><dd>Reduces your working days for the month, which shows as LOP days on your payslip.</dd>
+      <dt>Cancelling</dt><dd>Ask your manager &mdash; an approved request can be withdrawn up to the day before it starts.</dd>
+      <dt>Public holidays</dt><dd>${(HR().holidays || []).length} in ${String(HDATE()).slice(0, 4)}, the same for all three companies. They do not come off any balance.</dd>
+    </dl></div>
   </section>`;
 }
 
@@ -1080,8 +1215,8 @@ function vAsk(kind){
 
 function vRequests(){
   const u = state.user, R = HR().requests;
-  const mine = R.filter(r=>r.who===u).slice().sort((a,b)=>b.from.localeCompare(a.from));
-  const inbox = R.filter(r=>r.mgr===u && r.status==='Pending');
+  let mine = R.filter(r=>r.who===u).slice().sort((a,b)=>b.from.localeCompare(a.from));
+  let inbox = R.filter(r=>r.mgr===u && r.status==='Pending');
   const B = leaveBal(u);
   const f = state.reqForm || (state.reqForm = {type:'WFH', from:'', to:'', reason:'', half:'am'});
   const team = reportsTo(u);
@@ -1089,7 +1224,26 @@ function vRequests(){
     : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
     : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
 
-  return `
+  /* The tab decides what this page is, and the form follows the tab rather
+   * than a toggle inside it. Leave is what is left once the other two have
+   * taken their own screens, so anything about a day at home leaves here. */
+  const LV = leaveTabs();
+  if(LV.cur === 'wfh'){
+    if(f.type !== 'WFH') f.type = 'WFH';
+    return LV.bar + vWfhTab(u, B, f, mine, inbox);
+  }
+  if(LV.cur === 'policy') return LV.bar + vLeavePolicyTab(u);
+  if(f.type === 'WFH') f.type = 'Annual';
+  mine  = mine.filter(r => r.type !== 'WFH');
+  inbox = inbox.filter(r => r.type !== 'WFH');
+
+  /* The two lines Avin wanted under the three columns rather than inside one
+   * of them: what expires and when, and what a working day means. */
+  const leaveNotes = noLeave(u) ? '' : `
+${B.expiring>0?`<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>${B.expiring} day${B.expiring===1?'':'s'} expire on ${esc(dayLabel(B.expiresOn))} ${B.expiresOn.slice(0,4)}.</b> Days earned in one leave year can be used until the end of the next one, and the oldest days go first &mdash; so anything still unused from last year is lost at your anniversary.</p>`:''}
+        <p class="note" style="margin-top:16px">${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.${B.yearEnd?` Your leave year runs to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}.`:''}</p>`;
+
+  return LV.bar + `
   <div class="strip">
     ${noLeave(u)
       ? `<div class="stat"><span class="k">Annual leave</span><span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Not applicable</span>
@@ -1098,8 +1252,8 @@ function vRequests(){
           <span class="n">${B.carried} on 31 Aug${B.accrued?' plus '+B.accrued+' since':''}${B.taken?', '+B.taken+' taken':''}${B.left<0?' · overdrawn, no leave until it clears':B.after<0?' · '+Math.abs(B.after)+' short on booked leave':B.ahead?' · '+B.ahead+' booked ahead':B.expiring?' · '+B.expiring+' expires '+dayLabel(B.expiresOn):''}</span></div>`}
     <div class="stat"><span class="k">Waiting on a decision</span><span class="v">${B.booked}<span class="cur" style="margin-left:6px">days</span></span>
       <span class="n">${mine.filter(r=>r.status==='Pending').length} request${mine.filter(r=>r.status==='Pending').length===1?'':'s'} with ${nm2(mgrName(u) || 'your manager')}</span></div>
-    <div class="stat"><span class="k">Days from home</span><span class="v">${mine.filter(r=>r.type==='WFH'&&r.status==='Approved').reduce((s,r)=>s+r.days,0)}</span>
-      <span class="n">approved so far this year</span></div>
+    <div class="stat"><span class="k">Taken since 31 Aug</span><span class="v">${B.taken||0}<span class="cur" style="margin-left:6px">days</span></span>
+      <span class="n">annual leave, this leave year</span></div>
     ${team.length?`<div class="stat"><span class="k">Waiting on you</span><span class="v" style="color:var(--${inbox.length?'warn':'good'})">${inbox.length}</span>
       <span class="n">${team.length} people report to you</span></div>`
     :`<div class="stat"><span class="k">Your manager</span><span class="v" style="font-size:16px;font-family:'IBM Plex Sans',sans-serif">${nm2(mgrName(u) || '—')}</span>
@@ -1132,16 +1286,16 @@ function vRequests(){
       </tbody></table></div>`}
   </section>`:''}
 
-  <div class="grid g2">
+  <div class="grid g3 gtop">
     <section class="panel">
-      <header><h3>New request</h3><span class="hint">goes to ${nm2(mgrName(u) || 'your manager')}</span></header>
+      <header><h3>New leave request</h3><span class="hint">goes to ${nm2(mgrName(u) || 'your manager')}</span></header>
       <div class="pad">
-        ${reqFormBody(u, B, f, true)}
+        ${reqFormBody(u, B, f, false)}
       </div>
     </section>
 
     <section class="panel">
-      <header><h3>Your annual leave</h3>${(!noLeave(u) && B.yearNo)?`<span class="pill mute">year ${B.yearNo}</span>`:''}
+      <header><h3>Your leave</h3>${(!noLeave(u) && B.yearNo)?`<span class="pill mute">year ${B.yearNo}</span>`:''}
         <span class="hint">${noLeave(u)?'not on the scheme':(B.doj?'from '+esc(B.doj):'joining date not on file')}</span></header>
       <div class="pad">
         ${noLeave(u) ? `<p style="margin:0;color:var(--ink2);font-size:14.5px">You are not on the annual leave scheme, so there is no balance to show and no leave to request. Working from home still goes through this page. If that is wrong, speak to ${esc(ADMIN.split(' ')[0])}.</p>` : `
@@ -1184,11 +1338,9 @@ function vRequests(){
         })()}
         ${(B.after < 0 && !leaveOwed(u))?`<p class="note" style="margin-top:16px;border-left-color:var(--bad)"><b>Your booked leave is ${Math.abs(B.after)} day${Math.abs(B.after)===1?'':'s'} more than you will have earned by then.</b> You have ${B.left} now and ${B.ahead} booked; ${B.toCome?'another '+B.toCome+' accrues before the last of it, which still leaves you short':'nothing further accrues before it starts'}. Speak to ${esc(NM(mgrName(u))||'your manager')} about shortening it or taking the difference unpaid.</p>`:''}
         ${leaveOwed(u)?`<p class="note" style="margin-top:16px;border-left-color:var(--bad)"><b>You are ${Math.abs(B.left)} day${Math.abs(B.left)===1?'':'s'} overdrawn</b>, so no further leave can be requested. The balance climbs back by ${B.policy.accrualPerMonth} days each month${B.next?`, next on ${esc(dayLabel(B.next))}`:''}. Working from home is unaffected.</p>`:''}
-        ${B.expiring>0?`<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>${B.expiring} day${B.expiring===1?'':'s'} expire on ${esc(dayLabel(B.expiresOn))} ${B.expiresOn.slice(0,4)}.</b> Days earned in one leave year can be used until the end of the next one, and the oldest days go first &mdash; so anything still unused from last year is lost at your anniversary.</p>`:''}
-        <p class="note" style="margin-top:16px">${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.${B.yearEnd?` Your leave year runs to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}.`:''}</p>`}
+        `}
       </div>
     </section>
-  </div>
 
   <section class="panel">
     <header><h3>How it works</h3></header>
@@ -1200,7 +1352,10 @@ function vRequests(){
       <dt>Unpaid leave</dt><dd>Reduces your working days for the month, which shows as LOP days on your payslip.</dd>
       <dt>Cancelling</dt><dd>Ask your manager — an approved request can be withdrawn up to the day before it starts.</dd>
     </dl></div>
-  </section>
+    </section>
+  </div>
+
+  ${leaveNotes}
 
   <section class="panel">
     <header><h3>Your requests</h3><span style="margin-left:auto;color:var(--ink3);font-size:12.5px">${mine.length}</span></header>
@@ -1307,7 +1462,7 @@ function vOrg(){
   return ['corplex','poa','lex'].map(k=>DATA.companies[k]).filter(Boolean).map(c=>{
     const roll = USERS.map(x=>x.name).filter(n => coOfOrg(n) === c.key);
     const byDept = {};
-    roll.forEach(n => { const d = orgDeptOf(n) || 'Not assigned'; (byDept[d]=byDept[d]||[]).push(n); });
+    roll.forEach(n => { const d = orgDeptOf(n) || 'No department set'; (byDept[d]=byDept[d]||[]).push(n); });
     const rev = REVDEPT(c.key);
     const order = Object.keys(byDept).sort((a,b)=>{
       const r = d => rev.includes(d) ? 0 : 1;
@@ -1326,7 +1481,9 @@ function vOrg(){
       </div>
     </section>`;
   }).join('') + `
-  <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Grouped by department. A department in the accent colour earns revenue and appears in that company&rsquo;s performance pages; a grey one is support. Managers are listed first within their department. ${esc(owner)} heads all three companies, so he sits at the top of each tree rather than inside a department. Click anyone to open their page &mdash; their card shows who they report to.</p>`;
+  <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Grouped by department. A department in the accent colour earns revenue and appears in that company&rsquo;s performance pages; a grey one is support. Managers are listed first within their department. ${esc(owner)} heads all three companies, so he sits at the top of each tree rather than inside a department. Click anyone to open their page &mdash; their card shows who they report to.
+  <b>No department set</b> is not a department: it is everyone who has not been given one yet, and it disappears
+  as they are.</p>`;
 }
 
 function vPeople(){
@@ -1397,10 +1554,15 @@ function vPeople(){
   }
 
   // ---- the directory ----
-  const TABSP = [['all','Everyone'],['corplex','CorpLex'],['poa','POA'],['lex','Lex Estates'],['org','Organisation']];
-  const ptab = TABSP.some(t=>t[0]===state.peopleTab) ? state.peopleTab : 'all';
+  const TABSP = [['corplex','CorpLex'],['poa','POA'],['lex','Lex Estates'],
+                 ['all','Everyone'],['org','Organisation']];
+  // no tab chosen yet means the viewer's own company, if they have one here
+  const myCo = companyOf(state.user).key;
+  const ptab = TABSP.some(t=>t[0]===state.peopleTab) ? state.peopleTab
+             : (TABSP.some(t=>t[0]===myCo) ? myCo : 'all');
   const bar = `<div class="seg segbig" id="peopleSeg">${TABSP.map(([v,l])=>
-    `<button data-pt="${v}" aria-pressed="${ptab===v}" type="button">${esc(l)}</button>`).join('')}</div>`;
+    `<button data-pt="${v}" aria-pressed="${ptab===v}" type="button"${
+      v==='org'?' class="orgtab"':''}>${esc(l)}</button>`).join('')}</div>`;
   if(ptab === 'org') return bar + vOrg();
 
   const today = HDATE();
@@ -1439,7 +1601,7 @@ function vPeople(){
   </div>
 
   <section class="panel">
-    <header><h3>Everyone</h3>
+    <header><h3>${ptab === 'all' ? 'Everyone' : esc((DATA.companies[ptab]||{}).name || 'Everyone')}</h3>
       <span class="hint">${shown} of ${roll.filter(inTab).length} ${shown===1?'person':'people'}</span></header>
     <div class="pad" style="padding-bottom:6px">
       <input id="peopleQ" placeholder="Search a name, a job title, a company" value="${esc(state.peopleQ||'')}" style="max-width:420px">
@@ -1560,7 +1722,7 @@ function vHRAdmin(){
       ${byCompany(list, {
         who: n => n,
         cols: colsOf([30, 34, 36]),
-        head: `<thead><tr><th>Employee</th><th>Shift</th><th>Approved by</th></tr></thead>`,
+        head: `<thead><tr><th>Employee</th><th>Shift</th><th>Reports to</th></tr></thead>`,
         row: n => `<tr><td class="nw">${esc(n)}</td>
           <td><select class="ff" data-shift="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
             ${SHIFTS().map(s=>`<option value="${esc(s.id)}"${shiftOf(n).id===s.id?' selected':''}>${esc(s.label)} &middot; ${esc(s.start)}&ndash;${esc(s.end)}</option>`).join('')}
@@ -1571,7 +1733,10 @@ function vHRAdmin(){
           </select></td></tr>`,
         empty: 'Nobody on the shift list yet.'
       })}
-      <p class="cap">Three shifts: ${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus ${HR().hours.grace} minutes. I have assumed consultants report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the approvals follow it.</p>
+      <p class="cap">Three shifts: ${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus ${HR().hours.grace} minutes.
+        <b>A shift needs no approval</b> &mdash; set it and it applies. The second column is the reporting line, which is a
+        different thing: it is who receives that person's leave and work-from-home requests. I have assumed consultants
+        report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the requests follow it.</p>
     </section>
   </div>
 
@@ -1606,15 +1771,47 @@ function vHRAdmin(){
   </section>
 
   <section class="panel">
-    <header><h3>Public holidays 2026</h3><span class="hint">the moving dates need confirming</span></header>
-    <div class="tw"><table>
-      <thead><tr><th>Date</th><th>Day</th><th>Holiday</th><th>Status</th></tr></thead>
+    <header><h3>Public holidays ${String(HDATE()).slice(0,4)}</h3>
+      <span class="pill mute">${(HR().holidays||[]).length} days</span>
+      <span class="hint" style="margin-left:auto">${canUpload(state.user)
+        ? 'change a date and it saves' : 'accounts keeps these'}</span></header>
+    <div class="tw"><table class="cotab">
+      ${colsOf([16, 11, 34, 21, 12])}
+      <thead><tr><th>Date</th><th>Day</th><th>Holiday</th><th>Kind</th><th></th></tr></thead>
       <tbody>${(HR().holidays||[]).map(h=>`<tr${h.d<HDATE()?' style="color:var(--ink3)"':''}>
-        <td class="n nw">${esc(dayLabel(h.d))} ${h.d.slice(0,4)}</td><td class="nw">${esc(dayName(h.d))}</td>
-        <td>${esc(h.n)}</td>
-        <td>${h.fixed?'<span class="pill good"><span class="dt"></span>Fixed date</span>':'<span class="pill warn"><span class="dt"></span>Confirm — moves with the moon</span>'}</td></tr>`).join('')}
+        <td>${canUpload(state.user)
+          ? `<input class="ff" type="date" data-holdate="${esc(h.d)}" value="${esc(h.d)}">`
+          : esc(dayLabel(h.d)) + ' ' + h.d.slice(0,4)}</td>
+        <td class="nw">${esc(dayName(h.d))}</td>
+        <td>${canUpload(state.user)
+          ? `<input class="ff" data-holname="${esc(h.d)}" value="${esc(h.n)}">`
+          : esc(h.n)}</td>
+        <td>${canUpload(state.user)
+          ? `<select class="ff" data-holfixed="${esc(h.d)}">
+              <option value="1"${h.fixed?' selected':''}>Fixed date</option>
+              <option value="0"${h.fixed?'':' selected'}>Moves with the moon</option>
+            </select>`
+          : (h.fixed?'<span class="pill good"><span class="dt"></span>Fixed date</span>'
+                    :'<span class="pill warn"><span class="dt"></span>Moves with the moon</span>')}</td>
+        <td class="r">${canUpload(state.user)
+          ? `<button class="btn ghost sm" data-holdrop="${esc(h.d)}" type="button">Remove</button>` : ''}</td></tr>`).join('')}
       </tbody></table></div>
-    <p class="cap">The Islamic holidays shift each year and are announced by the government, so please check these against the official 2026 calendar before anyone relies on them.</p>
+    ${canUpload(state.user) ? `<div class="pad" style="padding-top:14px">
+      <div class="grid g3" style="gap:12px;align-items:end">
+        <div class="field" style="margin:0"><label for="holNewD">Add a holiday</label>
+          <input id="holNewD" type="date" value="${esc(state.holNew && state.holNew.d || '')}"></div>
+        <div class="field" style="margin:0"><label for="holNewN">What it is called</label>
+          <input id="holNewN" value="${esc(state.holNew && state.holNew.n || '')}" placeholder="Eid Al Fitr"></div>
+        <div class="drow" style="margin:0">
+          <button class="btn" id="holAdd" type="button"${(state.holNew && state.holNew.d && state.holNew.n)?'':' disabled'}>Add</button>
+        </div>
+      </div>
+    </div>` : ''}
+    <p class="cap">The Islamic holidays shift each year and are announced by the government, which is why they
+      are marked as moving &mdash; check those against the official calendar before anyone relies on them.
+      A holiday is the same for all three companies, it does not come off anybody&rsquo;s leave balance, and a
+      day of leave that falls on one is not counted against it. Moving a date deletes the old one and writes
+      the new, because that is what moving it is.</p>
   </section>`;
 }
 
@@ -2162,6 +2359,7 @@ function vLetters(){
   const open = state.ltOpen ? L.find(x=>x.id===state.ltOpen) : null;
   const stPill = s => s==='Issued' ? '<span class="pill good"><span class="dt"></span>Issued</span>'
     : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : s==='Cancelled' ? '<span class="pill mute">Withdrawn</span>'
     : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
   return `
   ${adm && inbox.length?`
@@ -2187,7 +2385,8 @@ function vLetters(){
       <div class="pad">
         <div class="field"><label for="ltType">What do you need</label>
           <select id="ltType">${(HR().letterTypes||[]).filter(x=>!x.issueOnly).map(x=>`<option value="${esc(x.id)}"${f.type===x.id?' selected':''}>${esc(x.label)}</option>`).join('')}</select></div>
-        ${t.needsAddressee?`<div class="field"><label for="ltTo">Addressed to</label><input id="ltTo" placeholder="Bank, embassy or authority" value="${esc(f.to)}"></div>`:''}
+        <div class="field"><label for="ltTo">Addressed to${t.needsAddressee?'':' <i style="font-style:normal;color:var(--ink3);font-weight:400">— optional</i>'}</label>
+          <input id="ltTo" placeholder="${t.needsAddressee?'Bank, embassy or authority':'Leave it blank for &ldquo;To whom it may concern&rdquo;'}" value="${esc(f.to)}"></div>
         <div class="field"><label for="ltWhy">What it is for</label><input id="ltWhy" placeholder="A line is enough" value="${esc(f.why)}"></div>
         <button class="btn wide" id="ltSubmit" type="button"${(f.why && (!t.needsAddressee || f.to))?'':' disabled'}>Send the request</button>
         ${state.ltSent?`<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Sent.</b> ${esc(ADMIN.split(' ')[0])} is emailed now, and you will get the letter here as soon as it is issued.</div>`:''}
@@ -2199,7 +2398,7 @@ function vLetters(){
         <dt>Who issues it</dt><dd>${esc(ADMIN)} in accounts. Nobody else sees your request.</dd>
         <dt>How long</dt><dd>Same day in most cases — you are emailed the moment it is ready.</dd>
         <dt>What it says</dt><dd>Your name, designation, joining date and, on a salary certificate, your salary breakdown — printed on your company's letterhead.</dd>
-        <dt>Getting it</dt><dd>Open it here and print or save as PDF. Ask accounts if you need it stamped.</dd>
+        <dt>Getting it</dt><dd>Accounts create the letter, sign it and send it to you &mdash; it also stays here to open, print or save as a PDF. Stamping is separate and is usually Admin&rsquo;s job, so ask them if you need a stamp.</dd>
       </dl></div>
     </section>
   </div>
@@ -2214,7 +2413,11 @@ function vLetters(){
         <td class="n nw">${esc(x.id)}</td><td class="nw">${esc(LTYPE(x.type).label)}</td>
         <td class="nw" style="color:var(--ink2)">${esc(x.to||'—')}</td>
         <td class="n nw">${esc(dayLabel(x.asked))}</td><td>${stPill(x.status)}</td>
-        <td class="r">${x.status==='Issued'?`<button class="btn ghost" data-lt-view="${esc(x.id)}" type="button" style="padding:3px 10px;font-size:12.5px">${state.ltOpen===x.id?'Hide':'View'}</button>`:''}</td></tr>`).join('')
+        <td class="r">${x.status==='Issued'
+            ? `<button class="btn ghost" data-lt-view="${esc(x.id)}" type="button" style="padding:3px 10px;font-size:12.5px">${state.ltOpen===x.id?'Hide':'View'}</button>`
+            : (x.status==='Pending' && x.who===u)
+            ? `<button class="btn ghost" data-ltpull="${esc(x.id)}" type="button" style="padding:3px 10px;font-size:12.5px">Withdraw</button>`
+            : ''}</td></tr>`).join('')
         :`<tr><td colspan="${adm?7:6}" style="color:var(--ink3)">Nothing requested yet.</td></tr>`}
       </tbody></table></div>
   </section>
@@ -2304,6 +2507,7 @@ function vLoans(){
   const perMonth = active.reduce((s,x)=>s+x.monthly,0);
   const stPill = s => s==='Approved' ? '<span class="pill good"><span class="dt"></span>Approved</span>'
     : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : s==='Cancelled' ? '<span class="pill mute">Withdrawn</span>'
     : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
   const allActive = L.filter(x=>x.status==='Approved');
 
@@ -2377,7 +2581,10 @@ function vLoans(){
         <td class="n r">${money(x.monthly,2)}</td><td class="nw">${esc(x.start||'—')}</td>
         <td class="n r">${money(x.paid||0,2)}</td>
         <td class="n r netcol"${loanLeft(x)>0?' style="color:var(--warn)"':''}>${x.status==='Approved'?money(loanLeft(x),2):'—'}</td>
-        <td style="color:var(--ink2)">${esc(x.why)}</td><td>${stPill(x.status)}</td></tr>`).join('')
+        <td style="color:var(--ink2)">${esc(x.why)}</td>
+        <td>${stPill(x.status)}${(x.status==='Pending' && (x.who===u || x.who===myLoanName(u)))
+          ? ` <button class="btn ghost sm" data-lnpull="${esc(x.id)}" type="button"
+                style="padding:2px 9px;font-size:11.5px;margin-left:6px">Withdraw</button>` : ''}</td></tr>`).join('')
         :`<tr><td colspan="${adm?9:8}" style="color:var(--ink3)">Nothing yet.</td></tr>`}
         ${adm?`<tr class="tot"><td>${allActive.length} running</td><td></td>
           <td class="n r">${money(allActive.reduce((s,x)=>s+x.amount,0),2)}</td>
@@ -3772,17 +3979,46 @@ function calcPOA(){
     <div class="feegrid">${pos.map(block).join('')}</div>`;
 }
 
+function calcTabs(){
+  const T = [['card', 'Card processing fee'], ['mattia', "Mattia's commission"]];
+  const cur = T.some(x => x[0] === state.calcTab) ? state.calcTab : 'card';
+  return {cur, bar: `<div class="seg segbig" id="calcSeg">${T.map(([v, l]) =>
+    `<button data-ct="${v}" aria-pressed="${cur === v}" type="button">${esc(l)}</button>`).join('')}</div>`};
+}
+
+/* Deliberately empty, and deliberately not a mock-up. */
+function vMattia(){
+  return `
+  <section class="panel">
+    <header><h3>Mattia&rsquo;s commission</h3><span class="hint">not built yet</span></header>
+    <div class="pad">
+      <p style="margin:0 0 14px;color:var(--ink2);font-size:15px">Nothing here yet &mdash; I do not know
+        what this one works out, and a calculator that guesses is worse than an empty tab.</p>
+      <p style="margin:0 0 12px;color:var(--ink2);font-size:14.5px">Four things and it can be built:</p>
+      <dl class="kv wide">
+        <dt>What goes in</dt><dd>The figures you would type &mdash; an invoice value, a rate, a number of something.</dd>
+        <dt>What comes out</dt><dd>The figure you want at the end, and whether anything sits between the two.</dd>
+        <dt>The formula</dt><dd>However you do it now, even if that is a line in a spreadsheet. The card tab
+          reproduces your workbook's formulas exactly rather than a tidier version, and this should too.</dd>
+        <dt>Who sees it</dt><dd>Everyone, or accounts only.</dd>
+      </dl>
+    </div>
+  </section>`;
+}
+
 function vTools(){
+  const CT = calcTabs();
   const k = activeCo().key;
-  if(k === 'poa') return vToolsPOA();
-  if(k !== 'corplex') return `
+  if(CT.cur === 'mattia') return CT.bar + vMattia();
+  if(k === 'poa') return CT.bar + vToolsPOA();
+  if(k !== 'corplex') return CT.bar + `
   <section class="panel">
     <div class="pad" style="padding:52px 24px;text-align:center;color:var(--ink3)">
       <p style="margin:0 0 6px;color:var(--ink2);font-size:15px">No card fee arrangement is set up for ${esc(activeCo().name)}.</p>
       <p style="margin:0;font-size:13.5px">Tell accounts what the rates are and it will appear here.</p>
     </div>
   </section>`;
-  return `
+  return CT.bar + `
   <section class="panel">
     <header><h3>Card processing fee</h3><span class="hint">what to charge so the invoice is settled in full</span></header>
     <div class="pad" style="display:flex;flex-direction:column;gap:16px">
@@ -5499,8 +5735,12 @@ function slipHTML(s, printable){
     </div>
   </article>`;
 }
-function ciClock(open){
-  return `<b class="ciclock" data-since="${esc(open.in)}"><span class="cidot"></span><span class="citime">0:00:00</span></b>`;
+const FULLDAY = () => (HR().hours && HR().hours.fullDay) || 9 * 60;
+
+/* The clock shows the day, not the segment. The base is everything already
+ * closed today; the ticker adds it to the time since the open check-in. */
+function ciClock(open, before){
+  return `<b class="ciclock" data-since="${esc(open.in)}" data-base="${Math.max(0, Math.round(before || 0))}"><span class="cidot"></span><span class="citime">0:00:00</span></b>`;
 }
 function payrollRowFor(user){
   const rows = DATA.payroll.rows.filter(r=>!r.dummy);
@@ -5693,21 +5933,21 @@ function vMyTicket(){
       <span class="n">${me.pending?'worth AED '+money(me.backlog,0)+', still owed to you':'you are up to date'}</span></div>
   </div>
 
-  <section class="panel">
-    <header><h3>Where you stand</h3>${isDue&&air?'<span class="pill good"><span class="dt"></span>Paid this month</span>':(me.lastPaid==='31 Aug 2026'?'<span class="pill good"><span class="dt"></span>Paid in August</span>':'')}</header>
-    <div class="pad" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,440px);gap:28px;align-items:start">
-      <p style="font-size:15.5px;color:var(--ink);margin:0">${esc(statusLine)}</p>
-      <dl class="kv">
-        <dt>Employee ID</dt><dd>${esc(me.id)}</dd>
-        <dt>Home country</dt><dd style="font-family:inherit">${esc(me.country)}</dd>
-        <dt>Date joined</dt><dd>${esc(me.doj)}</dd>
-        <dt>Last ticket taken</dt><dd>${esc(me.lastPaid)||'—'}</dd>
-        <dt>Unclaimed value</dt><dd>${me.backlog?money(me.backlog,2):'—'}</dd>
-      </dl>
-    </div>
-  </section>
+  <div class="grid g3 gtop">
+    <section class="panel">
+      <header><h3>Where you stand</h3>${isDue&&air?'<span class="pill good"><span class="dt"></span>Paid this month</span>':(me.lastPaid==='31 Aug 2026'?'<span class="pill good"><span class="dt"></span>Paid in August</span>':'')}</header>
+      <div class="pad">
+        <p style="font-size:15px;color:var(--ink);margin:0 0 16px">${esc(statusLine)}</p>
+        <dl class="kv">
+          <dt>Employee ID</dt><dd>${esc(me.id)}</dd>
+          <dt>Home country</dt><dd style="font-family:inherit">${esc(me.country)}</dd>
+          <dt>Date joined</dt><dd>${esc(me.doj)}</dd>
+          <dt>Last ticket taken</dt><dd>${esc(me.lastPaid)||'—'}</dd>
+          <dt>Unclaimed value</dt><dd>${me.backlog?money(me.backlog,2):'—'}</dd>
+        </dl>
+      </div>
+    </section>
 
-  <div class="grid g2">
     <section class="panel">
       <header><h3>Your tickets so far</h3><span class="hint">what was actually paid</span></header>
       <div class="tw"><table>
@@ -6238,7 +6478,8 @@ function vAdmin(){
   // who has left keeps the company they left from, which is what makes a
   // year-to-date figure add up.
   const staff = USERS.map(u=>u.name).concat(FORMER)
-    .filter(n => !state.salesCo || companyOf(n).key === state.salesCo);
+    .filter(n => !!salesCoOf(n))                       // sells for somebody, or is not on this page
+    .filter(n => !state.salesCo || salesCoOf(n) === state.salesCo);
   const upl = canUpload(state.user);
   const W = WHERE(), O = OFFICE();
   return `
@@ -6404,22 +6645,31 @@ function vAdmin(){
         <div class="seg" style="margin-left:auto">${
           [['', 'Everyone'], ['corplex','CorpLex'], ['poa','POA'], ['lex','Lex Estates']]
             .map(([k,l])=>`<button data-sco="${k}" aria-pressed="${(state.salesCo||'')===k}" type="button">${esc(l)}</button>`).join('')}</div></header>
-      <div class="tw" style="max-height:340px;overflow-y:auto"><table>
+      <div class="tw"><table class="cotab">
+        ${colsOf([34, 22, 22, 22])}
         <thead><tr><th>Name</th><th>Role</th><th>Commission</th><th class="r">${state.period==="FY"?"2026":state.period} net sales</th></tr></thead>
         <tbody>${staff.map(n=>{const e=aggOf(n,state.period)||{netTot:0,deptOk:'Yes'};
           const mg = DATA.managers && DATA.managers[n];
           const fmr = roleOf(n)==='former';
           return `<tr${fmr?' style="color:var(--ink3)"':''}><td>${esc(n)}${mg?' <span class="pill" style="background:var(--accentSoft);color:var(--accent2)">Override '+pct(mg.rate,0)+'</span>':''}</td><td>${esc(ROLELABEL[roleOf(n)])}</td><td>${fmr?'<span class="pill mute">Deactivated</span>':(isFlat(e)?'<span class="pill mute">Flat 20%</span>':'<span class="pill good"><span class="dt"></span>Banded</span>')}</td><td class="n r">${money(e.netTot||0)}</td></tr>`}).join('')}</tbody>
       </table></div>
+      <p class="cap">Somebody appears here when their department is one that earns revenue for their
+        company &mdash; ${Object.entries(HR().revDept||{}).map(([k,v])=>
+          esc((DATA.companies[k]||{}).name || k) + ': ' + v.map(esc).join(', ')).join(' &middot; ')}
+        &mdash; or when they are named as an exception. Support departments do not appear, because a
+        marketing specialist showing zero net sales reads as a consultant who sold nothing.</p>
     </section>
 
     <section class="panel">
-      <header><h3>Referral partners</h3><span class="hint">Company Master</span></header>
-      <div class="tw" style="max-height:340px;overflow-y:auto"><table>
+      <header><h3>Referral partners</h3>
+        <span class="pill mute">CorpLex only</span>
+        <span class="hint" style="margin-left:auto">Company Master</span></header>
+      <div class="tw"><table>
         <thead><tr><th>Client</th><th class="r">Partner rate</th></tr></thead>
         <tbody>${DATA.partners.map(p=>`<tr><td>${esc(p.name)}</td><td class="n r">${pct(p.rate,0)}</td></tr>`).join('')}</tbody>
       </table></div>
-      <p class="cap">Clients not listed here attract no partner commission.</p>
+      <p class="cap">Clients not listed here attract no partner commission. These rates are CorpLex&rsquo;s
+        and come from its Company Master; POA and Lex Estates have no referral arrangement in the portal.</p>
     </section>
   </div>`;
 }
@@ -6433,7 +6683,7 @@ const TABS = [
   {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&inSales(u)},
   {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:inSales},
   {id:'company',     group:'wider', label:'Department',       title:'Department', gate:inSales},
-  {id:'tools',       group:'other', label:'Card fee calculator', title:'Card fee calculator'},
+  {id:'tools',       group:'other', label:'Calculator', title:'Calculator'},
   // payment requests are a CorpLex process; POA and Lex do not use them
   {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
   {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
@@ -6836,6 +7086,29 @@ function vLeaveRules(){
       <p class="cap">A year of sickness runs down the ladder in that order once probation is over.
         The portal shows each person what is left of each rung on their own leave page.</p>
     </div>
+  </section>
+
+  <section class="panel">
+    <header><h3>Every other kind of leave</h3>
+      <span class="hint" style="margin-left:auto">what staff can ask for, and what each one costs</span></header>
+    <div class="tw"><table class="cotab">
+      ${colsOf([18, 16, 9, 14, 43])}
+      <thead><tr><th>Leave</th><th>Pay</th><th class="r">Days</th><th>Off the annual balance</th><th>Rule</th></tr></thead>
+      <tbody>${LEAVEONLY().filter(t => !['Annual','Sick'].includes(t.id)).map(t => `<tr>
+        <td><b>${esc(t.label)}</b></td>
+        <td>${esc(t.pay === 'full' ? 'Full pay' : t.pay === 'none' ? 'Unpaid'
+              : t.pay === 'scale' ? 'Full, then half, then unpaid' : '—')}</td>
+        <td class="n r">${t.max ? t.max : t.half ? '\u00bd' : t.pool ? LF().annual : '—'}</td>
+        <td>${t.pool ? '<span class="pill warn"><span class="dt"></span>Yes</span>'
+                    : '<span class="pill mute">No</span>'}</td>
+        <td style="color:var(--ink2)"${full(t.note || '')}>${esc(t.note || '—')}</td></tr>`).join('')}
+      </tbody></table></div>
+    <p class="cap">These follow UAE law rather than a setting, which is why there are no boxes to type in:
+      the entitlements are statutory minimums and changing one is a policy decision, not a number.
+      Staff see the same table on the <b>Leave policy</b> tab of their own Leave &amp; WFH page.
+      <b>Study leave</b> is new &mdash; ten working days a year to sit examinations, after two years of service,
+      at an institution in the UAE (Federal Decree-Law 33 of 2021, article 32(2)). The law does not say whether
+      it is paid; this treats it as paid.</p>
   </section>`;
 }
 
@@ -7014,6 +7287,47 @@ function render(){
     const rt = document.getElementById('rawText');
     if(rt) rt.onclick = ()=>rt.select(); }
   document.querySelectorAll('#peopleSeg button').forEach(b=>b.onclick=()=>{ state.peopleTab=b.dataset.pt; state.who=null; render(); });
+  document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });
+  document.querySelectorAll('#calcSeg button').forEach(b=>b.onclick=()=>{ state.calcTab=b.dataset.ct; render(); });
+  document.querySelectorAll('[data-holdate]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holdate;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value) return;
+    await window.__db.editHoliday(was, {on_date: el.value, name: h.n, fixed: h.fixed});
+    render();
+  });
+  document.querySelectorAll('[data-holname]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holname;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value.trim()) return;
+    await window.__db.editHoliday(was, {on_date: was, name: el.value.trim(), fixed: h.fixed});
+    render();
+  });
+  document.querySelectorAll('[data-holfixed]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holfixed;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h) return;
+    await window.__db.editHoliday(was, {on_date: was, name: h.n, fixed: el.value === '1'});
+    render();
+  });
+  document.querySelectorAll('[data-holdrop]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.removeHoliday(b.dataset.holdrop);
+    render();
+  });
+  {
+    const d = document.getElementById('holNewD'), n = document.getElementById('holNewN'),
+          go = document.getElementById('holAdd');
+    const keep = () => { state.holNew = {d: d ? d.value : '', n: n ? n.value : ''}; render(); };
+    if(d) d.onchange = keep;
+    if(n) n.oninput = () => { state.holNew = {d: d ? d.value : '', n: n.value};
+      if(go) go.disabled = !(state.holNew.d && state.holNew.n.trim()); };
+    if(go) go.onclick = async () => {
+      go.disabled = true;
+      /* Fixed is the safe default to write: a fixed date that turns out to
+       * move is corrected once; a moving one left unconfirmed is a day
+       * somebody plans around and then does not get. */
+      await window.__db.addHoliday({on_date: state.holNew.d, name: state.holNew.n.trim(), fixed: true});
+      state.holNew = null; render();
+    };
+  }
   document.querySelectorAll('#askSeg button').forEach(b=>b.onclick=()=>{ state.askTab=b.dataset.ask; state.ltOpen=null; render(); });
   document.querySelectorAll('#deptSeg button').forEach(b=>b.onclick=()=>{ state.deptView=b.dataset.dv; render(); });
   document.querySelectorAll('#attMonthSeg button').forEach(b=>b.onclick=()=>{ state.attMonth=b.dataset.am; render(); });
@@ -7324,6 +7638,16 @@ function render(){
       approver:loanApprover(amt), asked:HDATE(), decided:'', start:HDATE().slice(0,7), paid:0});
     window.__db.newLoan(L[0]);
     state.lnForm={amount:'',months:'',why:'',plan:''}; state.lnSent=true; render(); };
+  document.querySelectorAll('[data-lnpull]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.cancelLoan(b.dataset.lnpull);
+    render();
+  });
+  document.querySelectorAll('[data-ltpull]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.cancelLetter(b.dataset.ltpull);
+    render();
+  });
   document.querySelectorAll('[data-ln-ok]').forEach(b=>b.onclick=()=>{
     const x=HR().loans.find(y=>y.id===b.dataset.lnOk); if(x){x.status='Approved'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Approved');} render(); });
   document.querySelectorAll('[data-ln-no]').forEach(b=>b.onclick=()=>{
@@ -7841,7 +8165,7 @@ setInterval(() => {
     if(isNaN(h) || isNaN(m)) return;
     const now = new Date();
     const start = new Date(now); start.setHours(h, m, 0, 0);
-    let s = Math.floor((now - start) / 1000);
+    let s = Math.floor((now - start) / 1000) + (+el.dataset.base || 0) * 60;
     if(s < 0) s = 0;                                  // checked in after midnight
     const out = el.querySelector('.citime');
     const txt = Math.floor(s/3600) + ':'
@@ -7937,7 +8261,8 @@ function regularPanel(u){
   const f = state.rgForm || (state.rgForm = {d:'', in:'', out:'', reason:''});
   const none = R.left <= 0;
   const pickable = missing.slice(0, 40);
-  const ok = f.d && f.reason.trim().length > 3 && (f.in || f.out) && !none;
+  const ok = f.d && missing.some(m => m.d === f.d)
+    && f.reason.trim().length > 3 && (f.in || f.out) && !none;
   return `
   <section class="panel">
     <header><h3>Fix a day you missed</h3>
@@ -7947,10 +8272,18 @@ function regularPanel(u){
       ${missing.length ? `
       <div class="rgform">
         <label><span>Which day</span>
-          <select id="rgDay">
-            <option value="">Choose a day\u2026</option>
-            ${pickable.map(m => `<option value="${m.d}"${f.d===m.d?' selected':''}>${esc(dayName(m.d))} ${esc(dayLabel(m.d))} \u2014 ${esc(m.what)}</option>`).join('')}
-          </select></label>
+          <input id="rgDay" type="date" value="${esc(f.d)}"
+            min="${esc(pickable[pickable.length-1].d)}" max="${esc(pickable[0].d)}">
+          <span class="pfhint">${(() => {
+            const hit = missing.find(m => m.d === f.d);
+            if(!f.d) return `${missing.length} day${missing.length===1?'':'s'} to fix &mdash; ${
+              esc(dayName(missing[0].d))} ${esc(dayLabel(missing[0].d))}${
+              missing.length>1 ? ' is the most recent' : ''}`;
+            return hit
+              ? `${esc(dayName(f.d))} ${esc(dayLabel(f.d))} &mdash; ${esc(hit.what)}`
+              : '<b style="color:var(--bad)">Nothing is missing on that day.</b> Pick one of the '
+                + missing.length + ' that are.';
+          })()}</span></label>
         <label><span>Checked in at</span><input id="rgIn" type="time" value="${esc(f.in)}"></label>
         <label><span>Checked out at</span><input id="rgOut" type="time" value="${esc(f.out)}"></label>
         <label class="wide"><span>What happened</span>
