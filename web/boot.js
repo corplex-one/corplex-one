@@ -76,7 +76,9 @@ const TABLES = {
   sales_commission: ['sales_commission'],
   sales_company:    ['sales_company'],
   sales_bands:      ['sales_bands'],
-  sales_uploads:    ['sales_uploads']
+  sales_uploads:    ['sales_uploads'],
+  payment_requests: ['payment_requests'],
+  payment_files:    ['payment_files']
 };
 
 // PostgREST caps a request at a thousand rows; the invoices alone are more
@@ -123,6 +125,18 @@ async function signDocuments(DATA){
 }
 
 /* Everyone's photograph, because the directory shows them all. */
+/* The documents attached to a payment request, for whoever may see them. */
+async function signPayments(DATA){
+  const paths = [];
+  (DATA.payments || []).forEach(r => (r.files || []).forEach(f => { if(f.path) paths.push(f.path); }));
+  if(!paths.length) return;
+  const {data, error} = await sb.storage.from('payments').createSignedUrls(paths, 3600);
+  if(error || !data) return;
+  const byPath = Object.fromEntries(data.map(d => [d.path, d.signedUrl]));
+  (DATA.payments || []).forEach(r => (r.files || []).forEach(f => {
+    if(f.path && byPath[f.path]) f.url = byPath[f.path]; }));
+}
+
 async function signPhotos(DATA){
   const want = [];
   Object.values(DATA.hr.profile || {}).forEach(p => {
@@ -158,6 +172,7 @@ async function start(session){
   DATA._session = {email: session.user.email, employeeId: ME.id};
   await signDocuments(DATA);
   await signPhotos(DATA);
+  await signPayments(DATA);
   window.__DATA = DATA;
   window.__ME   = ME.full_name;
   window.__ROLES = DATA._roles[ME.full_name] || ['staff'];
@@ -226,6 +241,10 @@ const reload = async () => {
   DB = await loadAll();
   const d = buildData(DB, ME.id);
   Object.keys(d).forEach(k => { window.__DATA[k] = d[k]; });
+  // A rebuild throws away the signed links with the rows they were on, so the
+  // documents on a payment request would go from openable to not by the act of
+  // approving it. Sign them again before anything is drawn.
+  await signPayments(window.__DATA);
   if(typeof window.render === 'function') window.render();
 };
 
@@ -646,6 +665,94 @@ window.__db = {
       });
       if(error) throw error;
     }catch(e){ oops(e, 'Your announcement'); await reload(); }
+  },
+
+  // ---- payment requests -------------------------------------------------
+  //
+  // Documents and the row are written together, and in that order: the file
+  // goes to the bucket under the request's own id, then the row that says it
+  // exists. A row with no file behind it is how the documents screen went
+  // wrong the first time, and this does not repeat it — a failed upload leaves
+  // no row, and the request simply has one fewer document.
+
+  async raisePayment(f, files){
+    try{
+      const {data, error} = await sb.rpc('raise_payment_request', {
+        p_payee: f.payee, p_purpose: f.purpose, p_amount: Number(f.amount),
+        p_mode: f.mode, p_order: f.order || null, p_client: f.client || null,
+        p_extra: f.extra || null});
+      if(error) throw error;
+      const bad = [];
+      for(const file of (files || []).slice(0, 5)){
+        const ok = await this.attachPayment(data.id, file, true);
+        if(!ok) bad.push(file.name);
+      }
+      await reload();
+      return {...data, notAttached: bad};
+    }catch(e){ oops(e, 'The payment request'); await reload(); return null; }
+  },
+
+  /* Attaching, on its own or as part of raising. `quiet` is for the second
+   * case: the request itself was made, so a failed attachment is reported
+   * beside it rather than as its own alarm. */
+  async attachPayment(requestId, file, quiet){
+    const MAX = 10 * 1024 * 1024;
+    try{
+      if(file.size > MAX) throw new Error('Keep each document under 10 MB.');
+      // The name is kept, but made safe to put in a path, and made unique so
+      // two invoices called invoice.pdf do not overwrite one another.
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-60);
+      const path = `${requestId}/${Date.now()}-${safe}`;
+      const {error: upErr} = await sb.storage.from('payments')
+        .upload(path, file, {upsert: false, contentType: file.type || undefined});
+      if(upErr) throw upErr;
+      const {error} = await sb.rpc('attach_payment_file', {
+        p_id: requestId, p_name: file.name, p_path: path,
+        p_mime: file.type || null, p_bytes: file.size});
+      if(error){
+        // no row, so no orphaned object either
+        await sb.storage.from('payments').remove([path]);
+        throw error;
+      }
+      if(!quiet) await reload();
+      return true;
+    }catch(e){ if(!quiet) oops(e, file && file.name); return false; }
+  },
+
+  async detachPayment(fileId){
+    try{
+      const {data, error} = await sb.rpc('detach_payment_file', {p_file: fileId});
+      if(error) throw error;
+      if(data) await sb.storage.from('payments').remove([data]);
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That document'); await reload(); return false; }
+  },
+
+  async withdrawPayment(id){
+    try{
+      const {error} = await sb.rpc('withdraw_payment_request', {p_id: id});
+      if(error) throw error;
+      await reload(); return true;
+    }catch(e){ oops(e, 'That request'); await reload(); return false; }
+  },
+
+  async decidePayment(id, approve, why){
+    try{
+      const {data, error} = await sb.rpc('decide_payment_request', {
+        p_id: id, p_approve: !!approve, p_why: why || null});
+      if(error) throw error;
+      await reload(); return data;
+    }catch(e){ oops(e, 'That decision'); await reload(); return null; }
+  },
+
+  async settlePayment(id, payStatus, account, remark){
+    try{
+      const {data, error} = await sb.rpc('settle_payment_request', {
+        p_id: id, p_status: payStatus, p_account: account, p_remark: remark || null});
+      if(error) throw error;
+      await reload(); return data;
+    }catch(e){ oops(e, 'That payment'); await reload(); return null; }
   },
 
   // ---- documents ------------------------------------------------------

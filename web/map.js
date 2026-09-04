@@ -621,6 +621,41 @@ function buildSales(db, byId, name, companies){
     by: name(u.uploaded_by), at: u.uploaded_at ? String(u.uploaded_at).slice(0,16).replace('T',' ') : ''
   })).sort((a,b) => (b.at || '').localeCompare(a.at || ''));
 
+  /* ------------------------------------------------------- payment requests
+   *
+   * The screen was written against a hardcoded array with the field names
+   * below, so the mapper speaks its language rather than the table's. Status
+   * is capitalised here for the same reason: the pills read it directly.
+   *
+   * `self` is the one thing this adds that the mock never had — whether the
+   * person who approved a request was the person who raised it. Avin asked for
+   * that to be allowed; showing it is the other half of allowing it. */
+  const STATUS = {pending:'Pending', approved:'Approved',
+                  rejected:'Rejected', withdrawn:'Withdrawn'};
+  const PAYSTAT = {paid:'Paid', unpaid:'Unpaid', initiated:'Initiated'};
+  const filesOf = {};
+  (db.payment_files || []).forEach(f => {
+    (filesOf[f.request_id] || (filesOf[f.request_id] = [])).push({
+      id: f.id, name: f.file_name, path: f.storage_path,
+      mime: f.mime_type || '', bytes: +f.bytes || 0});
+  });
+  out.payments = (db.payment_requests || []).map(r => ({
+    id: r.id, ref: r.ref,
+    by: name(r.raised_by), byId: r.raised_by,
+    date: r.raised_at ? longDate(String(r.raised_at).slice(0, 10)) : '',
+    at: r.raised_at || '',
+    order: r.order_no || '', client: r.client || '', payee: r.payee || '',
+    purpose: r.purpose || '', amount: +r.amount || 0, mode: r.mode,
+    note: r.extra || '',
+    status: STATUS[r.status] || r.status,
+    decidedBy: name(r.decided_by), why: r.decided_why || '',
+    self: !!(r.decided_by && r.raised_by && r.decided_by === r.raised_by),
+    payStatus: PAYSTAT[r.pay_status] || '', account: r.account || '',
+    remarks: r.remark || '',
+    files: filesOf[r.id] || [],
+    docs: (filesOf[r.id] || []).length
+  })).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+
   out.yearFigures = {};
   (db.sales_company || []).forEach(a => { out.yearFigures[String(a.year)] = a.figures || {}; });
   const agg = (db.sales_company || []).slice().sort((a,b) => b.year - a.year)[0];

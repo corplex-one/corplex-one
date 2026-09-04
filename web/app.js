@@ -2627,7 +2627,7 @@ function alertsFor(u){
   const out = [];
   const add = (key, t, s, tab, kind, extra) => out.push(Object.assign({key, t, s, tab, kind:kind||'warn'}, extra||{}));
 
-  const pend = (typeof REQS!=='undefined') ? REQS.filter(r=>r.status==='Pending') : [];
+  const pend = reqs().filter(r=>r.status==='Pending');
   if(canUpload(u) && pend.length && coInView(u)==='corplex')
     add('pay-req', `${pend.length} payment request${pend.length===1?'':'s'} waiting on you`,
       `AED ${money(pend.reduce((x,r)=>x+r.amount,0),2)} · oldest from ${pend[pend.length-1].by}`, 'payment');
@@ -3822,13 +3822,10 @@ const MODES = [
   {id:'link',     label:'Link payment',       next:'Avin approves and sends you the payment link to complete.'},
   {id:'cash',     label:'Cash',               next:'Avin approves and the admin pays in cash — collect it from the admin desk.'}
 ];
-let REQS = [
-  {ref:'PR-2026-0141', order:'PR2517', payee:'Dubai Economy (DED)',  date:'31 Aug 2026', by:'Zhavokhir Khasanbaev', client:'ALIFID SA',            purpose:'Trade licence renewal', amount:4750,   mode:'card',     status:'Pending', docs:2, note:'Renewal notice attached.'},
-  {ref:'PR-2026-0140', order:'PR2508', payee:'Al Waha Translation',   date:'30 Aug 2026', by:'Nissa Muradova',       client:'SC Project Management LLC', purpose:'Legal translation', amount:3200,   mode:'cash',     status:'Pending', docs:1, note:'Arabic MOA, 14 pages.'},
-  {ref:'PR-2026-0139', order:'PR2431', payee:'Emirates Typing Centre',date:'28 Aug 2026', by:'Shohruh Karimov',      client:'Abeltino Marketing Management', purpose:'Typing centre charges', amount:11800, mode:'transfer', status:'Pending', docs:3, note:'Invoice and quotation attached.'},
-  {ref:'PR-2026-0138', order:'PR2402', payee:'Aramex',                date:'26 Aug 2026', by:'Maylyn Aguba Asilo',   client:'JAA United DMCC',       purpose:'Courier and attestation', amount:640, mode:'cash',    status:'Approved', docs:1, note:'Paid personally, receipt attached.'},
-  {ref:'PR-2026-0137', order:'PR2380', payee:'GDRFA portal',          date:'24 Aug 2026', by:'Abdulkhamid Makhamatjanov', client:'Jiuba FZC',        purpose:'Visa quota fees',      amount:8500,   mode:'link',     status:'Paid',     docs:2, note:'PRO service fees.'}
-];
+/* Whatever the database gives this person, which for a consultant is their own
+ * requests and for accounts is everybody's. Empty is a perfectly good answer
+ * and the screen says so; it used to say five things that were not true. */
+function reqs(){ return DATA.payments || []; }
 const PAYSTATUS = ['Paid','Unpaid','Initiated'];
 const ACCOUNTS = [
   {id:'petty',   label:'Petty Cash',      remark:c=>`Nissa, please handover cash to "${c}"`,
@@ -3869,7 +3866,7 @@ function clientBadge(name){
     : `<span class="pill bad"><span class="dt"></span>AED ${money(c.out)} still outstanding</span> <span style="color:var(--ink3);font-size:12px">${c.count} invoice${c.count===1?'':'s'} · last ${esc(c.last)}</span>`;
 }
 function vApprovePanel(){
-  const r = REQS.find(x=>x.ref===state.approve.ref);
+  const r = reqs().find(x=>x.ref===state.approve.ref);
   if(!r) return '';
   const st = state.approve;
   const acct = ACCOUNTS.find(x=>x.id===st.account);
@@ -3928,8 +3925,8 @@ function vApprovePanel(){
 }
 function vPayment(){
   const u = state.user, approver = canUpload(u);   // payment approvals are Avin's alone
-  const mine = REQS.filter(r=>r.by===u);
-  const queue = REQS.filter(r=>r.status==='Pending');
+  const mine = reqs().filter(r=>r.by===u);
+  const queue = reqs().filter(r=>r.status==='Pending');
   const clients = Object.keys(DATA.clients).sort();
   const statusPill2 = s => `<span class="pill ${s==='Paid'?'good':(s==='Approved'?'good':(s==='Rejected'?'bad':'warn'))}"><span class="dt"></span>${esc(s)}</span>`;
   const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
@@ -3942,7 +3939,7 @@ function vPayment(){
         <input value="${esc(u)}" disabled style="opacity:.7"></div>
       <div class="frow">
         <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431"></div>
-        <div class="field"><label for="pqAmount">Amount (AED) <i>*</i></label><input id="pqAmount" class="num" type="number" value="3500" step="0.01"></div>
+        <div class="field"><label for="pqAmount">Amount (AED) <i>*</i></label><input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0"></div>
       </div>
       <div class="field"><label for="pqClient">Client name <i>*</i></label>
         <div class="combo">
@@ -3955,10 +3952,15 @@ function vPayment(){
       <div class="field"><label for="pqMode">Mode of payment <i>*</i></label>
         <select id="pqMode">${MODES.map(m=>`<option value="${m.id}">${esc(m.label)}</option>`).join('')}</select></div>
       <div class="field"><label for="pqNote">Additional information (if any)</label><input id="pqNote" placeholder="Anything Avin should know"></div>
-      <button class="filebtn" type="button">
+      <input type="file" id="pqFile" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+      <button class="filebtn" id="pqPick" type="button" ${(state.pqFiles||[]).length>=5?'disabled':''}>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        Add file <span>5 files &middot; 10 MB each</span>
+        Add file <span>${(state.pqFiles||[]).length ? (state.pqFiles.length + ' of 5 chosen') : '5 files &middot; 10 MB each'}</span>
       </button>
+      ${(state.pqFiles||[]).length ? `<div class="pqfiles">${state.pqFiles.map((f,i)=>`
+        <div class="pqfile"><span>${esc(f.name)}</span><i>${Math.max(1,Math.round(f.size/1024))} KB</i>
+          <button type="button" data-pqdrop="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></div>`).join('')}</div>` : ''}
+      ${state.pqErr ? `<div class="pqerr">${esc(state.pqErr)}</div>` : ''}
       <button class="btn wide" id="pqSubmit" type="button">Submit request</button>
     </div>
   </section>`;
@@ -3970,7 +3972,7 @@ function vPayment(){
     <div class="tw"><table>
       <thead><tr><th>Request</th><th>By</th><th>Client</th><th>Paid?</th><th>Vendor</th><th class="r">Amount</th><th class="act"></th></tr></thead>
       <tbody>
-        ${REQS.map(r=>`<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
+        ${reqs().map(r=>`<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
           <td class="n" style="white-space:nowrap">${esc(r.ref)}
             <div style="color:var(--ink3);font-size:11px;margin-top:2px">${esc(r.order||'—')}${r.docs?' · '+r.docs+' file'+(r.docs===1?'':'s'):''}</div></td>
           <td>${esc(r.by)}</td>
@@ -3979,19 +3981,50 @@ function vPayment(){
           <td style="max-width:120px">${esc(r.payee||r.purpose)}<div style="color:var(--ink3);font-size:11px;margin-top:2px">${esc(modeLabel(r.mode))}</div></td>
           <td class="n r" style="white-space:nowrap">${money(r.amount,2)}</td>
           <td class="act">${r.status==='Pending'
-            ? `<button class="btn" style="padding:4px 10px;font-size:12px" data-approve="${r.ref}" type="button">Approve</button>`
-            : `${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${r.account?`<div style="color:var(--ink3);font-size:11.5px;margin-top:3px">${esc((ACCOUNTS.find(x=>x.id===r.account)||{}).label||'')}</div>`:''}`}</td>
-        </tr>`).join('')}
+            ? `<div class="actpair">
+                 <button class="btn" style="padding:4px 10px;font-size:12px" data-approve="${esc(r.ref)}" type="button">Approve</button>
+                 <button class="btn ghost" style="padding:4px 10px;font-size:12px" data-reject="${esc(r.id)}" type="button">Turn down</button>
+               </div>`
+            : `${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${r.account?`<div style="color:var(--ink3);font-size:11.5px;margin-top:3px">${esc((ACCOUNTS.find(x=>x.id===r.account)||{}).label||'')}</div>`:''}${
+               r.self?`<div class="selfnote">approved by the person who raised it</div>`:''}`}</td>
+        </tr>${state.reject===r.id?`<tr><td colspan="7" style="background:var(--badBg)">
+          <div class="rjbox">
+            <label for="rjWhy">Why is ${esc(r.ref)} being turned down? ${esc(r.by)} will read this.</label>
+            <input id="rjWhy" placeholder="The client has not settled the invoice this sits against">
+            <div class="drow" style="margin-top:10px">
+              <button class="btn" id="rjGo" type="button">Turn it down</button>
+              <button class="btn ghost" data-reject="${esc(r.id)}" type="button">Never mind</button>
+              ${state.rjErr?`<span style="color:var(--bad);font-size:12.5px">${esc(state.rjErr)}</span>`:''}
+            </div>
+          </div></td></tr>`:''}`).join('')}
       </tbody></table></div>
+    ${reqs().length ? '' : '<p class="cap" style="padding:22px 20px;text-align:center">Nobody has raised a payment request yet.</p>'}
     <p class="cap">Your test is whether the client has paid, so the answer sits in the row instead of you looking it up.</p>
   </section>`;
 
   const minePanel = `
   <section class="panel grow">
-    <header><h3>${approver?'My own requests':'My requests'}</h3><span class="hint">${mine.length} in 2026</span></header>
+    <header><h3>${approver?'My own requests':'My requests'}</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
     <div class="tw"><table>
       <thead><tr><th>Ref</th><th>Raised</th><th>Client</th><th>Purpose</th><th class="r">Amount</th><th>Mode</th><th>Status</th><th>What happens next</th></tr></thead>
-      <tbody>${mine.length?mine.map(r=>`<tr><td class="n">${esc(r.ref)}</td><td class="n">${esc(r.date)}</td><td style="max-width:180px">${esc(r.client)}</td><td>${esc(r.purpose)}</td><td class="n r">${money(r.amount,2)}</td><td>${esc(modeLabel(r.mode))}</td><td>${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}</td><td style="color:var(--ink2);max-width:260px">${esc(r.remarks||(r.status==='Pending'?'Waiting for Avin to approve':'—'))}</td></tr>`).join('')
+      <tbody>${mine.length?mine.map(r=>`<tr>
+        <td class="n">${esc(r.ref)}${r.files.length?`<div class="pqdocs">${r.files.map(f=>
+          f.url?`<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>`
+              :`<span>${esc(f.name)}</span>`).join('')}${r.status==='Pending'?r.files.map(f=>
+          `<button type="button" class="dropdoc" data-pqdoc="${esc(f.id)}" title="Remove ${esc(f.name)}">&times;</button>`).join(''):''}</div>`:''}</td>
+        <td class="n">${esc(r.date)}</td>
+        <td style="max-width:180px">${esc(r.client||'—')}</td>
+        <td>${esc(r.purpose)}</td>
+        <td class="n r">${money(r.amount,2)}</td>
+        <td>${esc(modeLabel(r.mode))}</td>
+        <td>${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}</td>
+        <td style="color:var(--ink2);max-width:280px">${
+          r.status==='Rejected' && r.why ? `<b>Turned down:</b> ${esc(r.why)}`
+          : r.remarks ? esc(r.remarks)
+          : r.status==='Pending' ? `Waiting for accounts to approve
+              <button class="btn ghost sm" data-pqpull="${esc(r.id)}" type="button" style="margin-left:8px">Withdraw</button>`
+          : r.status==='Withdrawn' ? 'You took this one back'
+          : '&mdash;'}</td></tr>`).join('')
         :'<tr><td colspan="8" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>
     <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.</p>
   </section>`;
@@ -4000,12 +4033,41 @@ function vPayment(){
     <div class="paycol left">${form}</div>
     <div class="paycol right">
       ${state.approve.ref ? vApprovePanel() : ''}
-      ${state.pqConfirm ? `<section class="panel"><header><h3>Submitted</h3><span class="hint">what Avin receives</span></header><div class="pad">${state.pqConfirm}</div></section>` : ''}
+      ${state.pqDone ? vPaymentSent() : ''}
       ${queuePanel}
       ${minePanel}
     </div>
   </div>`;
 }
+/* What actually happened, said plainly. No invented email, because no email
+ * leaves the portal yet — that is waiting on a sending address, and claiming
+ * otherwise is how somebody stops checking the screen. */
+function vPaymentSent(){
+  const d = state.pqDone; if(!d) return '';
+  const mode = MODES.find(m => m.id === d.mode) || {label: d.mode, next: ''};
+  return `
+  <section class="panel">
+    <header><h3>${esc(d.ref)} raised</h3><span class="hint">it is in the portal now</span></header>
+    <div class="pad">
+      <div class="strip" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <div class="stat"><span class="k">Reference</span>
+          <span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">${esc(d.ref)}</span>
+          <span class="n">${d.order?'Order '+esc(d.order)+' &middot; ':''}AED ${money(d.amount,2)} &middot; ${esc(mode.label)}</span></div>
+        <div class="stat"><span class="k">Waiting on</span>
+          <span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Accounts</span>
+          <span class="n">it shows in the approval queue straight away</span></div>
+      </div>
+      <div class="note" style="margin-top:16px;border-left-color:var(--good)"><b>Once it is approved.</b> ${esc(mode.next||'')}</div>
+      ${d.notAttached && d.notAttached.length ? `<div class="note" style="margin-top:12px;border-left-color:var(--bad)">
+        <b>The request was raised, but ${d.notAttached.length} document did not go up:</b>
+        ${esc(d.notAttached.join(', '))}. Open the request below and attach it again.</div>` : ''}
+      <p class="cap" style="padding-left:0">No email has been sent — the portal has no sending address yet, so
+        this screen is where it lives. It stays in <b>My requests</b> below with whatever happens to it.</p>
+      <button class="btn ghost" id="pqAnother" type="button" style="margin-top:6px">Raise another</button>
+    </div>
+  </section>`;
+}
+
 function pqBadge(){
   const el = document.getElementById('pqBadge'), inp = document.getElementById('pqClient');
   if(!el || !inp) return;
@@ -4028,45 +4090,37 @@ function pqList(){
     ev.preventDefault(); inp.value = b.dataset.client; box.classList.add('hidden'); pqBadge();
   });
 }
-function pqSubmit(){
-  const client = document.getElementById('pqClient').value.trim() || '—';
-  const purpose = document.getElementById('pqPurpose').value || 'Not stated';
-  const order = document.getElementById('pqOrder').value || '—';
-  const payee = document.getElementById('pqPayee').value || '—';
-  const amount = parseFloat(document.getElementById('pqAmount').value)||0;
-  const modeId = document.getElementById('pqMode').value;
-  const note = document.getElementById('pqNote').value || '—';
-  const mode = MODES.find(m=>m.id===modeId);
-  const c = clientStatus(client);
-  const ref = 'PR-2026-0' + (142 + REQS.filter(r=>r.by===state.user && r.ref.startsWith('PR-2026-01')).length);
-  REQS = [{ref, date:'1 Sep 2026', by:state.user, client, purpose, amount, mode:modeId, status:'Pending', note, order, payee}].concat(REQS);
-  state.pqConfirm = `
-    <div class="strip" style="grid-template-columns:repeat(2,minmax(0,1fr))">
-      <div class="stat"><span class="k">Request submitted</span><span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">${esc(ref)}</span><span class="n">Order ${esc(order)} · AED ${money(amount,2)} · ${esc(mode.label)}</span></div>
-      <div class="stat"><span class="k">Notified</span><span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif;color:var(--good)">Avin Mascarenhas</span><span class="n">email + portal, just now</span></div>
-    </div>
-    <div class="note" style="margin-top:16px;border-left-color:var(--good)"><b>What happens next.</b> ${esc(mode.next)}</div>
-    <div class="card" style="margin-top:16px;border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--panel2)">
-      <div style="font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:10px">The email Avin receives</div>
-      <div style="font-family:'IBM Plex Sans',sans-serif;font-size:12px;line-height:1.7">
-        <div><b>To:</b> avin@corplex.ae</div>
-        <div><b>Subject:</b> ${esc(ref)} — ${esc(purpose)} — AED ${money(amount,2)}${c.paid?'':' — CLIENT STILL OWING'}</div>
-        <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:10px">
-          ${nm(state.user)} has raised a payment request.<br><br>
-          Order number &nbsp;${esc(order)}<br>
-          Client &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${esc(client)}<br>
-          Client paid &nbsp;&nbsp;${c.known ? (c.paid?'Yes — nothing outstanding':'No — AED '+money(c.out)+' still due') : 'Not in the 2026 book'}<br>
-          Vendor &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${esc(payee)}<br>
-          Purpose &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${esc(purpose)}<br>
-          Amount &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;AED ${money(amount,2)}<br>
-          Mode &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${esc(mode.label)}<br>
-          Documents &nbsp;&nbsp;&nbsp;1 file (invoice.pdf, 240 KB)<br>
-          Notes &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${esc(note)}<br><br>
-          Approve in the portal → sales.corplex.ae/payments/${esc(ref)}
-        </div>
-      </div>
-    </div>
-    <p style="color:var(--ink3);font-size:12.5px;margin-top:12px">The subject line carries the answer to your approval question, so you can triage from the phone without opening anything.</p>`;
+async function pqSubmit(){
+  const btn = document.getElementById('pqSubmit');
+  const need = (id, what) => {
+    const v = (document.getElementById(id).value || '').trim();
+    if(!v) throw new Error(what);
+    return v;
+  };
+  let f;
+  try{
+    f = {
+      order:   (document.getElementById('pqOrder').value || '').trim(),
+      client:  (document.getElementById('pqClient').value || '').trim(),
+      purpose: need('pqPurpose', 'Say what the payment is for.'),
+      payee:   need('pqPayee', 'Say who is being paid.'),
+      extra:   (document.getElementById('pqNote').value || '').trim(),
+      mode:    document.getElementById('pqMode').value,
+      amount:  parseFloat(document.getElementById('pqAmount').value) || 0
+    };
+    if(f.amount <= 0) throw new Error('Put in the amount.');
+  }catch(e){
+    state.pqErr = e.message; render(); return;
+  }
+  state.pqErr = '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  const out = await window.__db.raisePayment(f, state.pqFiles || []);
+  if(!out) return;                      // the error has already been shown
+
+  state.pqFiles = [];
+  state.pqDone = {ref: out.ref, mode: f.mode, amount: f.amount, order: f.order,
+                  client: f.client, notAttached: out.notAttached || []};
   render();
 }
 
@@ -6677,13 +6731,49 @@ function render(){
       pqBadge();
     }
     const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
+    const again=document.getElementById('pqAnother');
+    if(again) again.onclick=()=>{ state.pqDone=null; render(); };
+
+    // documents, chosen before the request exists and uploaded with it
+    const fb=document.getElementById('pqFile'), fp=document.getElementById('pqPick');
+    if(fb && fp){
+      fp.onclick=()=>fb.click();
+      fb.onchange=()=>{
+        const picked=[...(fb.files||[])];
+        const room=5-(state.pqFiles||[]).length;
+        state.pqFiles=(state.pqFiles||[]).concat(picked.slice(0,Math.max(0,room)));
+        state.pqErr = picked.length>room ? 'Five documents is the limit on one request.' : '';
+        fb.value=''; render();
+      };
+    }
+    document.querySelectorAll('[data-pqdrop]').forEach(b=>b.onclick=()=>{
+      state.pqFiles=(state.pqFiles||[]).filter((_,i)=>i!==Number(b.dataset.pqdrop)); render(); });
+
+    document.querySelectorAll('[data-pqpull]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; await window.__db.withdrawPayment(b.dataset.pqpull); });
+    document.querySelectorAll('[data-pqdoc]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; await window.__db.detachPayment(b.dataset.pqdoc); });
+
+    document.querySelectorAll('[data-reject]').forEach(b=>b.onclick=()=>{
+      state.reject = state.reject===b.dataset.reject ? null : b.dataset.reject; render(); });
+    const rjGo=document.getElementById('rjGo');
+    if(rjGo) rjGo.onclick=async()=>{
+      const why=(document.getElementById('rjWhy').value||'').trim();
+      if(!why){ state.rjErr='Say why — the person who raised it will read this.'; render(); return; }
+      rjGo.disabled=true;
+      const out=await window.__db.decidePayment(state.reject, false, why);
+      if(out){ state.reject=null; state.rjErr=''; }
+      render();
+    };
+
     document.querySelectorAll('[data-approve]').forEach(b=>b.onclick=()=>{
-      state.approve = {ref:b.dataset.approve, payStatus:'', account:'', remarks:''}; render();
+      state.approve = {ref:b.dataset.approve, payStatus:'', account:'', remarks:''};
+      state.reject = null; render();
       window.scrollTo({top:0,behavior:'smooth'});
     });
     document.querySelectorAll('[data-ps]').forEach(b=>b.onclick=()=>{ state.approve.payStatus=b.dataset.ps; render(); });
     document.querySelectorAll('[data-ac]').forEach(b=>b.onclick=()=>{
-      const r = REQS.find(x=>x.ref===state.approve.ref);
+      const r = reqs().find(x=>x.ref===state.approve.ref);   // remark names the requester
       const acct = ACCOUNTS.find(x=>x.id===b.dataset.ac);
       state.approve.account = acct.id;
       state.approve.remarks = acct.remark(r ? r.by : '');
@@ -6691,23 +6781,43 @@ function render(){
     });
     const rm=document.getElementById('apRemarks'); if(rm) rm.oninput=()=>{ state.approve.remarks=rm.value; };
     const cancel=document.getElementById('apCancel'); if(cancel) cancel.onclick=()=>{ state.approve={ref:null,payStatus:'',account:'',remarks:''}; render(); };
-    const commit = () => {
-      const r = REQS.find(x=>x.ref===state.approve.ref); if(!r) return null;
-      r.status='Approved'; r.payStatus=state.approve.payStatus; r.account=state.approve.account; r.remarks=state.approve.remarks;
-      return r;
+    const commit = async () => {
+      const st = state.approve;
+      const r = reqs().find(x=>x.ref===st.ref); if(!r) return null;
+      const snap = Object.assign({}, r, {payStatus:st.payStatus, account:st.account, remarks:st.remarks});
+      if(r.status==='Pending'){
+        const out = await window.__db.decidePayment(r.id, true);
+        if(!out) return null;
+      }
+      if(st.payStatus && st.account){
+        const done = await window.__db.settlePayment(
+          r.id, st.payStatus.toLowerCase(), st.account, st.remarks);
+        if(!done) return null;
+      }
+      return snap;   // what to put in the message, before the reload redraws
     };
-    const wa=document.getElementById('apWa'); if(wa) wa.onclick=()=>{
-      const r=commit(); if(!r) return;
-      window.open('https://wa.me/?text='+encodeURIComponent(waMessage(r)),'_blank','noopener');
+    const wa=document.getElementById('apWa'); if(wa) wa.onclick=async()=>{
+      // The window has to be opened by the click itself, or the browser treats
+      // it as a pop-up and blocks it. So it opens first and is pointed at the
+      // message once the database has taken the approval.
+      const tab=window.open('', '_blank', 'noopener');
+      wa.disabled=true;
+      const r=await commit();
+      if(!r){ if(tab) tab.close(); wa.disabled=false; return; }
+      if(tab) tab.location='https://wa.me/?text='+encodeURIComponent(waMessage(r));
       state.approve={ref:null,payStatus:'',account:'',remarks:''}; render();
     };
     const cp=document.getElementById('apCopy'); if(cp) cp.onclick=async()=>{
-      const r = REQS.find(x=>x.ref===state.approve.ref);
+      const r = reqs().find(x=>x.ref===state.approve.ref);
       const txt = waMessage(Object.assign({}, r, {payStatus:state.approve.payStatus, account:state.approve.account, remarks:state.approve.remarks}));
       try { await navigator.clipboard.writeText(txt); } catch(e){}
       const el=document.getElementById('apCopied'); if(el) el.textContent='Copied — paste into the payments group';
     };
-    const dn=document.getElementById('apDone'); if(dn) dn.onclick=()=>{ commit(); state.approve={ref:null,payStatus:'',account:'',remarks:''}; render(); };
+    const dn=document.getElementById('apDone'); if(dn) dn.onclick=async()=>{
+      dn.disabled=true;
+      const r=await commit();
+      if(!r){ dn.disabled=false; return; }
+      state.approve={ref:null,payStatus:'',account:'',remarks:''}; render(); };
   }
   if(state.tab==='payroll'){
     document.querySelectorAll('#coSeg button').forEach(b=>b.onclick=()=>{state.payCompany=b.dataset.co;render();});

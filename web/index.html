@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609040747">
+<link rel="manifest" href="manifest.webmanifest?v=202609040814">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1269,6 +1269,28 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .subtitle{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:18px;color:var(--ink2);
     margin-left:auto}
 
+  /* payment requests: the documents on one, and turning one down */
+  .pqfiles{display:flex;flex-direction:column;gap:6px;margin:-4px 0 4px}
+  .pqfile{display:flex;align-items:center;gap:9px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:6px 8px 6px 11px;font-size:12.5px}
+  .pqfile span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pqfile i{font-style:normal;color:var(--ink3);font-size:11.5px;white-space:nowrap}
+  .pqfile button{background:none;border:0;color:var(--ink3);font-size:16px;line-height:1;
+    padding:0 3px;font-family:inherit}
+  .pqfile button:hover{color:var(--bad)}
+  .pqerr{color:var(--bad);font-size:12.5px;margin:-2px 0 2px}
+  .pqdocs{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+  .pqdocs a,.pqdocs span{font-size:11px;color:var(--ink3);text-decoration:underline;
+    max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pqdocs a:hover{color:var(--accent2)}
+  .pqdocs .dropdoc{background:none;border:0;color:var(--ink3);font-size:13px;line-height:1;padding:0 2px;font-family:inherit}
+  .pqdocs .dropdoc:hover{color:var(--bad)}
+  .actpair{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+  .selfnote{color:var(--warn);font-size:11px;margin-top:3px}
+  .rjbox{padding:14px 16px}
+  .rjbox label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:8px}
+  .rjbox input{width:100%}
+
   /* reading a workbook, and saying what was in it before anything is written */
   .upmsg{border-left:3px solid var(--bad);background:var(--badBg);color:var(--ink);
     padding:11px 14px;border-radius:0 8px 8px 0;font-size:13px;margin-top:14px;max-width:110ch}
@@ -1417,8 +1439,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609040747';</script>
-<script src="config.js?v=202609040747"></script>
-<script type="module" src="boot.js?v=202609040747"></script>
+<script>window.__BUILD = '202609040814';</script>
+<script src="config.js?v=202609040814"></script>
+<script type="module" src="boot.js?v=202609040814"></script>
 </body>
 </html>
