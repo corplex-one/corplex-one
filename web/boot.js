@@ -124,7 +124,6 @@ async function signDocuments(DATA){
   }
 }
 
-/* Everyone's photograph, because the directory shows them all. */
 /* The documents attached to a payment request, for whoever may see them. */
 async function signPayments(DATA){
   const paths = [];
@@ -137,6 +136,7 @@ async function signPayments(DATA){
     if(f.path && byPath[f.path]) f.url = byPath[f.path]; }));
 }
 
+/* Everyone's photograph, because the directory shows them all. */
 async function signPhotos(DATA){
   const want = [];
   Object.values(DATA.hr.profile || {}).forEach(p => {
@@ -683,10 +683,14 @@ window.__db = {
    * happen. An error on a form belongs on the form, and stays there. */
   async raisePayment(f, files){
     try{
+      /* Every parameter, including the one that has a default. PostgREST finds
+       * a function by the exact set of names in the body; passing a subset and
+       * relying on a default is legal but is one more thing that has to line
+       * up, and this is the only call in the app that was doing it. */
       const {data, error} = await sb.rpc('raise_payment_request', {
         p_payee: f.payee, p_purpose: f.purpose, p_amount: Number(f.amount),
         p_mode: f.mode, p_order: f.order || null, p_client: f.client || null,
-        p_extra: f.extra || null});
+        p_extra: f.extra || null, p_company: 'corplex'});
       if(error) throw error;
       if(!data || !data.id) throw new Error('The database accepted it but said nothing back.');
       const bad = [];
@@ -697,9 +701,14 @@ window.__db = {
       await reload();
       return {...data, notAttached: bad};
     }catch(e){
+      /* Everything the database or PostgREST said, kept together. The code is
+       * the most diagnostic single token there is — PGRST202 means the API has
+       * not seen the function yet, 42883 means it is genuinely not there, and
+       * P0001 is the function itself refusing on purpose — and it was being
+       * thrown away in favour of the sentence. */
       console.error('raise_payment_request', e);
-      return {error: (e && (e.message || e.hint || e.details)) || String(e),
-              detail: (e && (e.details || e.hint)) || '', code: (e && e.code) || ''};
+      const bits = [e && e.message, e && e.details, e && e.hint].filter(Boolean);
+      return {error: bits.join(' — ') || String(e), code: (e && e.code) || ''};
     }
   },
 

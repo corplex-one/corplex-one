@@ -3977,7 +3977,8 @@ function vPayment(){
       ${(state.pqFiles||[]).length ? `<div class="pqfiles">${state.pqFiles.map((f,i)=>`
         <div class="pqfile"><span>${esc(f.name)}</span><i>${Math.max(1,Math.round(f.size/1024))} KB</i>
           <button type="button" data-pqdrop="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></div>`).join('')}</div>` : ''}
-      ${state.pqErr ? `<div class="pqerr"><b>The request did not go through.</b><br>${esc(state.pqErr)}</div>` : ''}
+      ${state.pqErr ? `<div class="pqerr"><b>The request did not go through.</b><br>${esc(state.pqErr)}${
+        state.pqCode ? `<br><i>${esc(state.pqCode)}</i>` : ''}</div>` : ''}
       <button class="btn wide" id="pqSubmit" type="button">Submit request</button>
     </div>
   </section>`;
@@ -4059,7 +4060,32 @@ function vPayment(){
 /* What actually happened, said plainly. No invented email, because no email
  * leaves the portal yet — that is waiting on a sending address, and claiming
  * otherwise is how somebody stops checking the screen. */
-/* What was typed last time, when last time did not work. */
+/* Whatever is in the form right now, remembered.
+ *
+ * This screen redraws for reasons that have nothing to do with the person
+ * typing into it: attaching a document redraws, removing one redraws, and a
+ * decision taken by somebody else reloads the data and redraws. The form is
+ * built from scratch each time, so every one of those was quietly emptying it.
+ *
+ * That is what was actually wrong with 'no request is going through'. Avin
+ * filled the form in, attached a PDF — which redrew — and every field he had
+ * typed went blank. Pressing Submit then failed on the first empty field, and
+ * the message named a field he had definitely filled in, which reads as the
+ * portal being broken rather than as the form having been wiped.
+ *
+ * So the form is read into state on every keystroke, and drawn back from it.
+ * Nothing that redraws can take it away now, whatever caused the redraw. */
+function pqGrab(){
+  const v = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  if(document.getElementById('pqPurpose') === null) return;   // not on screen
+  const f = state.pqForm || (state.pqForm = {});
+  const put = (k, id) => { const x = v(id); if(x !== undefined) f[k] = x; };
+  put('order','pqOrder'); put('amount','pqAmount'); put('client','pqClient');
+  put('purpose','pqPurpose'); put('payee','pqPayee'); put('extra','pqNote');
+  put('mode','pqMode');
+}
+
+/* What was typed, so a redraw can put it back. */
 function KEPT(){
   const f = state.pqForm || {};
   return {order:f.order||'', amount:f.amount||'', client:f.client||'',
@@ -4146,7 +4172,11 @@ async function pqSubmit(){
 
   const out = await window.__db.raisePayment(f, state.pqFiles || []);
   if(!out || out.error){
+    // The code is the diagnostic bit — PGRST202 means the API has not picked
+    // up the function yet, P0001 means the function itself said no — so it is
+    // shown rather than left in the console for somebody who knows to look.
     state.pqErr = (out && out.error) || 'The request did not go through, and no reason came back.';
+    state.pqCode = (out && out.code) || '';
     render();
     return;
   }
@@ -6765,6 +6795,12 @@ function render(){
       cs.addEventListener('blur',()=>setTimeout(()=>{const b=document.getElementById('pqList'); if(b) b.classList.add('hidden');},120));
       pqBadge();
     }
+    // every keystroke, so no redraw can cost somebody their typing
+    const body = document.querySelector('.payform .formbody');
+    if(body){
+      body.addEventListener('input', pqGrab);
+      body.addEventListener('change', pqGrab);
+    }
     if(!state.pqSeen){
       state.pqSeen = true;
       const unread = reqs().some(r=>r.by===state.user && !r.seen
@@ -6773,22 +6809,27 @@ function render(){
     }
     const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
     const again=document.getElementById('pqAnother');
-    if(again) again.onclick=()=>{ state.pqDone=null; render(); };
+    if(again) again.onclick=()=>{
+      state.pqDone=null; state.pqForm=null; state.pqErr=''; state.pqCode=''; render(); };
 
     // documents, chosen before the request exists and uploaded with it
     const fb=document.getElementById('pqFile'), fp=document.getElementById('pqPick');
     if(fb && fp){
       fp.onclick=()=>fb.click();
       fb.onchange=()=>{
+        pqGrab();                       // before the redraw, not after it
         const picked=[...(fb.files||[])];
         const room=5-(state.pqFiles||[]).length;
         state.pqFiles=(state.pqFiles||[]).concat(picked.slice(0,Math.max(0,room)));
         state.pqErr = picked.length>room ? 'Five documents is the limit on one request.' : '';
+        state.pqCode = '';
         fb.value=''; render();
       };
     }
     document.querySelectorAll('[data-pqdrop]').forEach(b=>b.onclick=()=>{
-      state.pqFiles=(state.pqFiles||[]).filter((_,i)=>i!==Number(b.dataset.pqdrop)); render(); });
+      pqGrab();
+      state.pqFiles=(state.pqFiles||[]).filter((_,i)=>i!==Number(b.dataset.pqdrop));
+      state.pqErr=''; state.pqCode=''; render(); });
 
     document.querySelectorAll('[data-pqpull]').forEach(b=>b.onclick=async()=>{
       b.disabled=true; await window.__db.withdrawPayment(b.dataset.pqpull); });
