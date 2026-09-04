@@ -3969,6 +3969,60 @@ function sumBy(list){
   return Object.entries(per).map(([c, v]) => `${c} ${money(v, 2)}`).join(' + ');
 }
 
+/* One mark, at the end, for correcting. A word in a column read twelve times
+ * a screen is eleven readings of a word nobody needed. */
+/* Marks a cell as having more in it than fits. The hover card only appears
+ * when the text is actually cut, so a short client name behaves like a
+ * perfectly ordinary cell. */
+function cellHover(){
+  if(window.__cellHover) return;
+  window.__cellHover = true;
+  const card = document.createElement('div');
+  card.className = 'cellpop hidden';
+  card.innerHTML = '<div class="ct"></div><button class="btn ghost sm" type="button">Copy</button>';
+  document.body.appendChild(card);
+  const txt = card.querySelector('.ct'), cpy = card.querySelector('button');
+  let over = false, timer = null, current = '';
+  const hide = () => { clearTimeout(timer); timer = setTimeout(() => {
+    if(!over) card.classList.add('hidden'); }, 140); };
+  card.addEventListener('mouseenter', () => { over = true; clearTimeout(timer); });
+  card.addEventListener('mouseleave', () => { over = false; hide(); });
+  cpy.onclick = async () => {
+    try{ await navigator.clipboard.writeText(current); cpy.textContent = 'Copied'; }
+    catch(e){ cpy.textContent = 'Select and copy'; }
+  };
+  document.addEventListener('mouseover', e => {
+    const td = e.target && e.target.closest && e.target.closest('[data-full]');
+    if(!td) return;
+    // nothing to say if it all fits
+    if(td.scrollWidth <= td.clientWidth + 1) return;
+    clearTimeout(timer);
+    current = td.dataset.full;
+    txt.textContent = current;
+    cpy.textContent = 'Copy';
+    card.classList.remove('hidden');
+    const r = td.getBoundingClientRect();
+    const w = Math.min(460, Math.max(240, r.width * 2.4));
+    card.style.width = w + 'px';
+    card.style.left = Math.max(8, Math.min(window.innerWidth - w - 12, r.left - 6)) + 'px';
+    card.style.top  = (r.bottom + window.scrollY + 3) + 'px';
+  });
+  document.addEventListener('mouseout', e => {
+    const td = e.target && e.target.closest && e.target.closest('[data-full]');
+    if(td) hide();
+  });
+}
+
+function full(v){ const t = String(v || '').trim(); return t ? ` data-full="${esc(t)}"` : ''; }
+
+function pencil(r){
+  if(r.status !== 'Pending' && r.status !== 'Approved') return '';
+  return `<button class="btn ghost sm ed" data-payedit="${esc(r.id)}" type="button"
+    title="Correct this request" aria-label="Correct this request"><svg viewBox="0 0 24 24" width="13" height="13"
+    fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/></svg></button>`;
+}
+
 function statusPill2(s){
   return `<span class="pill ${s==='Paid'||s==='Approved'?'good':(s==='Rejected'?'bad':(s==='Withdrawn'?'mute':'warn'))}"><span class="dt"></span>${esc(s)}</span>`;
 }
@@ -3981,7 +4035,7 @@ const MODESHORT = {card:'Card', transfer:'Transfer', link:'Link', cash:'Cash'};
 function modeShort(id){ return MODESHORT[id] || modeLabel(id); }
 
 function exportPayments(){
-  const rows = (reqs() || []).filter(r => r.status !== 'Pending');
+  const rows = (reqs() || []).filter(r => r.status !== 'Pending' && r.status !== 'Withdrawn');
   const cell = v => {
     const s = v === null || v === undefined ? '' : String(v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
@@ -4095,7 +4149,7 @@ function payBar(){
 function vPayApprove(){
   const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
   const queue = reqs().filter(r=>r.status==='Pending');
-  const all   = reqs().filter(r=>r.status!=='Pending');
+  const all   = reqs().filter(r=>r.status!=='Pending' && r.status!=='Withdrawn');
   /* Order number and client, which are the two things anybody remembers about
    * a payment. Not vendor or purpose: searching those turns up eleven results
    * and the point of a search box is to turn up one. */
@@ -4121,7 +4175,8 @@ function vPayApprove(){
    * 'payments are approved, but not paid yet' — so these are recorded when
    * they happen rather than guessed at the moment of the decision. */
   const recon = r => {
-    if(r.status !== 'Approved') return '<td></td><td></td><td></td><td></td><td></td>';
+    if(r.status !== 'Approved')
+      return `<td>${statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>`;
     const busy = state.reconBusy === r.id;
     // A bare box under a named column, the way it is on the sheet Avin keeps.
     const tick = k => `<td class="c"><input type="checkbox" class="rtick"
@@ -4145,27 +4200,23 @@ function vPayApprove(){
       <td>${esc(firstName(r.by))}</td>
       <td class="n nw">${esc(r.order||'—')}</td>
       <td class="n r nw">${payAmt(r)}</td>
-      <td class="cell">${esc(r.client||'—')}</td>
-      <td class="cell">${esc(r.purpose)}</td>
+      <td class="cell"${full(r.client)}>${esc(r.client||'—')}</td>
+      <td class="cell"${full(r.purpose)}>${esc(r.purpose)}</td>
       <td>${esc(modeShort(r.mode))}</td>
-      <td class="cell">${esc(r.payee||'—')}</td>
+      <td class="cell"${full(r.payee)}>${esc(r.payee||'—')}</td>
       <td>${r.files.length ? r.files.map(f=>f.url
             ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
             : `<span class="doc">${esc(f.name)}</span>`).join('')
           : '<span style="color:var(--ink3)">—</span>'}</td>
-      <td class="cell">${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+      <td class="cell"${full(r.note)}>${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+      ${withRecon ? recon(r) : ''}
       <td class="act">${r.status==='Pending'
         ? `<div class="actpair">
              <button class="btn sm" data-approve="${esc(r.ref)}" type="button">Approve</button>
-             <button class="btn ghost sm ed" data-payedit="${esc(r.id)}" type="button" title="Correct this request">Correct</button>
              <button class="btn ghost sm x" data-reject="${esc(r.id)}" type="button" title="Turn it down">&times;</button>
+             ${pencil(r)}
            </div>`
-        : `${r.status==='Approved'
-             ? '<button class="btn ghost sm ed" data-payedit="' + esc(r.id) + '" type="button" title="Correct this request">Correct</button>'
-             : statusPill2(r.status)}${
-           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}${
-           r.edits ? `<div class="selfnote">corrected after approval${r.editedBy?' by '+esc(NM(r.editedBy)):''}</div>` : ''}`}</td>
-      ${withRecon ? recon(r) : ''}
+        : pencil(r)}</td>
     </tr>${state.reject===r.id?`<tr><td colspan="11" style="background:var(--badBg)">
       <div class="rjbox">
         <label for="rjWhy">Why is ${esc(reqName(r))} being turned down? ${esc(r.by)} will read this.</label>
@@ -4194,18 +4245,30 @@ function vPayApprove(){
   /* Summing to a little under a hundred. At exactly 100 the browser still
    * finds a couple of dozen pixels of slop and shows a scrollbar over blank
    * space, which is the one thing this whole change is meant to remove. */
+  /* One set of shares for both payment tables:
+   *   date, by, order, amount, client, purpose, mode, vendor, document, note,
+   *   then status, paid through, Bk, Bg, Rc and the pencil. */
+  const SHARES = [5.4, 3.8, 5.0, 6.4, 12.9, 12.2, 4.0, 8.1, 5.8, 12.4,
+                  6.6, 7.4, 2.2, 2.2, 2.4, 3.2];
   const colgroup = ws => `<colgroup>${ws.map(w =>
-    `<col style="width:${(w * 0.95).toFixed(2)}%">`).join('')}</colgroup>`;
-  const wide   = colgroup([7.4, 5.6, 6.0, 7.0, 13.4, 10.6, 5.2, 9.8, 7.8, 11.4, 15.8]);
+    `<col style="width:${(w * 0.94).toFixed(2)}%">`).join('')}</colgroup>`;
+  /* The two tables sit one above the other, so their columns line up: the
+   * first ten are the same shares in both, and the queue's action column is
+   * exactly as wide as the six reconciliation columns it sits above. Two
+   * tables with different column stops read as two tables; the same stops
+   * read as one sheet, which is what Avin is after. */
+  const wide   = colgroup(SHARES.slice(0, 10)
+    .concat(SHARES.slice(10).reduce((a, b) => a + b, 0)));
   // Books, Bigin and Receipt are one word wide, and one word is wider than a
   // checkbox: at 2.8% the RECEIPT heading hung 23px past the table and put the
   // scrollbar back on its own.
-  const widest = colgroup([6.4, 4.4, 5.2, 6.2, 11.0, 7.6, 4.2, 7.6, 6.4, 8.8, 4.6, 6.6, 8.0, 4.2, 4.4, 4.4]);
+  const widest = colgroup(SHARES);
 
   const head  = `${wide}<thead><tr>${cols}<th class="act"></th></tr></thead>`;
-  const head2 = `${widest}<thead><tr>${cols}<th class="act"></th>
+  const head2 = `${widest}<thead><tr>${cols}
       <th>Status</th><th>Paid through</th>
-      <th class="c">Books</th><th class="c">Bigin</th><th class="c">Receipt</th></tr></thead>`;
+      <th class="c" title="Books">Bk</th><th class="c" title="Bigin">Bg</th>
+      <th class="c" title="Receipt">Rc</th><th class="act"></th></tr></thead>`;
 
   return `
   ${vDocPop()}${vWaPop()}${vPayEdit()}
@@ -4238,6 +4301,9 @@ function vPayApprove(){
         : `<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">${
             find ? 'Nothing matches &ldquo;' + esc(state.paySearch) + '&rdquo;.' : 'Nothing has been decided yet.'}</td></tr>`}</tbody>
     </table></div>
+    <p class="cap"><b>Bk</b> Books &middot; <b>Bg</b> Bigin &middot; <b>Rc</b> Receipt.
+      A cell that is cut off says the rest when you hover it, with a Copy beside it.
+      The pencil at the end corrects a request.</p>
   </section>`;
 }
 
@@ -4310,10 +4376,10 @@ function vPayment(){
         <td class="n nw">${esc(r.date)}</td>
         <td class="n nw">${esc(r.order||'—')}</td>
         <td class="n r nw">${payAmt(r)}</td>
-        <td class="cell">${esc(r.client||'—')}</td>
-        <td class="cell">${esc(r.purpose)}</td>
+        <td class="cell"${full(r.client)}>${esc(r.client||'—')}</td>
+        <td class="cell"${full(r.purpose)}>${esc(r.purpose)}</td>
         <td>${esc(modeShort(r.mode))}</td>
-        <td class="cell">${esc(r.payee||'—')}</td>
+        <td class="cell"${full(r.payee)}>${esc(r.payee||'—')}</td>
         <td>${r.files.map(f=>`<span class="docwrap">${f.url
               ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
               : `<span class="doc">${esc(f.name)}</span>`}${r.status==='Pending'
@@ -4321,12 +4387,12 @@ function vPayment(){
             }${(r.status==='Pending' || r.status==='Approved') && r.files.length < 5
               ? `<button type="button" class="adddoc" data-pqadd="${esc(r.id)}">${r.files.length?'+ another':'+ document'}</button>`
               : (r.files.length ? '' : '<span style="color:var(--ink3)">—</span>')}</td>
-        <td class="cell">${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
-        <td>${statusPill2(r.status)}${
-          r.status==='Rejected' && r.why ? `<div class="sub bad">${esc(r.why)}</div>`
-          : r.remarks ? `<div class="sub">${esc(r.remarks)}</div>`
-          : r.status==='Pending' ? '<div class="sub">with accounts</div>'
-          : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>
+        <td class="cell"${full(r.note)}>${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+        <td class="cell"${full(r.status==='Rejected' && r.why ? 'Turned down: ' + r.why
+            : r.remarks ? r.remarks
+            : r.status==='Pending' ? 'With accounts' : '')}>${statusPill2(r.status)}${
+          r.status==='Rejected' && r.why ? ` <span class="why">${esc(r.why)}</span>`
+          : r.remarks ? ` <span class="why">${esc(r.remarks)}</span>` : ''}</td>
         <td>${r.status==='Pending'
           ? `<button class="btn ghost sm" data-pqpull="${esc(r.id)}" type="button">Withdraw</button>`
           : (r.payStatus ? `<span class="pill ${r.payStatus==='Paid'?'good':(r.payStatus==='Initiated'?'warn':'mute')}">${esc(r.payStatus)}</span>`
@@ -6658,6 +6724,7 @@ function render(){
   if(mk && !mk.dataset.wired){ mk.dataset.wired='1'; mk.title='Home';
     mk.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); }; }
   CHARTS = {};
+  cellHover();
   if(state.tab !== 'payment') state.pqSeen = false;
   {
     const app = document.getElementById('app'), tg = document.getElementById('railTog');
