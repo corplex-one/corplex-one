@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609040921">
+<link rel="manifest" href="manifest.webmanifest?v=202609041000">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1288,7 +1288,41 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .pqdocs a:hover{color:var(--accent2)}
   .pqdocs .dropdoc{background:none;border:0;color:var(--ink3);font-size:13px;line-height:1;padding:0 2px;font-family:inherit}
   .pqdocs .dropdoc:hover{color:var(--bad)}
-  .actpair{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+  .actpair{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;align-items:center}
+  .btn.sm.x{padding:4px 9px;font-size:14px;line-height:1;color:var(--bad)}
+  .btn.sm.x:hover{border-color:var(--bad);background:var(--badBg)}
+
+  /* the two payment tables: a lot of narrow columns, so each one is told what
+     it is — a date never wraps, a purpose always may */
+  .paytab table{table-layout:auto}
+  .paytab td,.paytab th{vertical-align:top}
+  .paytab td.nw,.paytab th.nw{white-space:nowrap}
+  /* Break at spaces, not mid-word: 'anywhere' turned Dubai Economy (DED) into
+     'Dubai Econo / my (DED)', which reads as a rendering fault. */
+  .paytab td.cell{max-width:190px;overflow-wrap:break-word;word-break:normal;hyphens:none}
+  .paytab .sub{font-size:11px;color:var(--ink3);margin-top:3px;line-height:1.45}
+  .paytab .sub.bad{color:var(--bad)}
+  .paytab .sub .pill{font-size:10.5px;padding:1px 7px}
+  .paytab .doc{display:inline-block;max-width:110px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;vertical-align:bottom;font-size:11.5px;color:var(--ink2);text-decoration:underline}
+  .paytab a.doc:hover{color:var(--accent2)}
+  .paytab .docwrap{display:inline-flex;align-items:center;gap:2px;margin-right:6px}
+  .paytab .adddoc{background:none;border:1px dashed var(--line);border-radius:6px;color:var(--ink3);
+    font-family:inherit;font-size:11px;padding:2px 8px;white-space:nowrap;margin-top:3px;display:inline-block}
+  .paytab .adddoc:hover{border-color:var(--accent);color:var(--accent2)}
+
+  /* The raise screen: the form beside the confirmation, and the table across
+     the page underneath both. My own requests carries eleven columns now, and
+     in the old right-hand pane the last three fell off the edge. */
+  .payone{display:grid;grid-template-columns:minmax(330px,390px) minmax(0,1fr);
+    gap:14px;align-items:start;margin-bottom:14px}
+  .payone > div:empty{display:none}
+  @media (max-width:1180px){ .payone{grid-template-columns:1fr} }
+
+  /* Approve and the cross belong on one line. Wrapped, the cross read as a
+     second separate thing rather than the other half of one choice. */
+  .paytab td.act{white-space:nowrap}
+  .paytab .actpair{flex-wrap:nowrap}
   .selfnote{color:var(--warn);font-size:11px;margin-top:3px}
   .rjbox{padding:14px 16px}
   .rjbox label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:8px}
@@ -1442,8 +1476,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609040921';</script>
-<script src="config.js?v=202609040921"></script>
-<script type="module" src="boot.js?v=202609040921"></script>
+<script>window.__BUILD = '202609041000';</script>
+<script src="config.js?v=202609041000"></script>
+<script type="module" src="boot.js?v=202609041000"></script>
 </body>
 </html>

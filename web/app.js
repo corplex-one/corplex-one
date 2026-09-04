@@ -2630,23 +2630,23 @@ function alertsFor(u){
   const pend = reqs().filter(r=>r.status==='Pending');
   if(canUpload(u) && pend.length && coInView(u)==='corplex')
     add('pay-req', `${pend.length} payment request${pend.length===1?'':'s'} waiting on you`,
-      `AED ${money(pend.reduce((x,r)=>x+r.amount,0),2)} · oldest from ${pend[pend.length-1].by}`, 'payment');
+      `AED ${money(pend.reduce((x,r)=>x+r.amount,0),2)} · oldest from ${pend[pend.length-1].by}`, 'payapprove');
 
   // and what happened to mine, once and once only
   reqs().filter(r=>r.by===u && !r.seen && (r.status==='Approved' || r.status==='Rejected'))
     .forEach(r=>{
       if(r.status==='Rejected')
-        add('pay-no-'+r.id, `${r.ref} was turned down`,
+        add('pay-no-'+r.id, `${reqName(r)} was turned down`,
           r.why || 'No reason was given', 'payment', 'bad');
       else
-        add('pay-ok-'+r.id, `${r.ref} was approved — AED ${money(r.amount,2)}`,
+        add('pay-ok-'+r.id, `${reqName(r)} was approved — AED ${money(r.amount,2)}`,
           r.remarks || (r.payStatus ? r.payStatus : 'Accounts will record the payment shortly'),
           'payment', 'good');
     });
 
   // a request of mine that nobody has looked at yet, so it is not forgotten
   reqs().filter(r=>r.by===u && r.status==='Pending').forEach(r=>
-    add('pay-wait-'+r.id, `${r.ref} is with accounts`,
+    add('pay-wait-'+r.id, `${reqName(r)} is with accounts`,
       `${r.payee} · AED ${money(r.amount,2)} · raised ${r.date}`, 'payment', 'warn'));
 
   H.requests.filter(r=>r.mgr===u && r.status==='Pending').forEach(r=>
@@ -3892,7 +3892,7 @@ function vApprovePanel(){
   return `
   <section class="panel" style="border-color:var(--accent);box-shadow:0 0 0 3px var(--accentSoft), var(--shadow)">
     <header style="background:var(--accentSoft)">
-      <h3>Approving ${esc(r.ref)}</h3>
+      <h3>Approving ${esc(reqName(r))}</h3>
       <span class="hint">${esc(r.by)} &middot; ${esc(r.client)} &middot; AED ${money(r.amount,2)}</span>
     </header>
     <div class="pad" style="display:flex;flex-direction:column;gap:18px">
@@ -3940,13 +3940,94 @@ function vApprovePanel(){
     </div>
   </section>`;
 }
+/* What to call a request when talking to a person about it. */
+function reqName(r){
+  if(!r) return 'that request';
+  if(r.order) return r.order;
+  return `${r.payee || 'the payment'} — AED ${money(r.amount, 2)}`;
+}
+
+function statusPill2(s){
+  return `<span class="pill ${s==='Paid'||s==='Approved'?'good':(s==='Rejected'?'bad':(s==='Withdrawn'?'mute':'warn'))}"><span class="dt"></span>${esc(s)}</span>`;
+}
+function modeLabel(id){ return (MODES.find(m=>m.id===id)||{}).label || id; }
+
+function vPayApprove(){
+  const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
+  const queue = reqs().filter(r=>r.status==='Pending');
+  const done  = reqs().filter(r=>r.status!=='Pending');
+  const paidPill = c => c.known
+    ? (c.paid ? '<span class="pill good"><span class="dt"></span>client paid</span>'
+              : `<span class="pill bad"><span class="dt"></span>AED ${money(c.out)} owing</span>`)
+    : '<span class="pill mute">not in the sales book</span>';
+
+  const row = r => {
+    const c = clientStatus(r.client);
+    return `<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
+      <td class="n nw">${esc(r.date)}</td>
+      <td>${nm(r.by)}</td>
+      <td class="n nw">${esc(r.order||'—')}</td>
+      <td class="n r nw">${money(r.amount,2)}</td>
+      <td class="cell">${esc(r.client||'—')}<div class="sub">${paidPill(c)}</div></td>
+      <td class="cell">${esc(r.purpose)}</td>
+      <td class="nw">${esc(modeLabel(r.mode))}</td>
+      <td class="cell">${esc(r.payee||'—')}</td>
+      <td>${r.files.length ? r.files.map(f=>f.url
+            ? `<a class="doc" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(f.name)}">${esc(f.name)}</a>`
+            : `<span class="doc">${esc(f.name)}</span>`).join('')
+          : '<span style="color:var(--ink3)">—</span>'}</td>
+      <td class="cell">${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+      <td class="act">${r.status==='Pending'
+        ? `<div class="actpair">
+             <button class="btn sm" data-approve="${esc(r.ref)}" type="button">Approve</button>
+             <button class="btn ghost sm x" data-reject="${esc(r.id)}" type="button" title="Turn it down">&times;</button>
+           </div>`
+        : `${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${
+           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}`}</td>
+    </tr>${state.reject===r.id?`<tr><td colspan="11" style="background:var(--badBg)">
+      <div class="rjbox">
+        <label for="rjWhy">Why is ${esc(reqName(r))} being turned down? ${esc(r.by)} will read this.</label>
+        <input id="rjWhy" placeholder="The client has not settled the invoice this sits against">
+        <div class="drow" style="margin-top:10px">
+          <button class="btn" id="rjGo" type="button">Turn it down</button>
+          <button class="btn ghost" data-reject="${esc(r.id)}" type="button">Never mind</button>
+          ${state.rjErr?`<span style="color:var(--bad);font-size:12.5px">${esc(state.rjErr)}</span>`:''}
+        </div>
+      </div></td></tr>`:''}`;
+  };
+
+  const head = `<thead><tr>
+      <th>Date</th><th>By</th><th>Order number</th><th class="r">Amount</th>
+      <th>Client</th><th>Purpose</th><th>Mode</th><th>Vendor</th>
+      <th>Document</th><th>Additional information</th><th class="act"></th></tr></thead>`;
+
+  return `
+  ${state.approve.ref ? vApprovePanel() : ''}
+  <section class="panel">
+    <header><h3>Requests waiting on you</h3>
+      <span class="hint">${queue.length ? `${queue.length} pending &middot; AED ${money(queue.reduce((s,r)=>s+r.amount,0),2)} &middot; ${queue.filter(r=>clientStatus(r.client).paid).length} where the client has paid` : 'nothing waiting'}</span></header>
+    <div class="tw paytab"><table>${head}
+      <tbody>${queue.length ? queue.map(row).join('')
+        : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing is waiting on you.</td></tr>'}</tbody>
+    </table></div>
+    <p class="cap">Your test is whether the client has paid, so the answer sits under the client's name instead of you looking it up. <b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>Already decided</h3><span class="hint">${done.length ? `${done.length} request${done.length===1?'':'s'}` : 'none yet'}</span></header>
+    <div class="tw paytab"><table>${head}
+      <tbody>${done.length ? done.map(row).join('')
+        : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>
+    </table></div>
+  </section>`;
+}
+
 function vPayment(){
   const u = state.user, approver = canUpload(u);   // payment approvals are Avin's alone
   const mine = reqs().filter(r=>r.by===u);
   const queue = reqs().filter(r=>r.status==='Pending');
   const clients = Object.keys(DATA.clients).sort();
-  const statusPill2 = s => `<span class="pill ${s==='Paid'?'good':(s==='Approved'?'good':(s==='Rejected'?'bad':'warn'))}"><span class="dt"></span>${esc(s)}</span>`;
-  const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
+  // statusPill2 and modeLabel are declared once, beside vPayApprove
 
   const form = `
   <section class="panel payform">
@@ -3983,79 +4064,49 @@ function vPayment(){
     </div>
   </section>`;
 
-  const queuePanel = !approver ? '' : `
-  <section class="panel grow">
-    <header><h3>Requests waiting on you</h3>
-      <span class="hint">${queue.length} pending &middot; ${money(queue.reduce((s,r)=>s+r.amount,0))} AED &middot; ${queue.filter(r=>clientStatus(r.client).paid).length} with the client paid</span></header>
-    <div class="tw"><table>
-      <thead><tr><th>Request</th><th>By</th><th>Client</th><th>Paid?</th><th>Vendor</th><th class="r">Amount</th><th class="act"></th></tr></thead>
-      <tbody>
-        ${reqs().map(r=>`<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
-          <td class="n" style="white-space:nowrap">${esc(r.ref)}
-            <div style="color:var(--ink3);font-size:11px;margin-top:2px">${esc(r.order||'—')}${r.docs?' · '+r.docs+' file'+(r.docs===1?'':'s'):''}</div></td>
-          <td>${esc(r.by)}</td>
-          <td style="max-width:130px">${esc(r.client)}</td>
-          <td>${clientStatus(r.client).paid?'<span class="pill good"><span class="dt"></span>Paid</span>':`<span class="pill bad"><span class="dt"></span>${money(clientStatus(r.client).out)}</span>`}</td>
-          <td style="max-width:120px">${esc(r.payee||r.purpose)}<div style="color:var(--ink3);font-size:11px;margin-top:2px">${esc(modeLabel(r.mode))}</div></td>
-          <td class="n r" style="white-space:nowrap">${money(r.amount,2)}</td>
-          <td class="act">${r.status==='Pending'
-            ? `<div class="actpair">
-                 <button class="btn" style="padding:4px 10px;font-size:12px" data-approve="${esc(r.ref)}" type="button">Approve</button>
-                 <button class="btn ghost" style="padding:4px 10px;font-size:12px" data-reject="${esc(r.id)}" type="button">Turn down</button>
-               </div>`
-            : `${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${r.account?`<div style="color:var(--ink3);font-size:11.5px;margin-top:3px">${esc((ACCOUNTS.find(x=>x.id===r.account)||{}).label||'')}</div>`:''}${
-               r.self?`<div class="selfnote">approved by the person who raised it</div>`:''}`}</td>
-        </tr>${state.reject===r.id?`<tr><td colspan="7" style="background:var(--badBg)">
-          <div class="rjbox">
-            <label for="rjWhy">Why is ${esc(r.ref)} being turned down? ${esc(r.by)} will read this.</label>
-            <input id="rjWhy" placeholder="The client has not settled the invoice this sits against">
-            <div class="drow" style="margin-top:10px">
-              <button class="btn" id="rjGo" type="button">Turn it down</button>
-              <button class="btn ghost" data-reject="${esc(r.id)}" type="button">Never mind</button>
-              ${state.rjErr?`<span style="color:var(--bad);font-size:12.5px">${esc(state.rjErr)}</span>`:''}
-            </div>
-          </div></td></tr>`:''}`).join('')}
-      </tbody></table></div>
-    ${reqs().length ? '' : '<p class="cap" style="padding:22px 20px;text-align:center">Nobody has raised a payment request yet.</p>'}
-    <p class="cap">Your test is whether the client has paid, so the answer sits in the row instead of you looking it up.</p>
-  </section>`;
+  const queuePanel = '';
 
   const minePanel = `
   <section class="panel grow">
-    <header><h3>${approver?'My own requests':'My requests'}</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
-    <div class="tw"><table>
-      <thead><tr><th>Ref</th><th>Raised</th><th>Client</th><th>Purpose</th><th class="r">Amount</th><th>Mode</th><th>Status</th><th>What happens next</th></tr></thead>
+    <header><h3>My requests</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
+    <div class="tw paytab"><table>
+      <thead><tr><th>Date</th><th>Order number</th><th class="r">Amount</th><th>Client</th>
+        <th>Purpose</th><th>Mode</th><th>Vendor</th><th>Document</th>
+        <th>Additional information</th><th>Status</th><th class="act"></th></tr></thead>
       <tbody>${mine.length?mine.map(r=>`<tr>
-        <td class="n">${esc(r.ref)}${r.files.length?`<div class="pqdocs">${r.files.map(f=>
-          f.url?`<a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.name)}</a>`
-              :`<span>${esc(f.name)}</span>`).join('')}${r.status==='Pending'?r.files.map(f=>
-          `<button type="button" class="dropdoc" data-pqdoc="${esc(f.id)}" title="Remove ${esc(f.name)}">&times;</button>`).join(''):''}</div>`:''}</td>
-        <td class="n">${esc(r.date)}</td>
-        <td style="max-width:180px">${esc(r.client||'—')}</td>
-        <td>${esc(r.purpose)}</td>
-        <td class="n r">${money(r.amount,2)}</td>
-        <td>${esc(modeLabel(r.mode))}</td>
-        <td>${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}</td>
-        <td style="color:var(--ink2);max-width:280px">${
-          r.status==='Rejected' && r.why ? `<b>Turned down:</b> ${esc(r.why)}`
-          : r.remarks ? esc(r.remarks)
-          : r.status==='Pending' ? `Waiting for accounts to approve
-              <button class="btn ghost sm" data-pqpull="${esc(r.id)}" type="button" style="margin-left:8px">Withdraw</button>`
-          : r.status==='Withdrawn' ? 'You took this one back'
-          : '&mdash;'}</td></tr>`).join('')
-        :'<tr><td colspan="8" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>
+        <td class="n nw">${esc(r.date)}</td>
+        <td class="n nw">${esc(r.order||'—')}</td>
+        <td class="n r nw">${money(r.amount,2)}</td>
+        <td class="cell">${esc(r.client||'—')}</td>
+        <td class="cell">${esc(r.purpose)}</td>
+        <td class="nw">${esc(modeLabel(r.mode))}</td>
+        <td class="cell">${esc(r.payee||'—')}</td>
+        <td>${r.files.map(f=>`<span class="docwrap">${f.url
+              ? `<a class="doc" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(f.name)}">${esc(f.name)}</a>`
+              : `<span class="doc">${esc(f.name)}</span>`}${r.status==='Pending'
+              ? `<button type="button" class="dropdoc" data-pqdoc="${esc(f.id)}" title="Remove ${esc(f.name)}">&times;</button>` : ''}</span>`).join('')
+            }${(r.status==='Pending' || r.status==='Approved') && r.files.length < 5
+              ? `<button type="button" class="adddoc" data-pqadd="${esc(r.id)}">${r.files.length?'+ another':'+ document'}</button>`
+              : (r.files.length ? '' : '<span style="color:var(--ink3)">—</span>')}</td>
+        <td class="cell">${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+        <td>${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${
+          r.status==='Rejected' && r.why ? `<div class="sub bad">${esc(r.why)}</div>`
+          : r.remarks ? `<div class="sub">${esc(r.remarks)}</div>`
+          : r.status==='Pending' ? '<div class="sub">with accounts</div>'
+          : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>
+        <td class="act">${r.status==='Pending'
+          ? `<button class="btn ghost sm" data-pqpull="${esc(r.id)}" type="button">Withdraw</button>`
+          : '<span style="color:var(--ink3)">—</span>'}</td></tr>`).join('')
+        :'<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>
     <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.</p>
   </section>`;
 
-  return `<div class="paygrid">
-    <div class="paycol left">${form}</div>
-    <div class="paycol right">
-      ${state.approve.ref ? vApprovePanel() : ''}
-      ${state.pqDone ? vPaymentSent() : ''}
-      ${queuePanel}
-      ${minePanel}
-    </div>
-  </div>`;
+  return `<input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="payone">
+    <div>${form}</div>
+    <div>${state.pqDone ? vPaymentSent() : ''}</div>
+  </div>
+  ${minePanel}`;
 }
 /* What actually happened, said plainly. No invented email, because no email
  * leaves the portal yet — that is waiting on a sending address, and claiming
@@ -4097,12 +4148,12 @@ function vPaymentSent(){
   const mode = MODES.find(m => m.id === d.mode) || {label: d.mode, next: ''};
   return `
   <section class="panel">
-    <header><h3>${esc(d.ref)} raised</h3><span class="hint">it is in the portal now</span></header>
+    <header><h3>Request raised</h3><span class="hint">it is in the portal now</span></header>
     <div class="pad">
       <div class="strip" style="grid-template-columns:repeat(2,minmax(0,1fr))">
-        <div class="stat"><span class="k">Reference</span>
-          <span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">${esc(d.ref)}</span>
-          <span class="n">${d.order?'Order '+esc(d.order)+' &middot; ':''}AED ${money(d.amount,2)} &middot; ${esc(mode.label)}</span></div>
+        <div class="stat"><span class="k">${d.order ? 'Order number' : 'Raised'}</span>
+          <span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">${esc(d.order || 'no order number')}</span>
+          <span class="n">AED ${money(d.amount,2)} &middot; ${esc(mode.label)}</span></div>
         <div class="stat"><span class="k">Waiting on</span>
           <span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Accounts</span>
           <span class="n">it shows in the approval queue straight away</span></div>
@@ -5881,6 +5932,8 @@ const TABS = [
   {id:'tools',       group:'other', label:'Card fee calculator', title:'Card fee calculator'},
   // payment requests are a CorpLex process; POA and Lex do not use them
   {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
+  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
+   gate:u=>coInView(u)==='corplex' && canUpload(u)},
   {id:'profile',     group:'hr',    label:'My profile',       title:'My profile', hide:true},
   {id:'attend',      group:'hr',    label:'My attendance',    title:'My attendance', gate:tracksAtt},
   {id:'people',      group:'hr',    label:'People',           title:'People'},
@@ -5966,7 +6019,7 @@ function renderNav(){
    the approvals waiting on them. Navigation sits in a fixed footer. */
 const MOBILE = () => window.matchMedia('(max-width:720px)').matches;
 const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company',
-                 'tools','payment'];
+                 'tools','payment','payapprove'];
 const onPhone = t => !(MOBILE() && MOBHIDE.includes(t.id));
 
 const MICO = {
@@ -6333,9 +6386,11 @@ function render(){
   if(state.tab !== 'payment') state.pqSeen = false;
   const v = document.getElementById('view');
   const mainEl = document.querySelector('main');
-  mainEl.classList.toggle('fixed', ['payment','invoices'].includes(state.tab));
+  // the payment screen scrolls like every other screen: its table is eleven
+  // columns wide and a viewport-height pane cut the last three off
+  mainEl.classList.toggle('fixed', ['invoices'].includes(state.tab));
   document.body.classList.toggle('printinv', !!state.invPrint);
-  mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile'].includes(state.tab));
+  mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));
   const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
   const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
   if(SALESTABS.includes(state.tab) && activeCo().sales && !yearHeld){
@@ -6355,7 +6410,7 @@ function render(){
     return;
   }
   v.innerHTML = (CON?conBar():'') + ({home:vHome, dashboard:vDashboard, commission:vCommission, invoices:vInvoices,
-                  leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
+                  leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payapprove:vPayApprove, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
                   profile:vProfile, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
                   leaverules:vLeaveRules, deskonly:vDeskOnly, ...PAGEVIEW,
@@ -6787,7 +6842,7 @@ function render(){
       calcPOA();
     }
   }
-  if(state.tab==='payment'){
+  if(state.tab==='payment' || state.tab==='payapprove'){
     const cs=document.getElementById('pqClient');
     if(cs){
       cs.addEventListener('input',()=>{ pqList(); pqBadge(); });
@@ -6801,7 +6856,7 @@ function render(){
       body.addEventListener('input', pqGrab);
       body.addEventListener('change', pqGrab);
     }
-    if(!state.pqSeen){
+    if(state.tab==='payment' && !state.pqSeen){
       state.pqSeen = true;
       const unread = reqs().some(r=>r.by===state.user && !r.seen
         && (r.status==='Approved' || r.status==='Rejected'));
@@ -6835,6 +6890,22 @@ function render(){
       b.disabled=true; await window.__db.withdrawPayment(b.dataset.pqpull); });
     document.querySelectorAll('[data-pqdoc]').forEach(b=>b.onclick=async()=>{
       b.disabled=true; await window.__db.detachPayment(b.dataset.pqdoc); });
+
+    /* Attaching to a request that already exists — including one that has been
+     * approved, because the receipt, the stamped form and the courier slip all
+     * turn up after the payment does. One hidden input for the screen, pointed
+     * at whichever request the button belonged to. */
+    const rowFile=document.getElementById('pqRowFile');
+    document.querySelectorAll('[data-pqadd]').forEach(b=>b.onclick=()=>{
+      if(!rowFile) return;
+      state.pqAddTo=b.dataset.pqadd; rowFile.value=''; rowFile.click(); });
+    if(rowFile) rowFile.onchange=async()=>{
+      const id=state.pqAddTo, picked=[...(rowFile.files||[])];
+      rowFile.value=''; state.pqAddTo=null;
+      if(!id || !picked.length) return;
+      for(const f of picked) await window.__db.attachPayment(id, f);
+      render();
+    };
 
     document.querySelectorAll('[data-reject]').forEach(b=>b.onclick=()=>{
       state.reject = state.reject===b.dataset.reject ? null : b.dataset.reject; render(); });
