@@ -779,6 +779,24 @@ window.__db = {
     }catch(e){ oops(e, 'That decision'); await reload(); return null; }
   },
 
+  /* One field of the reconciliation list, or several. Everything is optional
+   * and undefined means 'leave that one alone' — these get set one at a time,
+   * days apart, by somebody working down a column. */
+  async reconcilePayment(id, p){
+    try{
+      const {data, error} = await sb.rpc('reconcile_payment', {
+        p_id: id,
+        p_status:  p.payStatus === undefined ? null : p.payStatus,
+        p_account: p.account   === undefined ? null : p.account,
+        p_books:   p.books     === undefined ? null : p.books,
+        p_bigin:   p.bigin     === undefined ? null : p.bigin,
+        p_receipt: p.receipt   === undefined ? null : p.receipt});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'That payment'); await reload(); return null; }
+  },
+
   async settlePayment(id, payStatus, account, remark){
     try{
       const {data, error} = await sb.rpc('settle_payment_request', {

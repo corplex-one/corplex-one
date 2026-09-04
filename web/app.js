@@ -3845,15 +3845,24 @@ const MODES = [
 function reqs(){ return DATA.payments || []; }
 const PAYSTATUS = ['Paid','Unpaid','Initiated'];
 const ACCOUNTS = [
-  {id:'petty',   label:'Petty Cash',      remark:c=>`Nissa, please handover cash to "${c}"`,
+  {id:'petty',      label:'Petty Cash',    remark:c=>`Nissa, please handover cash to "${c}"`,
    who:['Nissa Muradova — hands over the cash']},
-  {id:'mashreq', label:'Mashreq (AED)',   remark:()=>'Payment initiated. To be approved by Miraziz',
+  {id:'mashreq',    label:'Mashreq (AED)', remark:()=>'Payment initiated. To be approved by Miraziz',
    who:['Miraziz Makhamatzhanov — authorises the transfer']},
-  {id:'qashio',  label:'Qashio - 9073',   remark:()=>'Use my Qashio Card. I will authorize it',
+  {id:'qashio',     label:'Qashio - 9073', remark:()=>'Use my Qashio Card 9073. I will authorize it',
    who:['Avin Mascarenhas — authorises the card']},
-  {id:'mcard',   label:'Mashreq Card',    remark:()=>'Use Mashreq Card. OTP will be provided by Miraziz',
+  {id:'qashio9444', label:'Qashio - 9444', remark:()=>'Use my Qashio Card 9444. I will authorize it',
+   who:['Avin Mascarenhas — authorises the card']},
+  {id:'qashio3639', label:'Qashio - 3639', remark:()=>'Use my Qashio Card 3639. I will authorize it',
+   who:['Avin Mascarenhas — authorises the card']},
+  /* Not offered any more — it is not on the list Avin gave. It stays here so
+   * that a payment already made through it still says what it says, rather
+   * than showing a blank where an account used to be. */
+  {id:'mcard',      label:'Mashreq Card',  retired:true,
+   remark:()=>'Use Mashreq Card. OTP will be provided by Miraziz',
    who:['Miraziz Makhamatzhanov — provides the OTP']}
 ];
+const OFFERED = () => ACCOUNTS.filter(a => !a.retired);
 function waMessage(r){
   const acct = ACCOUNTS.find(x=>x.id===r.account);
   return [
@@ -3906,7 +3915,7 @@ function vApprovePanel(){
         <div>
           <label style="margin-bottom:9px">Step 2 &mdash; Paid from</label>
           <div class="seg" style="width:100%;flex-wrap:wrap">
-            ${ACCOUNTS.map(x=>`<button type="button" data-ac="${x.id}" aria-pressed="${st.account===x.id}" style="flex:1;white-space:nowrap">${esc(x.label)}</button>`).join('')}
+            ${OFFERED().map(x=>`<button type="button" data-ac="${x.id}" aria-pressed="${st.account===x.id}" style="flex:1;white-space:nowrap">${esc(x.label)}</button>`).join('')}
           </div>
         </div>
       </div>
@@ -3952,6 +3961,35 @@ function statusPill2(s){
 }
 function modeLabel(id){ return (MODES.find(m=>m.id===id)||{}).label || id; }
 
+function vDocPop(){
+  const d = state.doc; if(!d) return '';
+  const img = /\.(png|jpe?g|webp|heic|gif)$/i.test(d.name || '');
+  return `
+  <div class="docpop" id="docPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="${esc(d.name)}">
+      <header>
+        <b>${esc(d.name)}</b>
+        <a class="btn ghost sm" href="${esc(d.url)}" download="${esc(d.name)}" target="_blank" rel="noopener">Download</a>
+        <button class="btn ghost sm" id="docShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody">${img
+        ? `<img src="${esc(d.url)}" alt="${esc(d.name)}">`
+        : `<iframe src="${esc(d.url)}" title="${esc(d.name)}"></iframe>`}</div>
+    </div>
+  </div>`;
+}
+
+/* The two tabs of the payment page. Only accounts sees the second one, so for
+ * everybody else there is nothing to draw and the bar does not appear. */
+function payBar(){
+  if(!canUpload(state.user)) return '';
+  const tabs = [['payment','Request for payment'], ['payapprove','Approve payments']];
+  const waiting = reqs().filter(r=>r.status==='Pending').length;
+  return `<div class="subbar"><div class="subtabs">${tabs.map(([id,label])=>
+    `<button data-paytab="${id}" aria-current="${state.tab===id}" type="button">${esc(label)}${
+      id==='payapprove' && waiting ? ` <i class="cnt">${waiting}</i>` : ''}</button>`).join('')}</div></div>`;
+}
+
 function vPayApprove(){
   const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
   const queue = reqs().filter(r=>r.status==='Pending');
@@ -3961,7 +3999,30 @@ function vPayApprove(){
               : `<span class="pill bad"><span class="dt"></span>AED ${money(c.out)} owing</span>`)
     : '<span class="pill mute">not in the sales book</span>';
 
-  const row = r => {
+  /* The reconciliation half of a decided row: paid or not, out of which
+   * account, and Avin's own three ticks. Approving and paying are days apart —
+   * 'payments are approved, but not paid yet' — so these are recorded when
+   * they happen rather than guessed at the moment of the decision. */
+  const recon = r => {
+    if(r.status !== 'Approved') return '<td></td><td></td><td></td><td></td><td></td>';
+    const busy = state.reconBusy === r.id;
+    // A bare box under a named column, the way it is on the sheet Avin keeps.
+    const tick = k => `<td class="c"><input type="checkbox" class="rtick"
+      data-recon="${esc(r.id)}" data-field="${k}"${r[k]?' checked':''}${busy?' disabled':''}></td>`;
+    return `
+      <td class="nw"><select class="acsel st${esc((r.payStatus||'Unpaid').toLowerCase())}"
+        data-paystat="${esc(r.id)}"${busy?' disabled':''}>${PAYSTATUS.map(st=>
+        `<option value="${esc(st)}"${(r.payStatus||'Unpaid')===st?' selected':''}>${esc(st)}</option>`).join('')}
+      </select></td>
+      <td class="nw"><select class="acsel" data-acct="${esc(r.id)}"${busy?' disabled':''}>
+        <option value=""${r.account?'':' selected'}>&mdash;</option>
+        ${OFFERED().concat(ACCOUNTS.filter(a=>a.retired && a.id===r.account)).map(a=>
+          `<option value="${a.id}"${r.account===a.id?' selected':''}>${esc(a.label)}</option>`).join('')}
+      </select></td>
+      ${tick('books')}${tick('bigin')}${tick('receipt')}`;
+  };
+
+  const row = (r, withRecon) => {
     const c = clientStatus(r.client);
     return `<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
       <td class="n nw">${esc(r.date)}</td>
@@ -3973,7 +4034,7 @@ function vPayApprove(){
       <td class="nw">${esc(modeLabel(r.mode))}</td>
       <td class="cell">${esc(r.payee||'—')}</td>
       <td>${r.files.length ? r.files.map(f=>f.url
-            ? `<a class="doc" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(f.name)}">${esc(f.name)}</a>`
+            ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
             : `<span class="doc">${esc(f.name)}</span>`).join('')
           : '<span style="color:var(--ink3)">—</span>'}</td>
       <td class="cell">${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
@@ -3982,8 +4043,9 @@ function vPayApprove(){
              <button class="btn sm" data-approve="${esc(r.ref)}" type="button">Approve</button>
              <button class="btn ghost sm x" data-reject="${esc(r.id)}" type="button" title="Turn it down">&times;</button>
            </div>`
-        : `${statusPill2(r.status)}${r.payStatus?` <span class="pill mute">${esc(r.payStatus)}</span>`:''}${
+        : `${statusPill2(r.status)}${
            r.self?'<div class="selfnote">approved by the person who raised it</div>':''}`}</td>
+      ${withRecon ? recon(r) : ''}
     </tr>${state.reject===r.id?`<tr><td colspan="11" style="background:var(--badBg)">
       <div class="rjbox">
         <label for="rjWhy">Why is ${esc(reqName(r))} being turned down? ${esc(r.by)} will read this.</label>
@@ -3996,18 +4058,23 @@ function vPayApprove(){
       </div></td></tr>`:''}`;
   };
 
-  const head = `<thead><tr>
-      <th>Date</th><th>By</th><th>Order number</th><th class="r">Amount</th>
+  const cols = `<th>Date</th><th>By</th><th>Order number</th><th class="r">Amount</th>
       <th>Client</th><th>Purpose</th><th>Mode</th><th>Vendor</th>
-      <th>Document</th><th>Additional information</th><th class="act"></th></tr></thead>`;
+      <th>Document</th><th>Additional information</th>`;
+  const head  = `<thead><tr>${cols}<th class="act"></th></tr></thead>`;
+  const head2 = `<thead><tr>${cols}<th class="act"></th>
+      <th>Payment status</th><th>Paid through</th>
+      <th class="c">Books</th><th class="c">Bigin</th><th class="c">Receipt</th></tr></thead>`;
 
   return `
+  ${vDocPop()}
+  ${payBar()}
   ${state.approve.ref ? vApprovePanel() : ''}
   <section class="panel">
     <header><h3>Requests waiting on you</h3>
       <span class="hint">${queue.length ? `${queue.length} pending &middot; AED ${money(queue.reduce((s,r)=>s+r.amount,0),2)} &middot; ${queue.filter(r=>clientStatus(r.client).paid).length} where the client has paid` : 'nothing waiting'}</span></header>
     <div class="tw paytab"><table>${head}
-      <tbody>${queue.length ? queue.map(row).join('')
+      <tbody>${queue.length ? queue.map(r=>row(r,false)).join('')
         : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing is waiting on you.</td></tr>'}</tbody>
     </table></div>
     <p class="cap">Your test is whether the client has paid, so the answer sits under the client's name instead of you looking it up. <b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
@@ -4015,9 +4082,10 @@ function vPayApprove(){
 
   <section class="panel">
     <header><h3>Already decided</h3><span class="hint">${done.length ? `${done.length} request${done.length===1?'':'s'}` : 'none yet'}</span></header>
-    <div class="tw paytab"><table>${head}
-      <tbody>${done.length ? done.map(row).join('')
-        : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>
+    ${done.length ? '<p class="scrollnote">Sixteen columns &mdash; scroll the table sideways for the reconciliation ones. The date stays put so you keep your place.</p>' : ''}
+    <div class="tw paytab recon"><table>${head2}
+      <tbody>${done.length ? done.map(r=>row(r,true)).join('')
+        : '<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>
     </table></div>
   </section>`;
 }
@@ -4082,7 +4150,7 @@ function vPayment(){
         <td class="nw">${esc(modeLabel(r.mode))}</td>
         <td class="cell">${esc(r.payee||'—')}</td>
         <td>${r.files.map(f=>`<span class="docwrap">${f.url
-              ? `<a class="doc" href="${esc(f.url)}" target="_blank" rel="noopener" title="${esc(f.name)}">${esc(f.name)}</a>`
+              ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
               : `<span class="doc">${esc(f.name)}</span>`}${r.status==='Pending'
               ? `<button type="button" class="dropdoc" data-pqdoc="${esc(f.id)}" title="Remove ${esc(f.name)}">&times;</button>` : ''}</span>`).join('')
             }${(r.status==='Pending' || r.status==='Approved') && r.files.length < 5
@@ -4101,7 +4169,8 @@ function vPayment(){
     <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.</p>
   </section>`;
 
-  return `<input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  return `${vDocPop()}${payBar()}
+  <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
   <div class="payone">
     <div>${form}</div>
     <div>${state.pqDone ? vPaymentSent() : ''}</div>
@@ -5933,7 +6002,7 @@ const TABS = [
   // payment requests are a CorpLex process; POA and Lex do not use them
   {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
   {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
-   gate:u=>coInView(u)==='corplex' && canUpload(u)},
+   gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},
   {id:'profile',     group:'hr',    label:'My profile',       title:'My profile', hide:true},
   {id:'attend',      group:'hr',    label:'My attendance',    title:'My attendance', gate:tracksAtt},
   {id:'people',      group:'hr',    label:'People',           title:'People'},
@@ -6238,7 +6307,8 @@ function renderChrome(){
   let t = TABS.find(x=>x.id===state.tab) || {id:state.tab, title:'Home'};
   if(t.id==='admin' && canUpload(state.user)) t = Object.assign({}, t, {title:'Upload & admin'});
   if(t.id==='company') t = Object.assign({}, t, {title: deptData(state.user).department});
-  const ttl = MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;
+  const ttl = state.tab === 'payapprove' ? 'Payment request'
+            : MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;
   document.getElementById('pageTitle').innerHTML = `${esc(ttl)}${(periodic && !MOBILE())?`<small>${esc(PLABEL[state.period]+' · '+state.year)}</small>`:''}`;
 }
 function tabHash(){ return (state.mode === 'console' ? 'c/' : '') + state.tab; }
@@ -6895,6 +6965,17 @@ function render(){
      * approved, because the receipt, the stamped form and the courier slip all
      * turn up after the payment does. One hidden input for the screen, pointed
      * at whichever request the button belonged to. */
+    // data-doc already belongs to the documents screen; this is its own name
+    document.querySelectorAll('[data-paytab]').forEach(b=>b.onclick=()=>{
+      state.tab=b.dataset.paytab; state.approve={ref:null,payStatus:'',account:'',remarks:''};
+      state.reject=null; render(); });
+    document.querySelectorAll('[data-popdoc]').forEach(b=>b.onclick=()=>{
+      state.doc={url:b.dataset.popdoc, name:b.dataset.name}; render(); });
+    const shut=document.getElementById('docShut');
+    if(shut) shut.onclick=()=>{ state.doc=null; render(); };
+    const pop=document.getElementById('docPop');
+    if(pop) pop.onclick=e=>{ if(e.target===pop){ state.doc=null; render(); } };
+
     const rowFile=document.getElementById('pqRowFile');
     document.querySelectorAll('[data-pqadd]').forEach(b=>b.onclick=()=>{
       if(!rowFile) return;
@@ -6925,6 +7006,19 @@ function render(){
       window.scrollTo({top:0,behavior:'smooth'});
     });
     document.querySelectorAll('[data-ps]').forEach(b=>b.onclick=()=>{ state.approve.payStatus=b.dataset.ps; render(); });
+
+    const recon = async (id, patch) => {
+      state.reconBusy = id; render();
+      await window.__db.reconcilePayment(id, patch);
+      state.reconBusy = null; render();
+    };
+    document.querySelectorAll('[data-paystat]').forEach(sel=>sel.onchange=()=>
+      recon(sel.dataset.paystat, {payStatus: sel.value.toLowerCase()}));
+    document.querySelectorAll('[data-acct]').forEach(sel=>sel.onchange=()=>{
+      if(!sel.value) return;              // '— not yet —' is not a change to make
+      recon(sel.dataset.acct, {account: sel.value}); });
+    document.querySelectorAll('[data-recon]').forEach(cb=>cb.onchange=()=>
+      recon(cb.dataset.recon, {[cb.dataset.field]: cb.checked}));
     document.querySelectorAll('[data-ac]').forEach(b=>b.onclick=()=>{
       const r = reqs().find(x=>x.ref===state.approve.ref);   // remark names the requester
       const acct = ACCOUNTS.find(x=>x.id===b.dataset.ac);

@@ -652,6 +652,7 @@ function buildSales(db, byId, name, companies){
     self: !!(r.decided_by && r.raised_by && r.decided_by === r.raised_by),
     seen: !!r.seen_at,
     payStatus: PAYSTAT[r.pay_status] || '', account: r.account || '',
+    books: !!r.books, bigin: !!r.bigin, receipt: !!r.receipt,
     remarks: r.remark || '',
     files: filesOf[r.id] || [],
     docs: (filesOf[r.id] || []).length

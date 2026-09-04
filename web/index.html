@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041000">
+<link rel="manifest" href="manifest.webmanifest?v=202609041035">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1323,6 +1323,49 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      second separate thing rather than the other half of one choice. */
   .paytab td.act{white-space:nowrap}
   .paytab .actpair{flex-wrap:nowrap}
+
+  /* the reconciliation half of a decided row: two pickers and three boxes,
+     laid out the way the sheet Avin keeps lays them out */
+  .paytab select.acsel{font-size:12px;padding:4px 6px;max-width:126px}
+  .paytab select.acsel.stpaid{color:var(--good);font-weight:600}
+  .paytab select.acsel.stunpaid{color:var(--ink3)}
+  .paytab select.acsel.stinitiated{color:var(--warn)}
+  .paytab th.c,.paytab td.c{text-align:center;width:1%;white-space:nowrap;padding-left:8px;padding-right:8px}
+  .paytab input.rtick{width:auto;margin:0;accent-color:var(--good);transform:scale(1.15)}
+  /* The widest table in the portal by a distance: sixteen columns, and at any
+     normal screen width with the rail on the left it cannot all be in view.
+     Avin's own answer is to move the rail to the top, which is a bigger change
+     and comes later. Until then it scrolls sideways, and the date is pinned so
+     you never lose which row you are working down. */
+  .paytab.recon td.cell{max-width:130px}
+  .paytab.recon table{border-collapse:separate;border-spacing:0}
+  .paytab.recon th:first-child,.paytab.recon td:first-child{
+    position:sticky;left:0;z-index:2;background:var(--panel);
+    box-shadow:1px 0 0 var(--line)}
+  .paytab.recon thead th:first-child{z-index:3;background:var(--panel2)}
+  .paytab.recon tbody tr:hover td:first-child{background:var(--panel2)}
+  .scrollnote{font-size:11.5px;color:var(--ink3);padding:0 20px 12px}
+  .subtabs .cnt{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;
+    border-radius:99px;background:var(--warn);color:#fff;font-size:10.5px;font-style:normal;
+    font-weight:700;line-height:17px;text-align:center;vertical-align:middle}
+  .subtabs button[aria-current="true"] .cnt{background:var(--accentInk);color:var(--accent)}
+
+  /* a document, over the page rather than in place of it */
+  .docpop{position:fixed;inset:0;z-index:80;background:rgba(20,12,24,.62);
+    display:flex;align-items:center;justify-content:center;padding:28px}
+  .docbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    box-shadow:var(--shadow);width:min(980px,100%);height:min(88vh,900px);
+    display:flex;flex-direction:column;overflow:hidden}
+  .docbox header{display:flex;align-items:center;gap:10px;padding:11px 14px;
+    border-bottom:1px solid var(--line);background:var(--panel2)}
+  .docbox header b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;font-size:14px;font-weight:600}
+  .docbody{flex:1;min-height:0;background:var(--sunk);display:flex;
+    align-items:center;justify-content:center;overflow:auto}
+  .docbody iframe{width:100%;height:100%;border:0;background:#fff}
+  .docbody img{max-width:100%;max-height:100%;object-fit:contain}
+  button.doc{background:none;border:0;padding:0;font-family:inherit;cursor:pointer;
+    text-align:left}
   .selfnote{color:var(--warn);font-size:11px;margin-top:3px}
   .rjbox{padding:14px 16px}
   .rjbox label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:8px}
@@ -1476,8 +1519,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041000';</script>
-<script src="config.js?v=202609041000"></script>
-<script type="module" src="boot.js?v=202609041000"></script>
+<script>window.__BUILD = '202609041035';</script>
+<script src="config.js?v=202609041035"></script>
+<script type="module" src="boot.js?v=202609041035"></script>
 </body>
 </html>
