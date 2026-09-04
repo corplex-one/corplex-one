@@ -1,0 +1,25 @@
+{
+  "name": "CorpLex One",
+  "short_name": "CorpLex One",
+  "description": "Sales and commission, payroll and payslips, leave and attendance, documents and letters — across CorpLex, POA and Lex Estates, on one login.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#2A1B33",
+  "theme_color": "#2A1B33",
+  "lang": "en-AE",
+  "dir": "ltr",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "icon-192.png",      "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png",      "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-mask-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon-mask-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "My attendance", "url": "/#attend",   "description": "Check in, check out, and fix a missed day" },
+    { "name": "Leave & WFH",   "url": "/#requests", "description": "Ask for leave or to work from home" },
+    { "name": "My payslip",    "url": "/#myslip",   "description": "The month's payslip, once it is released" }
+  ]
+}

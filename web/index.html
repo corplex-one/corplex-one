@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
 <title>CorpLex One</title>
+<!-- Installable to a home screen: an icon, no browser chrome, and — on
+     Android and on iOS 16.4 and later, once it has been added — notifications
+     that arrive while the app is closed. No store, no fee, no review queue. -->
+<link rel="manifest" href="manifest.webmanifest?v=202609040731">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<meta name="theme-color" content="#2A1B33">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CorpLex One">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
 </head>
 <body style="margin:0">
 <title>CorpLex One</title>
@@ -1258,10 +1269,20 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .subtitle{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:18px;color:var(--ink2);
     margin-left:auto}
 
-  /* a screen that looks finished and is not */
-  .drop.notyet{border-style:dashed;border-color:var(--warn);background:var(--warnBg);
-    color:var(--ink2)}
-  .drop.notyet .big{color:var(--warn)}
+  /* reading a workbook, and saying what was in it before anything is written */
+  .upmsg{border-left:3px solid var(--bad);background:var(--badBg);color:var(--ink);
+    padding:11px 14px;border-radius:0 8px 8px 0;font-size:13px;margin-top:14px;max-width:110ch}
+  .upmsg.warn{border-left-color:var(--warn);background:var(--warnBg)}
+  .upmsg.good{border-left-color:var(--good);background:var(--goodBg)}
+  .upmsg b{font-weight:600}
+  .upact{display:flex;gap:10px;margin-top:16px;align-items:center;flex-wrap:wrap}
+  .upact .why{color:var(--ink3);font-size:12.5px}
+  .upfile{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+  .upfile b{font-size:16px}
+  .upfile span{color:var(--ink3);font-size:12.5px}
+  .upnames{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .upnames span{background:var(--warnBg);color:var(--warn);border-radius:99px;
+    padding:3px 10px;font-size:12.5px}
 
   /* a revision letter waiting to be sent */
   .draft{border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
@@ -1396,8 +1417,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609032242';</script>
-<script src="config.js?v=202609032242"></script>
-<script type="module" src="boot.js?v=202609032242"></script>
+<script>window.__BUILD = '202609040731';</script>
+<script src="config.js?v=202609040731"></script>
+<script type="module" src="boot.js?v=202609040731"></script>
 </body>
 </html>

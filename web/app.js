@@ -227,13 +227,21 @@ function deptNet(p, u){
     return (p==='FY' || q===p) ? s + M[k][1] : s;
   },0);
 }
-function invRows(u,p){ const rs=DATA.inv[u]||[]; return p==='FY'?rs.slice():rs.filter(r=>r[IC.q]===p); }
+function invRows(u,p){
+  const rs = (DATA.inv[u] || []).filter(r => !r[IC.sort] || String(r[IC.sort]).slice(0,4) === state.year);
+  return p === 'FY' ? rs.slice() : rs.filter(r => r[IC.q] === p);
+}
 function outstandingOf(u,p){ return invRows(u,p).reduce((s,r)=>s+(r[IC.bal]||0),0); }
 
 const money = (v,d=0) => (v==null||isNaN(v)?'—':Number(v).toLocaleString('en-AE',{minimumFractionDigits:d,maximumFractionDigits:d}));
 const pct = (v,d=1) => (v*100).toFixed(d)+'%';
 const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const eng = (u,q) => (DATA.engine[u] && DATA.engine[u][q]) || null;
+const eng = (u,q) => {
+  const per = DATA.engine[u] || {};
+  // Older data has no year layer; a portal holding one year keeps working.
+  const y = per[state.year] || (per.Q1 || per.Q2 || per.Q3 || per.Q4 ? per : null);
+  return (y && y[q]) || null;
+};
 const isFlat = e => !!(e && e.flat);
 const bandRates = b => { const r = DATA.bands.find(x=>x[0]===b); return r?{nw:r[3],ex:r[4],pm:r[5]}:{nw:0,ex:0,pm:0}; };
 
@@ -1962,6 +1970,25 @@ function vGratuity(){
 const REVS = () => HR().revisions || [];
 const DRAFTS = () => REVS().filter(r => r.status === 'draft');
 const SENTREV = () => REVS().filter(r => r.status === 'issued');
+
+function vDeskOnly(){
+  return `
+  <section class="panel">
+    <header><h3>This one is for a desk</h3></header>
+    <div class="pad">
+      <p style="margin:0 0 14px;color:var(--ink2);font-size:15px;max-width:60ch">
+        The accounts console &mdash; payroll, payslips, salary revisions, the air
+        ticket register, gratuity, sales and the staff rules &mdash; is wide,
+        detailed work, and a phone is the wrong place to do it. A payroll month
+        approved by thumb is a payroll month approved without reading it.</p>
+      <p style="margin:0 0 20px;color:var(--ink3);font-size:14px;max-width:60ch">
+        Open <b>one.corplex.ae</b> on a laptop and it is all there, exactly as you
+        left it. Everything you need day to day &mdash; checking in, leave, your
+        payslip, your air ticket &mdash; is below.</p>
+      <button class="btn" id="deskBack" type="button">Back to my portal</button>
+    </div>
+  </section>`;
+}
 
 function vRevisions(){
   const g = state.revForm || (state.revForm = {who:'', eff:'', basic:'', allow:''});
@@ -5415,6 +5442,125 @@ function PROB(){
     .sort((a,b) => a.until.localeCompare(b.until));
 }
 
+/* Three states, and the middle one is the point: a workbook that has been read
+ * and not yet written. */
+function vSalesUpload(){
+  const aed = v => 'AED ' + Math.round(v || 0).toLocaleString('en-AE');
+  /* How many invoices the portal holds for a year. The blob is Corporate &
+   * Legal with Accounting & Tax riding along as atDept, so a year's count is
+   * the two added — reading only the first said 354 where the workbook says
+   * 499, which makes a replacement warning look like a mistake. */
+  const held = y => {
+    const f = (DATA.yearFigures || {})[String(y)];
+    if(!f || !f.totals) return null;
+    return {count: (f.totals.count || 0) + ((f.atDept && f.atDept.totals && f.atDept.totals.count) || 0)};
+  };
+
+  const names = list => list && list.length
+    ? `<div class="upnames">${list.map(n => `<span>${esc(n)}</span>`).join('')}</div>` : '';
+
+  // What the portal already holds, and where it came from. A figure whose
+  // provenance is a shrug is a figure nobody can check.
+  const history = () => {
+    const years = Object.keys(DATA.yearFigures || {}).sort().reverse();
+    const up = DATA.uploads || [];
+    return `
+      <div class="tw" style="margin-top:18px"><table>
+        <thead><tr><th>Year</th><th class="r">Invoices held</th><th>Last uploaded</th><th>By</th><th>From</th></tr></thead>
+        <tbody>${years.length ? years.map(y => {
+          const t = held(y) || {count: 0};
+          const u = up.find(x => String(x.year) === y);
+          return `<tr><td class="n">${esc(y)}</td><td class="n r">${t.count || 0}</td>
+            <td>${u ? esc(u.at) : '<span style="color:var(--ink3)">before this screen existed</span>'}</td>
+            <td>${u && u.by ? esc(u.by) : '<span style="color:var(--ink3)">&mdash;</span>'}</td>
+            <td>${u && u.file ? esc(u.file) : '<span style="color:var(--ink3)">&mdash;</span>'}</td></tr>`;
+        }).join('') : `<tr><td colspan="5" style="color:var(--ink3)">No sales year is loaded.</td></tr>`}
+        </tbody></table></div>
+      <p class="cap" style="padding-left:0">Everything on every sales screen is worked out from these rows. Uploading a year replaces that year and nothing else.</p>`;
+  };
+
+  // ---- after the write: what the database made of it
+  const d = state.supDone;
+  if(d) return `
+    <div class="upmsg ${d.unmatched && d.unmatched.length ? 'warn' : 'good'}">
+      <b>${esc(String(d.year))} replaced.</b> ${d.rows} rows from ${d.invoices || d.rows} invoices &mdash;
+      ${aed(d.invoiced)} invoiced, ${aed(d.net)} net, ${aed(d.eligible)} eligible.
+      ${esc(d.note || '')}
+      ${names(d.unmatched)}
+    </div>
+    <div class="upact"><button class="btn" id="supAgain" type="button">Upload another year</button></div>
+    ${history()}`;
+
+  // ---- read, and waiting to be agreed to
+  const s = state.sup;
+  if(s){
+    const now = held(s.year);
+    return `
+      <div class="upfile">
+        <b>${esc(s.file)}</b>
+        <span>${s.invoices} invoices &middot; ${s.rows} rows &middot; ${s.clients} clients &middot; year ${esc(String(s.year))}</span>
+      </div>
+      <div class="strip" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div class="stat"><span class="k">Invoiced</span><span class="v">${aed(s.inv)}</span><span class="n">excluding VAT, after credit notes</span></div>
+        <div class="stat"><span class="k">Net sales</span><span class="v">${aed(s.net)}</span><span class="n">after cost and partner commission</span></div>
+        <div class="stat"><span class="k">Eligible</span><span class="v">${aed(s.elig)}</span><span class="n">settled and paid on time</span></div>
+      </div>
+      ${s.byDept.length > 1 ? `<div class="tw" style="margin-top:16px"><table>
+        <thead><tr><th>Department</th><th class="r">Invoices</th><th class="r">Invoiced</th><th class="r">Net</th><th class="r">Eligible</th></tr></thead>
+        <tbody>${s.byDept.map(x => `<tr><td>${esc(x.department)}</td><td class="n r">${x.totals.count}</td>
+          <td class="n r">${aed(x.totals.inv)}</td><td class="n r">${aed(x.totals.net)}</td>
+          <td class="n r">${aed(x.totals.elig)}</td></tr>`).join('')}</tbody></table></div>` : ''}
+      ${s.unmatched.length ? `<div class="upmsg warn">
+        <b>${s.unmatched.length} name${s.unmatched.length === 1 ? '' : 's'} on this workbook match nobody on the staff list.</b>
+        Their invoices still count towards the company totals, but they will not appear on anybody's
+        own page or leaderboard. Either the spelling differs from the staff record, or the person
+        was never added.${names(s.unmatched)}</div>` : `<div class="upmsg good">
+        <b>Every name on this workbook matches somebody on the staff list.</b> Nothing will be filed under nobody.</div>`}
+      ${s.voided ? `<div class="upmsg warn"><b>${s.voided} invoice${s.voided === 1 ? ' has' : 's have'} no amount</b> &mdash;
+        a date, a client and a salesperson, and nothing invoiced. They are carried across as they
+        are, counted as void rather than dropped.</div>` : ''}
+      ${(() => {
+        // The void invoices have their own line above; repeating them here as
+        // forty table rows buries the button under a list of things already said.
+        const rest = s.problems.filter(p => !/^Void or cancelled/.test(p.what));
+        if(!rest.length) return '';
+        return `<div class="tw" style="margin-top:16px"><table>
+          <thead><tr><th>Row</th><th>Invoice</th><th>What the reader could not settle</th></tr></thead>
+          <tbody>${rest.slice(0, 30).map(p => `<tr><td class="n">${p.row}</td>
+            <td class="n">${esc(p.invoice || '—')}</td>
+            <td>${esc(p.what)}${p.detail && p.detail !== p.invoice ? ' &mdash; ' + esc(p.detail) : ''}</td></tr>`).join('')}
+          </tbody></table></div>
+          ${rest.length > 30 ? `<p class="cap" style="padding-left:0">and ${rest.length - 30} more of the same kinds</p>` : ''}`;
+      })()}
+      <div class="upmsg${now ? ' warn' : ''}">${now
+        ? `<b>${esc(String(s.year))} is already loaded &mdash; ${now.count} invoices.</b> Uploading replaces that year
+           whole, in one go: anything the portal holds for ${esc(String(s.year))} and this workbook does not
+           will be gone. Every other year is untouched.`
+        : `<b>${esc(String(s.year))} is not loaded yet.</b> This adds it. Every other year is untouched.`}</div>
+      <div class="upact">
+        <button class="btn" id="supGo" type="button" ${state.supBusy ? 'disabled' : ''}>${
+          state.supBusy ? 'Writing&hellip;' : 'Replace ' + esc(String(s.year))}</button>
+        <button class="btn ghost" id="supCancel" type="button" ${state.supBusy ? 'disabled' : ''}>Cancel</button>
+        <span class="why">Nothing has been written yet.</span>
+      </div>`;
+  }
+
+  // ---- nothing chosen
+  return `
+    <div class="drop">
+      <div class="big">Choose the sales workbook</div>
+      <div style="margin-bottom:14px">.xlsx &mdash; the portal reads the <b>Sales Data</b>,
+        <b>Employee Master</b>, <b>Company Master</b> and <b>Commission Rules</b> sheets and works
+        the commission out itself, here in this browser. The file is not sent anywhere; only the
+        finished figures are.</div>
+      <input type="file" id="supFile" accept=".xlsx,.xlsm,.xls" hidden>
+      <button class="btn" id="supPick" type="button" ${state.supBusy ? 'disabled' : ''}>${
+        state.supBusy ? 'Reading&hellip;' : 'Choose file'}</button>
+    </div>
+    ${state.supErr ? `<div class="upmsg"><b>That workbook could not be read.</b> ${esc(state.supErr)}</div>` : ''}
+    ${history()}`;
+}
+
 function vAdmin(){
   // The sales roster, filtered to one entity when a company is chosen. Somebody
   // who has left keeps the company they left from, which is what makes a
@@ -5551,42 +5697,9 @@ function vAdmin(){
   </section>
   ${upl?`
   <section class="panel">
-    <header><h3>Weekly upload</h3><span class="hint">accounts-manager accounts only &middot; Sales_Report_Management_2026.xlsx</span></header>
+    <header><h3>Weekly upload</h3><span class="hint">accounts only &middot; one whole year at a time</span></header>
     <div class="pad">
-      ${state.uploaded ? `
-        <div class="strip" style="grid-template-columns:repeat(3,minmax(0,1fr))">
-          <div class="stat"><span class="k">Rows kept</span><span class="v">${DATA.totals.count + DATA.atDept.totals.count}</span><span class="n">rows from “Sales Data”, split by department</span></div>
-          <div class="stat"><span class="k">Checks passed</span><span class="v" style="color:var(--good)">31</span><span class="n">of 34 columns</span></div>
-          <div class="stat"><span class="k">Needs your eye</span><span class="v" style="color:var(--warn)">3</span><span class="n">warnings, none blocking</span></div>
-        </div>
-        <div class="tw" style="margin-top:16px"><table>
-          <thead><tr><th>Row</th><th>Check</th><th>What the portal did</th></tr></thead>
-          <tbody>
-            <tr><td class="n">117</td><td><span class="pill warn"><span class="dt"></span>Company not in Company Master</span></td><td>Partner commission set to 0% — add the client to Company Master if a referral fee is owed.</td></tr>
-            <tr><td class="n">288</td><td><span class="pill warn"><span class="dt"></span>Payment Status blank</span></td><td>Treated as Unpaid, so the net sales did not count towards commission.</td></tr>
-            <tr><td class="n">402</td><td><span class="pill warn"><span class="dt"></span>Salesperson not in Employee Master</span></td><td>Row excluded from every individual report until the name is added.</td></tr>
-          </tbody></table></div>
-        <div style="display:flex;gap:10px;margin-top:16px;align-items:center;flex-wrap:wrap">
-          <button class="btn" id="publishBtn" type="button">Publish to staff</button>
-          <button class="btn ghost" id="resetBtn" type="button">Discard</button>
-          <span style="color:var(--ink3);font-size:12.5px">Staff see nothing until you publish.</span>
-        </div>` : `
-        <div class="drop notyet">
-          <div class="big">Not built yet</div>
-          <div style="margin-bottom:4px">This is the one screen in the console that does not do
-            what it looks like it does. Dropping a workbook here would go nowhere: the reader for
-            the <b>Sales Data</b>, <b>Employee Master</b>, <b>Company Master</b> and
-            <b>Commission Rules</b> sheets has not been written.</div>
-          <div>The sales figures everywhere else in the portal came from a single import and are
-            correct as far as that import went. They cannot be refreshed until this is real.</div>
-        </div>
-        <div class="tw" style="margin-top:16px"><table>
-          <thead><tr><th>Year</th><th class="r">Invoices in the portal</th><th>Where they came from</th></tr></thead>
-          <tbody>
-            <tr><td class="n">2026</td><td class="n r">${DATA.totals.count + DATA.atDept.totals.count}</td><td>one import, Corporate &amp; Legal and Accounting &amp; Tax kept apart</td></tr>
-            <tr><td class="n">2025</td><td class="n r">&mdash;</td><td style="color:var(--ink3)">nothing loaded</td></tr>
-          </tbody></table></div>
-        <p class="cap" style="padding-left:0">This is what the portal holds, not a publishing history &mdash; there has not been one. Everything on the sales screens is worked out from these rows.</p>`}
+      ${vSalesUpload()}
     </div>
   </section>`:`
   <div class="note"><b>Uploading is restricted to the accounts manager.</b> You can see every rule, rate and account below, but the weekly workbook is published by Avin Mascarenhas only &mdash; one person owning the upload is what keeps the numbers reconcilable.</div>`}
@@ -5732,7 +5845,8 @@ function renderNav(){
    standing in a corridor: their day, leave, people, their payslip, and for a manager
    the approvals waiting on them. Navigation sits in a fixed footer. */
 const MOBILE = () => window.matchMedia('(max-width:720px)').matches;
-const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company'];
+const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company',
+                 'tools','payment'];
 const onPhone = t => !(MOBILE() && MOBHIDE.includes(t.id));
 
 const MICO = {
@@ -5860,7 +5974,8 @@ function openSheet(rest){
 }
 
 const PAGETITLE = {requests:'Leave & WFH', loans:'Advances & letters', letters:'Advances & letters',
-  people:'People', myslip:'My payslip', myticket:'My air ticket', attend:'My attendance', profile:'My profile'};
+  people:'People', myslip:'My payslip', myticket:'My air ticket', attend:'My attendance', profile:'My profile',
+  deskonly:'Accounts console'};
 function renderChrome(){
   const sel = document.getElementById('userSel');
   sel.innerHTML = USERS.map(u=>`<option value="${esc(u.name)}"${u.name===state.user?' selected':''}>${nm(u.name)} — ${esc(ROLELABEL[u.role])}</option>`).join('');
@@ -5892,7 +6007,7 @@ function renderChrome(){
     } else mp.classList.add('hidden');
   }
   const cbtn = document.getElementById('consoleBtn');
-  if(canAdmin(state.user)){
+  if(canAdmin(state.user) && !MOBILE()){
     cbtn.classList.remove('hidden');
     cbtn.classList.toggle('on', state.mode==='console');
     cbtn.querySelector('span').textContent = state.mode==='console' ? 'Leave console' : 'Console';
@@ -6075,7 +6190,15 @@ function render(){
   // Rules & staff was split five ways; an old link lands on the joiner form.
   if(state.tab === 'admin') state.tab = 'addstaff';
   if(state.mode==='console' && !canAdmin(state.user)){ state.mode='staff'; state.tab='home'; }
+  // A console link opened on a phone is answered, not redirected. Being moved
+  // somewhere else without explanation is how a person concludes the link is
+  // broken.
+  if(state.mode==='console' && MOBILE()){ state.mode = 'staff'; state.tab = 'deskonly'; }
   if(state.mode!=='console' && (TABS.find(t=>t.id===state.tab)||{}).con) state.tab='home';
+  // The company-wide figures for the year being looked at, put where every
+  // sales screen already reads them from.
+  if(DATA.yearFigures && DATA.yearFigures[state.year])
+    Object.assign(DATA, DATA.yearFigures[state.year]);
   const keepY = window.scrollY;
   applyTheme();
   renderNav(); renderChrome(); renderTabbar();
@@ -6106,7 +6229,7 @@ function render(){
                   leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
                   profile:vProfile, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
-                  leaverules:vLeaveRules, ...PAGEVIEW,
+                  leaverules:vLeaveRules, deskonly:vDeskOnly, ...PAGEVIEW,
                   people:vPeople, digest:vDigest, admin:vAdmin, regular:vRegular}[state.tab])();
   const here = tabHash();
   if(state._at !== here){
@@ -6120,6 +6243,8 @@ function render(){
   document.querySelectorAll('#runSeg button').forEach(b=>b.onclick=()=>{
     state.payRun = b.dataset.run; state.slipOpen = null; render(); });
   document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });
+  { const d = document.getElementById('deskBack');
+    if(d) d.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); window.scrollTo({top:0}); }; }
   document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
     const first = secTabs(b.dataset.csec)[0];
     if(first){ state.tab = first.id; state.slipOpen = null; render(); } });
@@ -6695,11 +6820,46 @@ function render(){
       render();
     });
   }
-  if(state.tab==='admin'){
-    const ub=document.getElementById('uploadBtn'); if(ub) ub.onclick=()=>{state.uploaded=true;render();};
-    const rb=document.getElementById('resetBtn'); if(rb) rb.onclick=()=>{state.uploaded=false;render();};
-    const pb=document.getElementById('publishBtn'); if(pb) pb.onclick=()=>{
-      pb.textContent='Published to 15 staff ✓'; pb.disabled=true; pb.style.background='var(--good)'; pb.style.borderColor='var(--good)';};
+  {
+    /* No tab guard here. The prototype's was `state.tab==='admin'`, and the
+     * console has since been reorganised: the panel now lives on a page called
+     * salesup, so that guard stopped matching and every one of these buttons
+     * silently did nothing. getElementById is the guard — if the element is on
+     * the screen, the handler belongs to it. */
+    const pick=document.getElementById('supPick'), file=document.getElementById('supFile');
+    if(pick && file){
+      pick.onclick=()=>file.click();
+      file.onchange=async ()=>{
+        const f=file.files && file.files[0]; if(!f) return;
+        state.supBusy=true; state.supErr=''; render();
+        try{
+          const {w, payload} = await window.__db.readSalesFile(f);
+          state.sup={
+            file:f.name, year:w.year, payload,
+            invoices:w.invoices.length, rows:payload.invoices.length,
+            clients:w.all.clientCount,
+            inv:w.all.totals.inv, net:w.all.totals.net, elig:w.all.totals.elig,
+            byDept:w.byDept, voided:w.voided.length, problems:w.problems,
+            unmatched:[...new Set(w.invoices.flatMap(i=>[i.seller,i.pm])
+              .filter(n=>n && !w.masters.dept[n]))]
+          };
+        }catch(e){ state.supErr=(e && e.message) || String(e); state.sup=null; }
+        state.supBusy=false; file.value=''; render();
+      };
+    }
+    const cancel=document.getElementById('supCancel');
+    if(cancel) cancel.onclick=()=>{ state.sup=null; state.supErr=''; render(); };
+    const again=document.getElementById('supAgain');
+    if(again) again.onclick=()=>{ state.supDone=null; state.sup=null; state.supErr=''; render(); };
+    const go=document.getElementById('supGo');
+    if(go) go.onclick=async ()=>{
+      const s=state.sup; if(!s) return;
+      state.supBusy=true; render();
+      const out=await window.__db.uploadSales('corplex', s.year, s.file, s.payload);
+      state.supBusy=false;
+      if(out){ state.supDone={...out, invoices:s.invoices}; state.sup=null; }
+      render();
+    };
   }
 }
 

@@ -75,7 +75,8 @@ const TABLES = {
   sales_invoices:   ['sales_invoices'],
   sales_commission: ['sales_commission'],
   sales_company:    ['sales_company'],
-  sales_bands:      ['sales_bands']
+  sales_bands:      ['sales_bands'],
+  sales_uploads:    ['sales_uploads']
 };
 
 // PostgREST caps a request at a thousand rows; the invoices alone are more
@@ -488,6 +489,46 @@ window.__db = {
 
   // The leave policy is not a display value: every balance in the portal is
   // computed from it, so the database checks the figures rather than the form.
+  /* A year of sales, replaced whole.
+   *
+   * The reading and the arithmetic happen in the page — web/sales.js, the same
+   * file the importer runs in node — so what is sent here is already checked
+   * figures rather than a spreadsheet to be trusted. The database replaces the
+   * year inside one transaction and hands back what it made of it, including
+   * every name that matched nobody. */
+  /* Reading a workbook needs two things nobody else in the portal needs: the
+   * SheetJS parser, which is a few hundred kilobytes, and web/sales.js, which
+   * is the whole commission engine. Neither is loaded until somebody actually
+   * chooses a file — the phone downloads the app and never touches either.
+   *
+   * Whatever comes back has been worked out here, in the page, by the same
+   * code that reproduced both workbooks cell for cell. The file itself never
+   * leaves the browser; only the figures do. */
+  async readSalesFile(file){
+    if(!window.__salesLib){
+      if(!window.XLSX) await new Promise((ok, no) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        s.onload = ok;
+        s.onerror = () => no(new Error('The spreadsheet reader could not be downloaded. Check the connection and try again.'));
+        document.head.appendChild(s);
+      });
+      window.__salesLib = await import('./sales.js?v=' + BUILD);
+    }
+    return window.__salesLib.readSalesWorkbook(window.XLSX, await file.arrayBuffer());
+  },
+
+  async uploadSales(company, year, fileName, payload){
+    try{
+      const {data, error} = await sb.rpc('replace_sales_year', {
+        p_company: company, p_year: Number(year),
+        p_file: fileName || null, p_payload: payload});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The sales upload'); await reload(); return null; }
+  },
+
   async setLeavePolicy(p){
     try{
       const {data, error} = await sb.rpc('set_leave_policy', {
@@ -790,3 +831,17 @@ function wireLogin(){
   show($('login'));
   settled();
 })();
+
+/* Registering the service worker is what makes the portal installable — a
+ * browser only offers "add to home screen" for a page that has one, together
+ * with the manifest in index.html. The worker itself caches nothing on
+ * purpose; the note at the top of sw.js says why.
+ *
+ * It is registered last and its failure is swallowed: a browser that refuses
+ * it, or a context without one at all, should get the portal exactly as
+ * before rather than a blank page. Nothing here is load-bearing. */
+if('serviceWorker' in navigator && location.protocol === 'https:'){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(e => console.warn('service worker:', e));
+  });
+}

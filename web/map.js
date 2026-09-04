@@ -579,10 +579,15 @@ function buildSales(db, byId, name, companies){
   (db.sales_bands || []).sort((a,b) => a.band - b.band).forEach(b =>
     out.bands.push([b.band, +b.low, +b.high, +b.new_rate, +b.ex_rate, +b.pm_rate]));
 
+  /* Keyed by year AND quarter. It used to be quarter alone, which was correct
+   * for exactly as long as the portal held one year: the moment 2025 arrived,
+   * its Q1 silently overwrote 2026's. */
   (db.sales_commission || []).forEach(c => {
     const n = name(c.employee_id); if(!n) return;
-    (out.engine[n] || (out.engine[n] = {}))[c.quarter] = c.figures;
-    if(!out.years.includes(String(c.year))) out.years.push(String(c.year));
+    const y = String(c.year);
+    const per = out.engine[n] || (out.engine[n] = {});
+    (per[y] || (per[y] = {}))[c.quarter] = c.figures;
+    if(!out.years.includes(y)) out.years.push(y);
   });
 
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -598,9 +603,29 @@ function buildSales(db, byId, name, companies){
     if(!out.years.includes(String(r.year))) out.years.push(String(r.year));
   });
 
-  // one row per company per year, and only for a company you may see
+  /* One row per company per year, and only for a company you may see.
+   *
+   * The totals, the monthly series, the client list and the rest are merged
+   * straight onto the top level because that is how every sales screen reads
+   * them — DATA.totals, DATA.monthly. With more than one year in the database
+   * they are also kept per year, and the app swaps them when the year segment
+   * changes, so the screens need not learn a new shape. */
+  /* Where the figures came from — who uploaded which file, when, and what it
+   * came to. A figure whose provenance is a mystery is a figure nobody can
+   * check, and 'the sales look wrong' deserves a better answer than opening
+   * the workbook and hoping. */
+  out.uploads = (db.sales_uploads || []).map(u => ({
+    year: u.year, file: u.file_name || '', rows: u.invoices,
+    invoiced: +u.invoiced, net: +u.net, eligible: +u.eligible,
+    unmatched: u.unmatched || [], voided: u.voided,
+    by: name(u.uploaded_by), at: u.uploaded_at ? String(u.uploaded_at).slice(0,16).replace('T',' ') : ''
+  })).sort((a,b) => (b.at || '').localeCompare(a.at || ''));
+
+  out.yearFigures = {};
+  (db.sales_company || []).forEach(a => { out.yearFigures[String(a.year)] = a.figures || {}; });
   const agg = (db.sales_company || []).slice().sort((a,b) => b.year - a.year)[0];
   if(agg) Object.assign(out, agg.figures || {});
+  out.figureKeys = agg ? Object.keys(agg.figures || {}) : [];
 
   Object.values(companies).forEach(c => { c.sales = false; });
   (db.sales_company || []).forEach(a => {
