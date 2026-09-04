@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041307">
+<link rel="manifest" href="manifest.webmanifest?v=202609041408">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1207,6 +1207,14 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
     padding-top:9px;padding-bottom:9px;vertical-align:bottom}
   /* Every consultant: twelve columns to a fixed width, so the last one is on
      the screen rather than twenty-three pixels past it. */
+  /* the company blocks a list of people is split into */
+  .cotab{table-layout:fixed;width:100%}
+  .cotab th,.cotab td{overflow:hidden;text-overflow:ellipsis}
+  .cotab td.nw{white-space:nowrap}
+  /* headings break between their words, never through one */
+  .cotab th{white-space:normal;line-height:1.3;vertical-align:bottom}
+  .regblock:first-of-type{border-top:0}
+
   .teamtab{table-layout:fixed;width:100%}
   .teamtab td,.teamtab th{overflow:hidden;text-overflow:ellipsis}
   /* Headings wrap between their words rather than being cut, and the role
@@ -1469,7 +1477,15 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .railtog{position:absolute;top:14px;right:10px;background:none;border:0;padding:5px;
     border-radius:7px;color:var(--brandDim);line-height:0;cursor:pointer}
   .railtog:hover{background:rgba(255,255,255,.09);color:var(--brandInk)}
-  .rail{position:relative}
+  /* The rail is pinned and must not travel with the page. It was, until I
+     gave it position:relative to hang the fold toggle off — which silently
+     replaced the position:sticky in the base stylesheet and let the whole
+     rail scroll away on any long screen. Sticky is a positioning context of
+     its own, so the toggle is just as happy inside it; this restates the
+     base rule rather than replacing it. checklook.mjs now scrolls every
+     screen and checks the rail is still where it was. */
+  .rail{position:sticky;top:0;align-self:start;height:100vh;
+    overflow-y:auto;overscroll-behavior:contain;z-index:30}
   #app.tucked{grid-template-columns:62px minmax(0,1fr)}
   #app.tucked .rail{padding:16px 7px;gap:12px;align-items:center}
   #app.tucked .rail .markco,
@@ -1680,8 +1696,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041307';</script>
-<script src="config.js?v=202609041307"></script>
-<script type="module" src="boot.js?v=202609041307"></script>
+<script>window.__BUILD = '202609041408';</script>
+<script src="config.js?v=202609041408"></script>
+<script type="module" src="boot.js?v=202609041408"></script>
 </body>
 </html>

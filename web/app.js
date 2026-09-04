@@ -358,6 +358,24 @@ function coByCode(code){
     Object.values(DATA.companies).forEach(c=>CO_BY_CODE[c.code]=c);
   return CO_BY_CODE[code] || DATA.companies.corplex;
 }
+function byCompany(list, o){
+  const who  = o.who  || (r => r.name);
+  const code = o.code || (r => companyOf(who(r)).code);
+  const out = Object.values(DATA.companies).map(c => {
+    const rs = list.filter(r => code(r) === c.code);
+    if(!rs.length) return '';
+    return `<div class="regblock">
+      <div class="regbar"><b>${esc(c.name)}</b>
+        <span>${rs.length} ${rs.length === 1 ? 'person' : 'people'}</span>
+        ${o.note ? `<em>${o.note(rs, c)}</em>` : ''}</div>
+      <div class="tw"><table class="cotab${o.cls ? ' ' + o.cls : ''}">${o.cols || ''}
+        ${o.head}<tbody>${rs.map(o.row).join('')}${o.foot ? o.foot(rs, c) : ''}</tbody></table></div>
+    </div>`;
+  }).join('');
+  return out || `<div class="regblock"><p class="cap" style="padding:22px">${
+    esc(o.empty || 'Nobody to show here yet.')}</p></div>`;
+}
+
 function companyOf(user){
   // the org chart wins: Fakhridin and Mukhamad sell for Lex while POA and CorpLex pay them
   const k = (HR().orgCo || {})[user];
@@ -1444,14 +1462,17 @@ function vPeople(){
 
   ${avail.length ? `<section class="panel">
     <header><h3>The next two weeks</h3><span class="hint">planned leave and working from home${q?' &middot; matching your search':''}</span></header>
-    <div class="tw"><table class="availtable">
-      <thead><tr><th class="s1">Name</th>${days.map(d=>`<th class="r${d===today?' av-today':''}"><span>${esc(dayName(d).slice(0,2))}</span><b>${esc(dayLabel(d).slice(0,2))}</b></th>`).join('')}</tr></thead>
-      <tbody>${avail.map(n=>`<tr><td class="s1 nw">${whoLink(n)}</td>${days.map(d=>{
+    ${byCompany(avail, {
+      who: n => n, cls: 'availtable',
+      cols: colsOf([22].concat(days.map(() => 78 / days.length))),
+      head: `<thead><tr><th>Name</th>${days.map(d=>`<th class="r${d===today?' av-today':''}"><span>${esc(dayName(d).slice(0,2))}</span><b>${esc(dayLabel(d).slice(0,2))}</b></th>`).join('')}</tr></thead>`,
+      row: n => `<tr><td>${whoLink(n)}</td>${days.map(d=>{
         const ds = dayStatus(n, d), short = STSHORT[ds.k] || '';
         return `<td class="av${d===today?' av-today':''}${ds.k==='Weekend'?' av-we':''}" style="background:${['Weekend','Planned','Office'].includes(ds.k)?'transparent':tint(ds.k)}"
           title="${esc(n)} \u2014 ${esc(dayLabel(d))}: ${esc(ds.label||ds.k)}">${short}</td>`;
-      }).join('')}</tr>`).join('')}
-      </tbody></table></div>
+      }).join('')}</tr>`,
+      empty: 'Nothing planned in the next two weeks.'
+    })}
     <div class="pad" style="padding-top:12px">${
       [['Office','In the office'],['WFH','From home (H)'],['Annual','Annual (A)'],['Sick','Sick (S)'],['Unpaid','Unpaid (U)'],['Bereavement','Bereavement (B)'],['Birthday','Birthday (\u00bd)'],['Maternity','Maternity (M)'],['Hajj','Hajj (J)'],['Umrah','Umrah (O)'],['Holiday','Public holiday (\u2605)']]
       .map(([k,l])=>`<span class="lgd"><i style="background:${STCOL[k]}"></i>${l}</span>`).join('')}</div>
@@ -1496,12 +1517,15 @@ function vHRAdmin(){
       <div class="seg" id="attMonthSeg" style="margin-left:auto">
         ${['2026-08','2026-09'].map(m=>`<button data-am="${m}" aria-pressed="${ym===m}" type="button">${MONTHNAME[+m.slice(5)-1]}</button>`).join('')}
       </div></header>
-    <div class="tw"><table class="invtable">
-      <thead><tr><th class="s1">Employee</th><th>Shift</th><th class="r">Office</th><th class="r">Home</th>
+    ${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([12.5, 9, 6, 6, 6.5, 5.5, 6.5, 9, 5.5, 6.5, 8, 8, 10.5]),
+      head: `<thead><tr><th>Employee</th><th>Shift</th><th class="r">Office</th><th class="r">Home</th>
         <th class="r">Annual</th><th class="r">Sick</th><th class="r">Unpaid</th><th class="r">Unexplained</th>
-        <th class="r">Late</th><th class="r">Hours</th><th class="r">Days calculated</th><th class="r">In the ${esc(P.month.split(' ')[0])} file</th><th>Check</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr>
-        <td class="s1 nw">${nm(r.n)}</td><td class="n nw" style="color:var(--ink2)">${esc(shiftOf(r.n).start)}&ndash;${esc(shiftOf(r.n).end)}</td>
+        <th class="r">Late</th><th class="r">Hours</th><th class="r">Days calculated</th><th class="r">In the ${esc(P.month.split(' ')[0])} file</th><th>Check</th></tr></thead>`,
+      empty: 'Nobody has attendance this month.',
+      row: r => `<tr>
+        <td>${nm(r.n)}</td><td class="n nw" style="color:var(--ink2)">${esc(shiftOf(r.n).start)}&ndash;${esc(shiftOf(r.n).end)}</td>
         <td class="n r">${r.S.office}</td><td class="n r">${r.S.wfh||'—'}</td>
         <td class="n r">${r.S.annual||'—'}</td><td class="n r">${r.S.sick||'—'}</td>
         <td class="n r"${r.S.unpaid?' style="color:var(--warn);font-weight:600"':''}>${r.S.unpaid||'—'}</td>
@@ -1511,36 +1535,42 @@ function vHRAdmin(){
         <td class="n r">${r.typed===null?'—':r.typed}</td>
         <td class="nw">${r.diff===null?`<span class="pill mute">${samePay?'not on the run':'no run for this month'}</span>`
           : r.diff===0?'<span class="pill good"><span class="dt"></span>Matches</span>'
-          : `<span class="pill warn"><span class="dt"></span>${r.diff>0?'+':''}${r.diff} day${Math.abs(r.diff)===1?'':'s'}</span>`}</td></tr>`).join('')}
-      </tbody></table></div>
+          : `<span class="pill warn"><span class="dt"></span>${r.diff>0?'+':''}${r.diff} day${Math.abs(r.diff)===1?'':'s'}</span>`}</td></tr>`
+    })}
     <p class="cap">${samePay?'':'<b>You are looking at '+esc(MONTHNAME[+ym.slice(5)-1])+', and the payroll on file is '+esc(P.month)+'</b>, so there is nothing to compare against yet. '}<b>Suggestion only.</b> The portal never changes the payroll. It works out days as 30 less unpaid leave and unexplained absence, and shows that beside the <b>Working days</b> column in the file you uploaded, so a difference is something to look at rather than something to accept.</p>
   </section>
 
   <div class="grid g2">
     <section class="panel">
       <header><h3>Exceptions</h3><span class="hint">worth a word with the person</span></header>
-      <div class="tw"><table>
-        <thead><tr><th>Employee</th><th>Date</th><th>What happened</th></tr></thead>
-        <tbody>${exc.length?exc.slice(0,14).map(x=>`<tr><td class="nw">${nm(x.n)}</td>
-          <td class="n nw">${esc(dayLabel(x.ds))}</td><td style="color:var(--ink2)">${esc(x.why)}</td></tr>`).join('')
-          :'<tr><td colspan="3" style="color:var(--ink3)">Nothing out of place this month.</td></tr>'}
-          ${exc.length>14?`<tr class="tot"><td colspan="3">and ${exc.length-14} more</td></tr>`:''}
-        </tbody></table></div>
+      ${byCompany(exc.slice(0, 24), {
+        who: x => x.n,
+        cols: colsOf([26, 16, 58]),
+        head: `<thead><tr><th>Employee</th><th>Date</th><th>What happened</th></tr></thead>`,
+        row: x => `<tr><td>${nm(x.n)}</td>
+          <td class="n nw">${esc(dayLabel(x.ds))}</td>
+          <td style="color:var(--ink2)"${full(x.why)}>${esc(x.why)}</td></tr>`,
+        empty: 'Nothing out of place this month.'
+      })}
+      ${exc.length>24?`<p class="cap">and ${exc.length-24} more</p>`:''}
     </section>
 
     <section class="panel">
       <header><h3>Shifts and reporting lines</h3><span class="hint">confirm these</span></header>
-      <div class="tw"><table>
-        <thead><tr><th>Employee</th><th>Shift</th><th>Approved by</th></tr></thead>
-        <tbody>${list.map(n=>`<tr><td class="nw">${esc(n)}</td>
-          <td class="nw"><select class="ff" data-shift="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+      ${byCompany(list, {
+        who: n => n,
+        cols: colsOf([30, 34, 36]),
+        head: `<thead><tr><th>Employee</th><th>Shift</th><th>Approved by</th></tr></thead>`,
+        row: n => `<tr><td class="nw">${esc(n)}</td>
+          <td><select class="ff" data-shift="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
             ${SHIFTS().map(s=>`<option value="${esc(s.id)}"${shiftOf(n).id===s.id?' selected':''}>${esc(s.label)} &middot; ${esc(s.start)}&ndash;${esc(s.end)}</option>`).join('')}
           </select></td>
-          <td class="nw"><select class="ff" data-mgr="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+          <td><select class="ff" data-mgr="${esc(n)}" style="padding:3px 8px;font-size:12.5px">
             <option value="">Nobody</option>
             ${list.filter(m=>m!==n).map(m=>`<option value="${esc(m)}"${mgrName(n)===m?' selected':''}>${esc(m)}</option>`).join('')}
-          </select></td></tr>`).join('')}
-        </tbody></table></div>
+          </select></td></tr>`,
+        empty: 'Nobody on the shift list yet.'
+      })}
       <p class="cap">Three shifts: ${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus ${HR().hours.grace} minutes. I have assumed consultants report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the approvals follow it.</p>
     </section>
   </div>
@@ -1549,25 +1579,29 @@ function vHRAdmin(){
     <header><h3>Annual leave balances</h3>
       <span class="pill mute">${HR().leavePolicy.annualDays} working days &middot; ${HR().leavePolicy.accrualPerMonth} a month</span>
       <span class="hint">set what each person carried forward</span></header>
-    <div class="tw"><table>
-      <thead><tr><th>Employee</th><th>Joined</th><th>Leave year</th><th class="r">On 31 Aug 2026</th>
-        <th class="r">Credited since</th><th class="r">Taken since</th><th class="r">Available</th><th class="r">Requested</th></tr></thead>
-      <tbody>${list.filter(n=>!noLeave(n)).map(n=>{const B=leaveBal(n); return `<tr>
-        <td class="nw">${esc(n)}</td>
+    ${byCompany(list.filter(n=>!noLeave(n)), {
+      who: n => n,
+      cols: colsOf([19, 11, 20, 11, 10, 10, 9.5, 9.5]),
+      note: rs => `${Math.round(rs.reduce((s,n)=>s+leaveBal(n).left,0)*100)/100} days available`,
+      head: `<thead><tr><th>Employee</th><th>Joined</th><th>Leave year</th><th class="r">On 31 Aug 2026</th>
+        <th class="r">Credited since</th><th class="r">Taken since</th><th class="r">Available</th><th class="r">Requested</th></tr></thead>`,
+      row: n => { const B = leaveBal(n); return `<tr>
+        <td>${esc(n)}</td>
         <td class="n nw">${esc(B.doj)||'<span style="color:var(--ink3)">not on file</span>'}</td>
-        <td class="nw">${B.yearNo?`Year ${B.yearNo}, to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}`:'<span style="color:var(--ink3)">needs a joining date</span>'}</td>
+        <td class="nw"${full(B.yearNo?`Year ${B.yearNo}, to ${dayLabel(B.yearEnd)} ${B.yearEnd.slice(0,4)}`:'')}>${B.yearNo?`Year ${B.yearNo}, to ${esc(dayLabel(B.yearEnd))} ${B.yearEnd.slice(0,4)}`:'<span style="color:var(--ink3)">needs a joining date</span>'}</td>
         <td class="r"><input class="ff cfin" type="number" step="0.01"
-          data-carry="${esc(n)}" value="${B.carriedSet?B.carried:''}" placeholder="—" step="0.01"></td>
+          data-carry="${esc(n)}" value="${B.carriedSet?B.carried:''}" placeholder="—"></td>
         <td class="n r">${B.noDoj?'—':B.accrued}</td><td class="n r">${B.taken||'—'}</td>
         <td class="n r netcol"${B.left<0?' style="color:var(--bad)"':''}>${B.noDoj?'—':B.left}</td>
-        <td class="n r">${B.pendDays||'—'}</td></tr>`;}).join('')}
-        <tr class="tot"><td>${list.filter(n=>!noLeave(n)).length}</td><td></td><td>on the scheme</td>
-          <td class="n r">${Math.round(list.filter(n=>!noLeave(n)).reduce((s,n)=>s+leaveBal(n).carried,0)*100)/100}</td>
-          <td class="n r">${Math.round(list.reduce((s,n)=>s+leaveBal(n).accrued,0)*100)/100}</td>
-          <td class="n r">${list.reduce((s,n)=>s+leaveBal(n).taken,0)}</td>
-          <td class="n r netcol">${Math.round(list.reduce((s,n)=>s+leaveBal(n).left,0)*100)/100}</td>
-          <td class="n r">${list.reduce((s,n)=>s+leaveBal(n).pendDays,0)}</td></tr>
-      </tbody></table></div>
+        <td class="n r">${B.pendDays||'—'}</td></tr>`; },
+      foot: rs => `<tr class="tot"><td>${rs.length} on the scheme</td><td></td><td></td>
+        <td class="n r">${Math.round(rs.reduce((s,n)=>s+leaveBal(n).carried,0)*100)/100}</td>
+        <td class="n r">${Math.round(rs.reduce((s,n)=>s+leaveBal(n).accrued,0)*100)/100}</td>
+        <td class="n r">${rs.reduce((s,n)=>s+leaveBal(n).taken,0)}</td>
+        <td class="n r netcol">${Math.round(rs.reduce((s,n)=>s+leaveBal(n).left,0)*100)/100}</td>
+        <td class="n r">${rs.reduce((s,n)=>s+leaveBal(n).pendDays,0)}</td></tr>`,
+      empty: 'Nobody is on the leave scheme yet.'
+    })}
     <p class="cap">${esc(HR().leavePolicy.note)} Accrual runs from each person's own joining date, so their leave year is their anniversary rather than January. Leave taken is counted in working days &mdash; weekends and public holidays inside a request do not come off the balance. Anyone without a joining date on file accrues nothing until it is added. A <b style="color:var(--bad)">negative balance</b> is not an error &mdash; it means leave was taken in a year that has only just started, and the days carried forward from the year before have not been entered yet.</p>
   </section>
 
@@ -1725,17 +1759,19 @@ function vDocsEdit(){
       <span class="pill ${left?'warn':'good'}"><span class="dt"></span>${left} still blank</span>
       <input id="docQ" placeholder="Find a name" value="${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
     </header>
-    <div class="tw"><table class="invtable">
-      <thead><tr><th class="s1">Employee</th><th>Company</th><th>Emirates ID number</th>
-        ${types.map(t=>`<th class="r">${esc(t.label)}</th>`).join('')}</tr></thead>
-      <tbody>${rows.length?rows.map(n=>`<tr>
-        <td class="s1 nw">${nm(n)}${gaps(n)?` <span class="pill mute">${gaps(n)} blank</span>`:''}</td>
-        <td class="nw" style="color:var(--ink2)">${esc(companyOf(n).name)}</td>
+    ${byCompany(rows, {
+      who: n => n, cls: 'invtable',
+      cols: colsOf([25, 23].concat(types.map(() => 52 / types.length))),
+      note: rs => `${rs.filter(n => gaps(n)).length} still to fill in`,
+      head: `<thead><tr><th>Employee</th><th>Emirates ID number</th>
+        ${types.map(t=>`<th class="r">${esc(t.label)}</th>`).join('')}</tr></thead>`,
+      row: n => `<tr>
+        <td class="nw">${nm(n)}${gaps(n)?` <span class="pill mute">${gaps(n)} blank</span>`:''}</td>
         <td><input class="ff" data-deid="${esc(n)}" value="${esc(eidOf(n))}" placeholder="784-0000-0000000-0"
-          style="font-variant-numeric:tabular-nums;min-width:180px"></td>
-        ${types.map(t=>cell(n, t.k)).join('')}</tr>`).join('')
-        :`<tr><td colspan="${types.length+3}" style="color:var(--ink3)">Nobody matches that.</td></tr>`}
-      </tbody></table></div>
+          style="font-variant-numeric:tabular-nums;width:100%;min-width:0"></td>
+        ${types.map(t=>cell(n, t.k)).join('')}</tr>`,
+      empty: 'Nobody matches that.'
+    })}
     <p class="cap">The rows with the most blanks come first. Type a date and the expiry table, the reminders and the person&rsquo;s own page all follow it straight away &mdash; a wrong date is a missed warning, so take them off the card rather than from memory. <b>Passport and visa numbers are never stored</b>, only the expiry dates and the copy the employee uploads.</p>
   </section>`;
 }
@@ -1784,15 +1820,17 @@ function vDocsAdmin(){
 
   <section class="panel">
     <header><h3>Staff directory</h3><span class="hint">accounts only &mdash; never in an email or a team list</span></header>
-    <div class="tw"><table>
-      <thead><tr><th>Name</th><th>Company</th><th>Work phone</th><th>Emirates ID</th><th>Work email</th></tr></thead>
-      <tbody>${USERS.map(x=>x.name).map(n=>`<tr>
+    ${byCompany(USERS.map(x=>x.name), {
+      who: n => n,
+      cols: colsOf([27, 19, 22, 32]),
+      head: `<thead><tr><th>Name</th><th>Work phone</th><th>Emirates ID</th><th>Work email</th></tr></thead>`,
+      row: n => `<tr>
         <td class="nw">${esc(n)}</td>
-        <td class="nw" style="color:var(--ink2)">${esc(companyOf(n).name)}</td>
         <td class="n nw">${esc(phoneOf(n)||'—')}</td>
         <td class="n nw" style="color:var(--ink2)">${eidOf(n)?`<span data-eid="${esc(eidOf(n))}">${esc(maskEID(eidOf(n)))}</span>`:'—'}</td>
-        <td class="nw" style="color:var(--ink2)">${esc(emailOf(n)||'—')}</td></tr>`).join('')}
-      </tbody></table></div>
+        <td class="nw" style="color:var(--ink2)">${esc(emailOf(n)||'—')}</td></tr>`,
+      empty: 'Nobody on the staff list yet.'
+    })}
     <p class="cap">Emirates ID numbers are masked. <button class="btn ghost" id="eidAll" type="button" style="padding:2px 10px;font-size:12px">Show all</button>
       &nbsp;They are held because payroll, insurance and MOHRE filings need them. They never appear in an email, on a team list, or on anyone's page but their own.</p>
   </section>`;
@@ -2082,22 +2120,21 @@ function vRevisions(){
   <section class="panel">
     <header><h3>Salary on file</h3>
       <span class="hint">what payslips, the salary certificate and the gratuity provision read from</span></header>
-    <div class="tw"><table>
-      <thead><tr><th class="s1">Employee</th><th>Company</th><th class="r">Basic</th><th class="r">Other allowance</th>
-        <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>
-      <tbody>${(()=>{
-        const rows = USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
-          .sort((a,b)=>a.localeCompare(b)).map(n=>({n, p:salParts(n)}));
-        if(!rows.length) return `<tr><td colspan="7" style="color:var(--ink3)">Nothing on file.</td></tr>`;
-        return rows.map(r=>`<tr>
-          <td class="s1 nw">${nm(r.n)}</td>
-          <td class="nw" style="color:var(--ink2)">${esc(companyOf(r.n).name)}</td>
-          <td class="n r">${money(r.p.basic,2)}</td><td class="n r">${money(r.p.allow,2)}</td>
-          <td class="n r netcol">${money(r.p.salary,2)}</td>
-          <td class="n r" style="color:var(--ink2)">${r.p.salary?pct(r.p.basic/r.p.salary,1):'\u2014'}</td>
-          <td class="nw" style="color:var(--ink2)">${r.p.from?esc('From '+r.p.from):esc(r.p.src||'\u2014')}${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}</td></tr>`).join('');
-      })()}
-      </tbody></table></div>
+    ${byCompany(USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
+        .sort((a,b)=>a.localeCompare(b)).map(n=>({n, p:salParts(n)})), {
+      who: r => r.n,
+      cols: colsOf([22, 13, 15, 13, 12, 25]),
+      note: rs => `${money(rs.reduce((a,r)=>a+r.p.salary,0),2)} on file`,
+      head: `<thead><tr><th>Employee</th><th class="r">Basic</th><th class="r">Other allowance</th>
+        <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>`,
+      row: r => `<tr>
+        <td>${nm(r.n)}</td>
+        <td class="n r">${money(r.p.basic,2)}</td><td class="n r">${money(r.p.allow,2)}</td>
+        <td class="n r netcol">${money(r.p.salary,2)}</td>
+        <td class="n r" style="color:var(--ink2)">${r.p.salary?pct(r.p.basic/r.p.salary,1):'\u2014'}</td>
+        <td style="color:var(--ink2)"${full(r.p.from?'From '+r.p.from:(r.p.src||''))}>${r.p.from?esc('From '+r.p.from):esc(r.p.src||'\u2014')}${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}</td></tr>`,
+      empty: 'Nothing on file.'
+    })}
     <p class="cap">Issuing a revision replaces the basic and allowance the whole portal works from &mdash; payslips split the month on the new ratio, the salary certificate quotes the new figures, and the gratuity provision recalculates. The letter itself lands on the employee's own Letters page and is emailed to them. The real splits run from 57% to 66% of salary, so anything still marked <b>assumed</b> is a guess that should be replaced with the figure on the person's contract.</p>
   </section>`;
 }
@@ -2590,15 +2627,19 @@ function vProfilesAdmin(){
     <header><h3>Profile completeness</h3>
       <span class="pill ${done===rows.length?'good':'warn'}">${done} of ${rows.length} complete</span>
       <span class="hint">filled in by the employee, not by you</span></header>
-    <div class="tw"><table class="invtable">
-      <thead><tr><th class="s1">Employee</th><th style="width:180px">Done</th><th>Still needed</th><th>Last updated</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr>
-        <td class="s1 nw">${nm(r.n)}</td>
+    ${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([26, 19, 37, 18]),
+      note: rs => `${rs.filter(r=>r.d.pct===100).length} of ${rs.length} complete`,
+      head: `<thead><tr><th>Employee</th><th>Done</th><th>Still needed</th><th>Last updated</th></tr></thead>`,
+      row: r => `<tr>
+        <td class="nw">${nm(r.n)}</td>
         <td><div class="pfbar sm"><i style="width:${r.d.pct}%;background:var(--${r.d.pct===100?'good':r.d.pct>=60?'accent':'warn'})"></i></div>
           <span style="font-size:12px;color:var(--ink2)">${r.d.pct}%</span></td>
-        <td style="color:var(--ink2);font-size:12.5px">${r.d.missing.length?esc(r.d.missing.slice(0,4).join(', '))+(r.d.missing.length>4?' +'+(r.d.missing.length-4):''):'—'}</td>
-        <td class="n nw" style="color:var(--ink2)">${r.p.updated?esc(dayLabel(r.p.updated))+' '+r.p.updated.slice(0,4):'never'}</td></tr>`).join('')}
-      </tbody></table></div>
+        <td style="color:var(--ink2);font-size:12.5px"${full(r.d.missing.join(', '))}>${r.d.missing.length?esc(r.d.missing.slice(0,4).join(', '))+(r.d.missing.length>4?' +'+(r.d.missing.length-4):''):'—'}</td>
+        <td class="n nw" style="color:var(--ink2)">${r.p.updated?esc(dayLabel(r.p.updated))+' '+r.p.updated.slice(0,4):'never'}</td></tr>`,
+      empty: 'Nobody has a profile yet.'
+    })}
     <p class="cap">${none?`<b>${none} ${none===1?'person has':'people have'} not started.</b> `:''} Nothing here is verified &mdash; whatever an employee uploads and dates is taken as correct and feeds the expiry reminders straight away, so a wrong date means a missed warning. Chase the empty rows.</p>
   </section>`;
 }
@@ -5172,32 +5213,37 @@ function vTickets(){
       <input id="attext" class="ff" placeholder="Search name, employee ID, country" value="${esc(f.text)}">
       <button class="btn ghost fclear${act?'':' off'}" id="atclear" type="button">Clear${act?' ('+act+')':''}</button>
     </div>
-    <div class="tw"><table class="invtable">
-      <thead><tr>
+    ${(() => { window.TICKHEAD = `<thead><tr>
         ${th('id','Emp ID')}${th('name','Employee')}${th('country','Country')}${th('dojS','Joined')}
         ${th('rate','Rate','r')}${th('lastPaid','Last taken')}${th('nextS','Next due')}${th('proc','Process in')}
         ${th('status','Status')}${th('taken','Taken','r')}${th('pending','Pending','r')}${th('backlog','Backlog','r')}
-      </tr></thead>
-      <tbody>
-        ${rows.map(r=>`<tr${(r.lwd||r.status.startsWith('Remote'))?' style="color:var(--ink3)"':''}>
+      </tr></thead>`; return ''; })()}
+    <div style="display:none"><table>
+      </table></div>
+    ${byCompany(rows, {
+      who: r => r.name, cls: 'invtable',
+      cols: colsOf([7, 14, 9, 9, 6.5, 9, 9, 8, 8.5, 5.5, 7, 6.5]),
+      head: TICKHEAD,
+      row: r => `<tr${(r.lwd||r.status.startsWith('Remote'))?' style="color:var(--ink3)"':''}>
           <td class="n nw">${esc(r.id)}</td>
-          <td class="nw">${nm(r.name)}</td>
-          <td class="nw">${esc(r.country)}</td>
+          <td>${nm(r.name)}</td>
+          <td>${esc(r.country)}</td>
           <td class="n nw">${esc(r.doj)}</td>
           <td class="n r">${money(r.rate,0)}</td>
           <td class="n nw">${esc(r.lastPaid)||'<span style="color:var(--ink3)">—</span>'}</td>
           <td class="n nw">${esc(r.next)||'<span style="color:var(--ink3)">—</span>'}</td>
-          <td class="nw">${esc(r.proc)||'<span style="color:var(--ink3)">—</span>'}</td>
-          <td class="nw">${stPill(r.status)}</td>
+          <td>${esc(r.proc)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td>${stPill(r.status)}</td>
           <td class="n r">${r.taken}</td>
           <td class="n r"${r.pending?' style="color:var(--bad);font-weight:600"':''}>${r.pending||'—'}</td>
           <td class="n r netcol">${r.backlog?money(r.backlog,0):'—'}</td>
-        </tr>`).join('')}
-        <tr class="tot"><td>${rows.length}</td><td>people</td><td colspan="7"></td>
-          <td class="n r">${rows.reduce((s,r)=>s+r.taken,0)}</td>
-          <td class="n r">${rows.reduce((s,r)=>s+r.pending,0)}</td>
-          <td class="n r netcol">${money(rows.reduce((s,r)=>s+r.backlog,0),0)}</td></tr>
-      </tbody></table></div>
+        </tr>`,
+      foot: rs => `<tr class="tot"><td>${rs.length}</td><td>people</td><td colspan="7"></td>
+          <td class="n r">${rs.reduce((s,r)=>s+r.taken,0)}</td>
+          <td class="n r">${rs.reduce((s,r)=>s+r.pending,0)}</td>
+          <td class="n r netcol">${money(rs.reduce((s,r)=>s+r.backlog,0),0)}</td></tr>`,
+      empty: 'Nobody matches those filters.'
+    })}
     <p class="cap">One ticket a year, first due 11 months after joining and every 12 months after that. A leaver keeps whatever they had already earned &mdash; that is what stays in Backlog.</p>
   </section>
 
@@ -5490,18 +5536,22 @@ function vSlips(){
         ${noMaster?`<b>MOL ID and account number are missing for ${noMaster} of ${staff.length} people.</b> Upload the employee master once and both fill in on every payslip from then on.`:''}
       </div>`:''}
     </div>
-    <div class="tw"><table>
-      <thead><tr><th>Employee</th><th>Emp ID</th><th>Company</th><th class="r">Gross</th><th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
-      <tbody>${rows.map(r=>{const s=slipOf(r); return `<tr${state.slipOpen===r.id?' style="background:var(--panel2)"':''}>
-        <td class="nw">${nm(r.name)}</td><td class="n">${esc(r.id)}</td><td>${esc(DATA.payroll.label[r.company]||r.company)}</td>
+    ${byCompany(rows, {
+      code: r => r.company,
+      cols: colsOf([31, 12, 15, 15, 15, 12]),
+      note: rs => `net ${money(rs.reduce((a,r)=>a+slipOf(r).net,0),2)}`,
+      head: `<thead><tr><th>Employee</th><th>Emp ID</th><th class="r">Gross</th><th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>`,
+      row: r => { const s = slipOf(r); return `<tr${state.slipOpen===r.id?' style="background:var(--panel2)"':''}>
+        <td>${nm(r.name)}</td><td class="n">${esc(r.id)}</td>
         <td class="n r">${money(s.gross,2)}</td><td class="n r">${s.dedT?money(s.dedT,2):'&mdash;'}</td>
         <td class="n r netcol">${money(s.net,2)}</td>
-        <td class="r"><button class="btn ghost" data-slip="${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>`;}).join('')}
-        <tr class="tot"><td>${rows.length} people</td><td></td><td></td>
-          <td class="n r">${money(rows.reduce((a,r)=>a+slipOf(r).gross,0),2)}</td>
-          <td class="n r">${money(rows.reduce((a,r)=>a+slipOf(r).dedT,0),2)}</td>
-          <td class="n r netcol">${money(rows.reduce((a,r)=>a+slipOf(r).net,0),2)}</td><td></td></tr>
-      </tbody></table></div>
+        <td class="r"><button class="btn ghost" data-slip="${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>`; },
+      foot: rs => `<tr class="tot"><td>${rs.length} ${rs.length===1?'person':'people'}</td><td></td>
+        <td class="n r">${money(rs.reduce((a,r)=>a+slipOf(r).gross,0),2)}</td>
+        <td class="n r">${money(rs.reduce((a,r)=>a+slipOf(r).dedT,0),2)}</td>
+        <td class="n r netcol">${money(rs.reduce((a,r)=>a+slipOf(r).net,0),2)}</td><td></td></tr>`,
+      empty: 'No payslips on this run.'
+    })}
   </section>
   ${one?`<section class="panel">
     <header><h3>${esc(one.name)}</h3><span class="pill mute">${esc(one.id)}</span>
@@ -6167,18 +6217,21 @@ function vAdmin(){
     <header><h3>Probation</h3>
       <span class="pill ${PROB().some(p=>p.days<=30)?'warn':'good'}"><span class="dt"></span>${PROB().length} running</span>
       <span class="hint" style="margin-left:auto">six months from joining &mdash; nothing accrues differently, but somebody has to decide</span></header>
-    <div class="tw"><table>
-      <thead><tr><th class="s1">Employee</th><th>Joined</th><th>Probation ends</th><th class="r">Days left</th><th></th></tr></thead>
-      <tbody>${PROB().map(p=>`<tr>
-        <td class="s1 nw">${nm(p.who)}</td>
+    ${byCompany(PROB(), {
+      who: p => p.who,
+      cols: colsOf([26, 17, 18, 11, 28]),
+      head: `<thead><tr><th>Employee</th><th>Joined</th><th>Probation ends</th><th class="r">Days left</th><th></th></tr></thead>`,
+      row: p => `<tr>
+        <td>${nm(p.who)}</td>
         <td class="nw" style="color:var(--ink2)">${esc(dayLabel(p.doj))} ${esc(p.doj.slice(0,4))}</td>
         <td class="nw" style="color:var(--ink2)">${esc(dayLabel(p.until))} ${esc(p.until.slice(0,4))}</td>
         <td class="n r"${p.days<=30?' style="color:var(--warn)"':''}>${p.days}</td>
         <td class="r nw">
           <button class="btn sm" data-pbok="${esc(p.who)}" type="button">Confirm</button>
           <input class="pbdate" type="date" data-pbext="${esc(p.who)}" value="" title="extend to">
-        </td></tr>`).join('')}
-      </tbody></table></div>
+        </td></tr>`,
+      empty: 'Nobody is on probation.'
+    })}
     <p class="cap">Confirming records the decision on the day it is taken. Setting a later date in the box
       extends probation instead. Neither changes what has accrued: leave, the gratuity provision and the air
       ticket clock have all run from day one, which is what the law and the sheet both do.</p>
@@ -7835,29 +7888,34 @@ function vRegular(){
 
   ${late.length ? `<section class="panel">
     <header><h3>Not checked in today</h3><span class="hint">more than ${HR().escalateMin??30} minutes past their shift</span></header>
-    <div class="tw"><table>
-      <thead><tr><th>Who</th><th>Shift</th><th>Manager</th><th class="r">Late by</th></tr></thead>
-      <tbody>${late.map(n => { const g = nudgeFor(n); return `<tr>
-        <td class="nw">${esc(NM(n))}</td><td class="n">${esc(shiftOf(n).start)}</td>
-        <td class="nw">${esc(NM(mgrName(n)) || '\u2014')}</td>
-        <td class="n r">${g.by} min</td></tr>`;}).join('')}
-      </tbody></table></div>
+    ${byCompany(late, {
+      who: n => NM(n),
+      cols: colsOf([34, 16, 32, 18]),
+      head: `<thead><tr><th>Who</th><th>Shift</th><th>Manager</th><th class="r">Late by</th></tr></thead>`,
+      row: n => { const g = nudgeFor(n); return `<tr>
+        <td>${esc(NM(n))}</td><td class="n">${esc(shiftOf(n).start)}</td>
+        <td>${esc(NM(mgrName(n)) || '\u2014')}</td>
+        <td class="n r">${g.by} min</td></tr>`; },
+      empty: 'Everybody is in.'
+    })}
   </section>` : ''}
 
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>Every request</h3><span class="hint">${rows.length} in all</span></header>
-    <div class="tw"><table class="invtable">
-      <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
-        <th>Why</th><th>State</th><th>Decided</th></tr></thead>
-      <tbody>${rows.length ? rows.map(r => `<tr>
-        <td class="n">${esc(r.id)}</td><td class="nw">${esc(NM(r.who))}</td>
+    ${byCompany(rows, {
+      who: r => NM(r.who), cls: 'invtable',
+      cols: colsOf([8, 18, 12, 8, 8, 25, 11, 10]),
+      head: `<thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th>State</th><th>Decided</th></tr></thead>`,
+      row: r => `<tr>
+        <td class="n">${esc(r.id)}</td><td>${esc(NM(r.who))}</td>
         <td class="nw">${esc(dayLabel(r.d))}</td>
         <td class="n">${esc(r.in)||'\u2014'}</td><td class="n">${esc(r.out)||'\u2014'}</td>
-        <td style="color:var(--ink2);font-size:12.5px">${esc(r.reason)}${r.note?' \u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td style="color:var(--ink2);font-size:12.5px"${full(r.reason + (r.note ? ' — ' + r.note : ''))}>${esc(r.reason)}${r.note?' \u00b7 <i>'+esc(r.note)+'</i>':''}</td>
         <td><span class="dpill" style="--dc:${RGCOL(r.status)}">${esc(r.status)}</span></td>
-        <td class="n">${esc(r.decided)?esc(dayLabel(r.decided)):'\u2014'}</td></tr>`).join('')
-        : '<tr><td colspan="8" style="color:var(--ink3)">Nobody has asked to fix a day yet.</td></tr>'}
-      </tbody></table></div>
+        <td class="n">${esc(r.decided)?esc(dayLabel(r.decided)):'\u2014'}</td></tr>`,
+      empty: 'Nobody has asked to fix a day yet.'
+    })}
     <p class="cap">Two approved a month each, counted by the database rather than by this screen \u2014 a limit only the screen keeps is not a limit. A declined request costs nobody anything.</p>
   </section>`;
 }
