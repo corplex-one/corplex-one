@@ -102,7 +102,7 @@ const state = {
   deptView: null, company: null, attMonth: null, reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
-  lnForm: null, lnSent: false, exitWho: '', exitLwd: '', mailPick: 'weekly', mailWeek: null,
+  lnForm: null, lnSent: false, exitWho: '', exitLwd: '', exitSettle: '', mailPick: 'weekly', mailWeek: null,
   revForm: null, revSent: '', noteDone: [], who: null, peopleQ: '', askTab: 'loans',
   askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: '', leaveTab: 'leave', calcTab: 'card', invRaw: null, invPrint: false,
   payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
@@ -452,7 +452,7 @@ const HDATE = () => HR().today;
 const mins = t => t ? (+t.slice(0,2))*60 + (+t.slice(3,5)) : 0;
 const hhmm = m => (m<0?'-':'') + String(Math.floor(Math.abs(m)/60)).padStart(2,'0') + ':' + String(Math.abs(m)%60).padStart(2,'0');
 const dayLabel = ds => { const d=new Date(ds+'T00:00:00');
-  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); };
+  return String(d.getDate()).padStart(2,'0') + ' ' + MONTHNAME[d.getMonth()]; };
 const dayName = ds => new Date(ds+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short'});
 const dayLong = ds => new Date(ds+'T00:00:00').toLocaleDateString('en-GB',{weekday:'long'});
 const isWeekend = ds => [0,6].includes(new Date(ds+'T00:00:00').getDay());
@@ -622,6 +622,72 @@ function bdayBal(u){
     lapsed: credited > 0 && thisYear < t && left > 0};
 }
 const rType = id => REQTYPES.find(x=>x.id===id) || {id, label:id, pay:'full'};
+
+/* The other kinds of leave, as a balance.
+ *
+ * Annual leave has leaveBal, sick leave has sickBal and the birthday half-day
+ * has bdayBal, because each of those is a running account with its own rules.
+ * The rest are simply an entitlement less what has been taken, and what
+ * varies is who the entitlement is written for and what it is counted over —
+ * a leave year for most, the whole of somebody's service for Hajj.
+ *
+ * A dash is never the same as a zero. Zero means the person has used it all;
+ * a dash means the policy does not reach them, and the reason is on the
+ * hover so that nobody has to guess which.
+ */
+const PERSERVICE = ['Hajj'];
+function otherBal(u, id){
+  const t = rType(id);
+  const dash = why => ({txt:'\u2014', n:null, off:true, why});
+  if(noLeave(u) || isPartner(u)) return dash('Not on the leave scheme');
+  if(t.pool) return dash('Comes off the annual leave balance, so it has no separate one');
+
+  if(t.need){
+    const p = PROF(u) || {};
+    if(!p.gender || !p.marital)
+      return dash('Gender and marital status are not on this profile yet, so the portal cannot tell whether this applies');
+    if((t.need.gender && p.gender !== t.need.gender) || (t.need.marital && p.marital !== t.need.marital))
+      return dash('For ' + (t.need.gender === 'Female' ? 'married female' : 'married male') + ' employees only');
+  }
+  if(t.minYears){
+    const y = yearsWith(u);
+    if(!y) return dash('Joining date not on file, so service cannot be counted');
+    if(y.years < t.minYears) return dash('After ' + t.minYears + ' years of service \u2014 ' + NM(u) + ' has ' + y.years);
+  }
+
+  if(id === 'Sick'){
+    const S = sickBal(u);
+    if(!S.has) return dash('Not on the leave scheme');
+    if(S.probation) return {txt:'0', n:0, probation:true,
+      why:'Still inside probation, and nothing is paid until it is served. ' + S.FULL
+        + ' full-pay days open up after ' + ((HR().leavePolicy||{}).probationMonths || 6) + ' months.'};
+    return {txt:String(S.full), n:S.full,
+      why:S.full + ' of ' + S.FULL + ' full-pay days left this leave year' + (S.taken ? ' \u2014 ' + S.taken + ' taken' : '')
+        + '. After those, ' + S.HALF + ' days at half pay and ' + S.UNPAID + ' unpaid.'};
+  }
+
+  const B = leaveBal(u);
+  const perService = PERSERVICE.includes(id);
+  const since = perService ? '' : (B.yearStart || '');
+  const taken = HR().requests.filter(r => r.who === u && r.status === 'Approved'
+      && r.type === id && (!since || r.to >= since)).reduce((a, r) => a + r.days, 0);
+  const cap = id === 'Birthday' ? ((HR().leavePolicy||{}).birthdayDays || 0.5) : (t.max || 0);
+  const left = Math.round((cap - taken) * 100) / 100;
+  const over = cap === 0;
+  return {txt:String(left), n:left, taken, cap, over,
+    why: over
+      ? (taken ? taken + ' unpaid day' + (taken===1?'':'s') + ' taken. There is no entitlement to draw on, so it shows below zero.'
+               : 'No entitlement \u2014 unpaid leave is agreed case by case and counted after the fact.')
+      : cap + ' day' + (cap===1?'':'s') + (perService ? ' once during service' : ' a leave year')
+        + (taken ? ', ' + taken + ' taken' : ', none taken')
+        + (perService || !B.yearEnd ? '' : '. Resets ' + dayLabel(B.yearEnd) + ' ' + B.yearEnd.slice(0,4) + '.')};
+}
+/* The columns. Work from home is not leave; annual leave has its own table
+ * above; and anything else that spends the annual balance — Umrah — has no
+ * balance of its own, so a column for it could only ever hold a dash. A
+ * column that can never carry a number is not information, so it is said in
+ * the caption instead of drawn twenty-five times. */
+const OTHERKINDS = () => REQTYPES.filter(t => !t.wfh && !t.pool);
 const usesPool = id => !!rType(id).pool;
 const isUnpaid = id => rType(id).pay==='none';
 function typeAllowed(u, t){
@@ -1779,6 +1845,55 @@ function vHRAdmin(){
   </section>
 
   <section class="panel">
+    <header><h3>Other leave balances</h3>
+      <span class="pill mute">${OTHERKINDS().length} kinds</span>
+      <span class="hint">what each person has left, not what they have taken</span></header>
+    ${(() => {
+      /* The columns are ordered by the group they sit under, not by the order
+         the kinds happen to be declared in — otherwise the two heading rows
+         disagree and unpaid leave ends up printed under "Paid". */
+      const ALL = OTHERKINDS();
+      const paid = ALL.filter(t => t.pay !== 'none');
+      const free = ALL.filter(t => t.pay === 'none');
+      const KINDS = paid.concat(free);
+      /* The name needs about a fifth; the rest is shared out between the
+         figures so that no column is wider than the number it holds. */
+      const each = KINDS.length ? Math.min(12, (100 - 22) / KINDS.length) : 0;
+      const cols = [100 - each * KINDS.length].concat(KINDS.map(() => each));
+      const roll = list.filter(n => !isPartner(n));
+      const short = roll.filter(n => { const p = PROF(n) || {}; return !p.gender || !p.marital; });
+      const cell = (n, t) => { const b = otherBal(n, t.id);
+        return `<td class="n r${b.off ? ' obdash' : ''}"${full(b.why)}${
+          b.n !== null && b.n < 0 ? ' style="color:var(--bad)"' : ''} data-always="1">${esc(b.txt)}</td>`; };
+      return byCompany(roll, {
+        who: n => n,
+        cols: colsOf(cols),
+        cls: 'obtab',
+        note: rs => `${rs.length} ${rs.length === 1 ? 'person' : 'people'}`,
+        head: `<thead>
+          <tr class="obgrp"><th></th>
+            <th class="r" colspan="${paid.length}">Paid</th>
+            <th class="r" colspan="${free.length}">Not paid</th></tr>
+          <tr><th>Employee</th>${KINDS.map(t =>
+            `<th class="r"${full(t.note || '')}>${esc(t.label.replace(/ leave$/i, ''))}</th>`).join('')}</tr>
+        </thead>`,
+        row: n => `<tr><td${full(NM(n) === n ? '' : n)}>${nm(n)}</td>${KINDS.map(t => cell(n, t)).join('')}</tr>`,
+        empty: 'Nobody is on the leave scheme yet.'
+      }) + `<p class="cap">Every figure is what is <b>still available</b>, so a zero means it has been used up.
+        Unpaid leave has no entitlement to draw on \u2014 Avin: <i>we cant keep a fixed number of days</i> \u2014 so
+        its balance is the days already taken, shown <b style="color:var(--bad)">below zero</b>.
+        A <b>dash is not a zero</b>: it means the policy was never written for that person, and the reason is on the
+        hover \u2014 maternity is for married female employees, paternity for married male employees, and study
+        leave needs two years of service. <b>Umrah has no column</b> because it comes off the annual balance above
+        rather than having one of its own.${
+        short.length ? ` <b>${short.length} ${short.length === 1 ? 'profile has' : 'profiles have'} no gender or marital status on file</b>
+          \u2014 ${esc(short.map(n => NM(n)).join(', '))} \u2014 so the portal cannot yet say whether maternity or paternity
+          leave applies to ${short.length === 1 ? 'them' : 'any of them'}.` : ''} Sick leave follows the law:
+        the full-pay days are counted here, and the half-pay and unpaid days that follow them are on the hover.</p>`;
+    })()}
+  </section>
+
+  <section class="panel">
     <header><h3>Public holidays ${String(HDATE()).slice(0,4)}</h3>
       <span class="pill mute">${(HR().holidays||[]).length} days</span>
       <span class="hint" style="margin-left:auto">${canUpload(state.user)
@@ -1913,9 +2028,28 @@ function exitCalc(name, lwd){
   const ticket = tk ? (tk.backlog||0) : 0;
   const adv = (HR().loans||[]).filter(l=>l.who===name && l.status==='Approved').reduce((s,l)=>s+loanLeft(l),0);
   const r2 = v => Math.round(v*100)/100;
+  /* Payroll runs on a thirty-day month, so somebody who leaves on the 31st
+     has worked a whole month and never thirty-one thirtieths of one. */
+  const period = MONFULL[+lwd.slice(5,7)-1] + ' ' + lwd.slice(0,4);
+  const worked = Math.min(30, +lwd.slice(8,10));
+  /* LOP is loss of pay — unpaid leave — and not the part of the month that
+     comes after somebody has left. The run's day count is thirty less any
+     unpaid leave, so what it falls short by is the unpaid leave; the days
+     after the last working day are simply not employment, and calling them
+     lost pay would say on a signed document that the person was docked. */
+  const runDays = (r.days === undefined || r.days === null) ? 30 : r.days;
+  const lop = period === DATA.payroll.month ? Math.max(0, Math.min(worked, 30 - runDays)) : 0;
+  const paidDays = Math.max(0, worked - lop);
+  const mBasic = r2(basic * paidDays / 30);
+  const mAllow = r2((salary - basic) * paidDays / 30);
+  const monthPay = r2(mBasic + mAllow);
   return {row:r, doj:r.doj, start, lwd, days, years, salary, basic, dayBasic:r2(dayBasic),
     grat:r2(grat), leaveDays, leaveCash:r2(leaveCash), ticket:r2(ticket), adv:r2(adv),
-    net: r2(grat + leaveCash + ticket - adv), capped: years>=1 && (grat >= salary*24 - 0.5)};
+    period,
+    paidDays, lop, mBasic, mAllow, monthPay,
+    settleDate: state.exitSettle || lwd,
+    net: r2(monthPay + grat + leaveCash + ticket - adv),
+    capped: years>=1 && (grat >= salary*24 - 0.5)};
 }
 
 function vDocs(){
@@ -2619,6 +2753,9 @@ function vExits(){
             ${staff.map(n=>`<option value="${esc(n)}"${sel===n?' selected':''}>${esc(n)}</option>`).join('')}</select></div>
         <div class="field" style="margin:0"><label for="exLwd">Last working day</label>
           <input id="exLwd" type="date" value="${esc(lwd)}"></div>
+        <div class="field" style="margin:0"><label for="exSettle">Settlement date</label>
+          <input id="exSettle" type="date" value="${esc(state.exitSettle || lwd)}"${lwd?'':' disabled'}>
+          <span class="pfhint">The day the money leaves. Defaults to the last working day.</span></div>
       </div>
       ${!c?`<p class="note" style="margin-top:16px">Pick someone and a last working day. Everything else is worked out from what the portal already holds &mdash; joining date, salary, leave balance, unclaimed air tickets and any advance still running.</p>`:''}
     </div>
@@ -2627,7 +2764,7 @@ function vExits(){
   ${c?`
   <div class="grid g2 gtop">
     <section class="panel">
-      <header><h3>${esc(sel)}</h3><span class="pill mute">${esc(c.row.id)}</span>
+      <header><h3>${nm(sel)}</h3><span class="pill mute">${esc(c.row.id)}</span>
         <span class="hint">${esc(DATA.companies[coByCode(c.row.company).key].name)}</span></header>
       <div class="pad"><dl class="kv">
         <dt>Joined</dt><dd>${esc(c.doj)||'—'}</dd>
@@ -2642,16 +2779,18 @@ function vExits(){
     </section>
 
     <section class="panel">
-      <header><h3>What is due</h3></header>
+      <header><h3>What is due</h3>
+        <button class="btn ghost" id="exDoc" type="button">Open the settlement</button></header>
       <div class="tw"><table>
         <tbody>
+          ${line('Salary for ' + c.period + ' \u2014 ' + c.paidDays + ' paid day' + (c.paidDays===1?'':'s'), c.monthPay)}
           ${line('End-of-service gratuity', c.grat)}
           ${line('Leave encashment — '+c.leaveDays+' days at daily basic', c.leaveCash)}
           ${c.ticket?line('Unclaimed air tickets', c.ticket):''}
           ${c.adv?line('Advance still outstanding', -c.adv, true):''}
           <tr class="tot"><td><b>Final settlement</b></td><td class="n r netcol"><b>AED ${money(c.net,2)}</b></td></tr>
         </tbody></table></div>
-      <p class="cap">Gratuity on the standard rule &mdash; ${c.years<1?'under one year of service, so none is due':'21 days of basic pay for each of the first five years and 30 days a year after that'}${c.capped?', capped at two years of total pay':''}. Leave and gratuity are both calculated on <b>basic</b>, not total salary. Check it against the contract before anything is paid.</p>
+      <p class="cap">Everything above goes on one document &mdash; open it with the button, print it or save it as a PDF, and it comes out on ${esc(visaEnt(sel).legal)} letterhead with a receipt for ${nm(sel)} to sign. Gratuity on the standard rule &mdash; ${c.years<1?'under one year of service, so none is due':'21 days of basic pay for each of the first five years and 30 days a year after that'}${c.capped?', capped at two years of total pay':''}. Leave and gratuity are both calculated on <b>basic</b>, not total salary. Check it against the contract before anything is paid.</p>
     </section>
   </div>
 
@@ -2663,7 +2802,7 @@ function vExits(){
       <dt>Portal access</dt><dd>Account switched off on the last working day so payslips and data are no longer reachable.</dd>
       <dt>Visa and labour card</dt><dd>Cancellation started with the PRO &mdash; the expiry dates are on the Documents page.</dd>
       <dt>Air ticket</dt><dd>${c.ticket?`AED ${money(c.ticket,2)} of unclaimed entitlement is included above.`:'Nothing unclaimed.'}</dd>
-      <dt>Final payslip</dt><dd>Settlement paid with, or separately from, the last monthly run &mdash; your choice.</dd>
+      <dt>Final payslip</dt><dd>The last month's pay is inside the settlement above, so take ${nm(sel)} off the ${esc(c.period)} run rather than paying the month twice.</dd>
     </dl></div>
   </section>`:''}`;
 }
@@ -5831,6 +5970,91 @@ function slipHTML(s, printable){
     </div>
   </article>`;
 }
+
+/* The final settlement. Same paper, same letterhead, a different document. */
+function settleOf(c){
+  const r = c.row;
+  const vco = visaCoOf(r.name);
+  const ent = (DATA.entities||{})[vco.code] || {legal:vco.name, addr:[], ready:false};
+  const mp = (DATA.master.people||{})[r.id] || {};
+  const earn = [['Basic', c.mBasic], ['Other Allowance', c.mAllow]];
+  if(c.leaveCash) earn.push(['Leave Encashment', c.leaveCash,
+    c.leaveDays + (c.leaveDays === 1 ? ' day' : ' days') + ' of annual leave at daily basic']);
+  if(c.grat) earn.push(['Gratuity', c.grat, 'Days of service: ' + c.days]);
+  if(c.ticket) earn.push(['Air Ticket', c.ticket, 'unclaimed entitlement']);
+  const ded = [];
+  if(c.adv) ded.push(['Advance', c.adv, 'still outstanding on the last working day']);
+  const r2 = v => Math.round(v*100)/100;
+  const gross = r2(earn.reduce((s,x)=>s+x[1],0));
+  const dedT  = r2(ded.reduce((s,x)=>s+x[1],0));
+  return {c, r, ent, earn, ded, gross, dedT, net: r2(gross - dedT),
+    mol: mp.mol||'', acct4: mp.acct4||'',
+    logo: (LOGOS[vco.key] || LOGOS.corplex).slip};
+}
+function settleHTML(s){
+  const c = s.c, r = s.r;
+  const kv = (k, v) => `<div class="sk">${esc(k)}</div><div class="sc">:</div><div class="sv">${v}</div>`;
+  const dd = iso => iso ? dayLabel(iso) + ' ' + iso.slice(0,4) : '\u2014';
+  const side = (title, lines, totLabel, totVal, empty) => `<div class="slside">
+      <div class="slsh"><span>${esc(title)}</span><span class="r">Amount</span></div>
+      <div class="slrows">${lines.length
+        ? lines.map(([l,v,sub])=>`<div class="slrow"><span>${esc(l)}${sub?`<i>${esc(sub)}</i>`:''}</span><b>${money(v,2)}</b></div>`).join('')
+        : `<div class="slrow none"><span>${esc(empty)}</span><b></b></div>`}</div>
+      <div class="slst"><span>${esc(totLabel)}</span><b>AED ${money(totVal,2)}</b></div>
+    </div>`;
+  return `<article class="slip settle">
+    <header class="slhead">
+      <img src="${s.logo}" alt="${esc(s.ent.legal)}">
+      <div class="slco"><h4>${esc(s.ent.legal)}</h4>${s.ent.addr.map(l=>`<span>${esc(l)}</span>`).join('')}
+        ${s.ent.ready?'':'<span class="slwarn">Letterhead details still to be confirmed</span>'}</div>
+    </header>
+    <div class="stbar">Full and final settlement</div>
+    <div class="slbody">
+      <div class="sttitle">Pay summary</div>
+      <div class="stkv">
+        ${kv('Employee Name', esc(legalOf(r.name)))}
+        ${kv('Employee ID', esc(r.id))}
+        ${kv('Designation', esc(r.title||'\u2014'))}
+        ${kv('MOL ID', s.mol?esc(s.mol):'<i class="slmiss">from employee master</i>')}
+        ${kv('Date of Joining', esc(r.doj)||'\u2014')}
+        ${kv('Account No', s.acct4?('&bull;&bull;&bull;&bull;&nbsp;&bull;&bull;&bull;&bull;&nbsp;'+esc(s.acct4)):'<i class="slmiss">from employee master</i>')}
+        ${kv('Pay Period', esc(c.period))}
+        ${kv('Paid Days', String(c.paidDays))}
+        ${kv('Last Working Date', esc(dd(c.lwd)))}
+        ${kv('LOP Days', String(c.lop))}
+        ${kv('Final Settlement Date', esc(dd(c.settleDate)))}
+        <div class="sk"></div><div class="sc"></div><div class="sv"></div>
+      </div>
+      <div class="sltables">
+        ${side('Earnings', s.earn, 'Gross Earnings', s.gross, '')}
+        ${side('Deductions', s.ded, 'Total Deductions', s.dedT, 'None')}
+      </div>
+      <div class="stnet">
+        <div class="stnh"><span>Net pay</span><b>Amount</b></div>
+        <div class="stnr"><span>Gross Earnings</span><b>AED ${money(s.gross,2)}</b></div>
+        <div class="stnr"><span>Total Deductions</span><b>(-) AED ${money(s.dedT,2)}</b></div>
+        <div class="stnt"><span>Total Net Payable</span><b>AED ${money(s.net,2)}</b></div>
+      </div>
+      <div class="stwords">
+        <p>Total Net Payable <b>AED ${money(s.net,2)}</b>
+          <span>(UAE Dirham ${esc(inWords(s.net))})</span></p>
+        <i>**Total Net Payable = (Gross Earnings &minus; Total Deductions)</i>
+      </div>
+      <div class="stnote"><span>Note:</span><i></i></div>
+      <div class="stsign"><span>Prepared By:</span><span>Checked By:</span><span>Authorised By:</span></div>
+      <div class="stdecl">
+        <h5>Declaration by the receiver</h5>
+        <p>I, the undersigned, hereby state that I have received the above-mentioned amount as my
+          full and final settlement following the end of my employment with the Company. I confirm
+          that I have accepted this settlement of my own free will and choice and that I have no
+          grievances, disputes, demands, or claims against the Company in respect of my legal dues,
+          back wages, reinstatement, re-employment, or any other employment-related matter.</p>
+        <div class="stemp"><span>Employee&rsquo;s Signature:</span><i></i></div>
+      </div>
+      <p class="slfoot">-- This is a system-generated document. --</p>
+    </div>
+  </article>`;
+}
 const FULLDAY = () => (HR().hours && HR().hours.fullDay) || 9 * 60;
 
 /* The clock shows the day, not the segment. The base is everything already
@@ -7219,7 +7443,7 @@ const PAGE = {
   salesptr:   ['admin',   ['Referral partners']],
   hradmin:    ['hradmin', ['attendance', 'Exceptions'], true],
   shifts:     ['hradmin', ['Shifts and reporting lines']],
-  leavebal:   ['hradmin', ['Annual leave balances'], true],
+  leavebal:   ['hradmin', ['Annual leave balances', 'Other leave balances'], true],
   holidays:   ['hradmin', ['Public holidays']],
   // Avin: 'once opened, keep the hero of expired, expiring etc' — so the four
   // document pages all carry the same strip, and moving between them does not
@@ -7749,7 +7973,13 @@ function render(){
   document.querySelectorAll('[data-ln-no]').forEach(b=>b.onclick=()=>{
     const x=HR().loans.find(y=>y.id===b.dataset.lnNo); if(x){x.status='Declined'; x.decided=HDATE(); window.__db.decideLoan(x.id,'Declined');} render(); });
   const exw=document.getElementById('exWho'); if(exw) exw.onchange=()=>{ state.exitWho=exw.value; render(); };
-  const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; render(); };
+  const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; state.exitSettle=''; render(); };
+  const exs=document.getElementById('exSettle'); if(exs) exs.onchange=()=>{ state.exitSettle=exs.value; render(); };
+  const exd=document.getElementById('exDoc'); if(exd) exd.onclick=()=>{
+    const c = exitCalc(state.exitWho, state.exitLwd); if(!c) return;
+    const s = settleOf(c);
+    showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' \u00b7 full and final settlement');
+  };
   const an=document.getElementById('annNew'); if(an) an.onclick=()=>{ state.annNew=true; render(); };
   const ac=document.getElementById('annCancel'); if(ac) ac.onclick=()=>{ state.annNew=false; state.annT=''; state.annB=''; render(); };
   ['annT','annB'].forEach(id=>{ const el=document.getElementById(id); if(!el) return;
