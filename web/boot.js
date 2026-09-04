@@ -675,6 +675,12 @@ window.__db = {
   // wrong the first time, and this does not repeat it — a failed upload leaves
   // no row, and the request simply has one fewer document.
 
+  /* Returns the request, or {error} with the database's own words in it.
+   *
+   * It used to return null and leave a toast to explain, which is the wrong
+   * shape for a form: the toast lasted six seconds, the reload redrew the form
+   * empty, and what the person saw was their typing disappear and nothing
+   * happen. An error on a form belongs on the form, and stays there. */
   async raisePayment(f, files){
     try{
       const {data, error} = await sb.rpc('raise_payment_request', {
@@ -682,6 +688,7 @@ window.__db = {
         p_mode: f.mode, p_order: f.order || null, p_client: f.client || null,
         p_extra: f.extra || null});
       if(error) throw error;
+      if(!data || !data.id) throw new Error('The database accepted it but said nothing back.');
       const bad = [];
       for(const file of (files || []).slice(0, 5)){
         const ok = await this.attachPayment(data.id, file, true);
@@ -689,7 +696,11 @@ window.__db = {
       }
       await reload();
       return {...data, notAttached: bad};
-    }catch(e){ oops(e, 'The payment request'); await reload(); return null; }
+    }catch(e){
+      console.error('raise_payment_request', e);
+      return {error: (e && (e.message || e.hint || e.details)) || String(e),
+              detail: (e && (e.details || e.hint)) || '', code: (e && e.code) || ''};
+    }
   },
 
   /* Attaching, on its own or as part of raising. `quiet` is for the second

@@ -3955,20 +3955,20 @@ function vPayment(){
       <div class="field"><label>Name of the employee</label>
         <input value="${esc(u)}" disabled style="opacity:.7"></div>
       <div class="frow">
-        <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431"></div>
-        <div class="field"><label for="pqAmount">Amount (AED) <i>*</i></label><input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0"></div>
+        <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431" value="${esc(KEPT().order)}"></div>
+        <div class="field"><label for="pqAmount">Amount (AED) <i>*</i></label><input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="${esc(KEPT().amount ? String(KEPT().amount) : '')}"></div>
       </div>
       <div class="field"><label for="pqClient">Client name <i>*</i></label>
         <div class="combo">
-          <input id="pqClient" autocomplete="off" spellcheck="false" placeholder="Start typing — two letters is enough">
+          <input id="pqClient" autocomplete="off" spellcheck="false" placeholder="Start typing — two letters is enough" value="${esc(KEPT().client)}">
           <div id="pqList" class="combolist hidden"></div>
         </div>
         <div id="pqBadge" class="badge"></div></div>
-      <div class="field"><label for="pqPurpose">Purpose of payment <i>*</i></label><input id="pqPurpose" placeholder="Trade licence renewal, translator fee…"></div>
-      <div class="field"><label for="pqPayee">Vendor name <i>*</i></label><input id="pqPayee" placeholder="Who is being paid"></div>
+      <div class="field"><label for="pqPurpose">Purpose of payment <i>*</i></label><input id="pqPurpose" placeholder="Trade licence renewal, translator fee…" value="${esc(KEPT().purpose)}"></div>
+      <div class="field"><label for="pqPayee">Vendor name <i>*</i></label><input id="pqPayee" placeholder="Who is being paid" value="${esc(KEPT().payee)}"></div>
       <div class="field"><label for="pqMode">Mode of payment <i>*</i></label>
-        <select id="pqMode">${MODES.map(m=>`<option value="${m.id}">${esc(m.label)}</option>`).join('')}</select></div>
-      <div class="field"><label for="pqNote">Additional information (if any)</label><input id="pqNote" placeholder="Anything Avin should know"></div>
+        <select id="pqMode">${MODES.map(m=>`<option value="${m.id}"${KEPT().mode===m.id?' selected':''}>${esc(m.label)}</option>`).join('')}</select></div>
+      <div class="field"><label for="pqNote">Additional information (if any)</label><input id="pqNote" placeholder="Anything Avin should know" value="${esc(KEPT().extra)}"></div>
       <input type="file" id="pqFile" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
       <button class="filebtn" id="pqPick" type="button" ${(state.pqFiles||[]).length>=5?'disabled':''}>
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -3977,7 +3977,7 @@ function vPayment(){
       ${(state.pqFiles||[]).length ? `<div class="pqfiles">${state.pqFiles.map((f,i)=>`
         <div class="pqfile"><span>${esc(f.name)}</span><i>${Math.max(1,Math.round(f.size/1024))} KB</i>
           <button type="button" data-pqdrop="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></div>`).join('')}</div>` : ''}
-      ${state.pqErr ? `<div class="pqerr">${esc(state.pqErr)}</div>` : ''}
+      ${state.pqErr ? `<div class="pqerr"><b>The request did not go through.</b><br>${esc(state.pqErr)}</div>` : ''}
       <button class="btn wide" id="pqSubmit" type="button">Submit request</button>
     </div>
   </section>`;
@@ -4059,6 +4059,13 @@ function vPayment(){
 /* What actually happened, said plainly. No invented email, because no email
  * leaves the portal yet — that is waiting on a sending address, and claiming
  * otherwise is how somebody stops checking the screen. */
+/* What was typed last time, when last time did not work. */
+function KEPT(){
+  const f = state.pqForm || {};
+  return {order:f.order||'', amount:f.amount||'', client:f.client||'',
+          purpose:f.purpose||'', payee:f.payee||'', extra:f.extra||'', mode:f.mode||''};
+}
+
 function vPaymentSent(){
   const d = state.pqDone; if(!d) return '';
   const mode = MODES.find(m => m.id === d.mode) || {label: d.mode, next: ''};
@@ -4132,9 +4139,19 @@ async function pqSubmit(){
   state.pqErr = '';
   if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
 
-  const out = await window.__db.raisePayment(f, state.pqFiles || []);
-  if(!out) return;                      // the error has already been shown
+  /* Held so a failure does not cost somebody their typing. The reload that
+   * follows a failed call redraws this form, and redrawing it empty is how a
+   * refusal came to look like nothing happening at all. */
+  state.pqForm = f;
 
+  const out = await window.__db.raisePayment(f, state.pqFiles || []);
+  if(!out || out.error){
+    state.pqErr = (out && out.error) || 'The request did not go through, and no reason came back.';
+    render();
+    return;
+  }
+
+  state.pqForm = null;
   state.pqFiles = [];
   state.pqDone = {ref: out.ref, mode: f.mode, amount: f.amount, order: f.order,
                   client: f.client, notAttached: out.notAttached || []};
