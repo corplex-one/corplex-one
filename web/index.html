@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041907">
+<link rel="manifest" href="manifest.webmanifest?v=202609041917">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1261,6 +1261,21 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .orglgd i{width:9px;height:9px;border-radius:3px;background:var(--line);flex:none}
   .orglgd i.rev{background:var(--accent)}
 
+  /* Mattia's commission: the three currencies side by side, the way the
+     sheet has them stacked. The one box that is typed into is the one the
+     sheet highlights. */
+  .mcgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  .mcblock{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+  .mchead{background:var(--panel2);border-bottom:1px solid var(--line2);padding:9px 14px;
+    font-weight:600;font-size:13.5px}
+  .mchead span{font-weight:400;color:var(--ink3);font-size:12px;margin-left:4px}
+  .mcblock table{font-size:13px}
+  .mcblock th,.mcblock td{padding:7px 12px}
+  .mcblock tr.tot td{background:var(--sunk);font-weight:600;border-top:1px solid var(--line)}
+  .mcsay{margin:0 0 4px;color:var(--ink2);font-size:14.5px}
+  .field.mcyellow input{background:#fff9c4;border-color:#e6d97a}
+  :root:not([data-theme="light"]) .field.mcyellow input{background:#4a4326;border-color:#6b5f2e}
+
   .teamtab{table-layout:fixed;width:100%}
   .teamtab td,.teamtab th{overflow:hidden;text-overflow:ellipsis}
   /* Headings wrap between their words rather than being cut, and the role
@@ -1742,8 +1757,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041907';</script>
-<script src="config.js?v=202609041907"></script>
-<script type="module" src="boot.js?v=202609041907"></script>
+<script>window.__BUILD = '202609041917';</script>
+<script src="config.js?v=202609041917"></script>
+<script type="module" src="boot.js?v=202609041917"></script>
 </body>
 </html>

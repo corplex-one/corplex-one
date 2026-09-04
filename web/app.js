@@ -3994,24 +3994,108 @@ function calcTabs(){
     `<button data-ct="${v}" aria-pressed="${cur === v}" type="button">${esc(l)}</button>`).join('')}</div>`};
 }
 
-/* Deliberately empty, and deliberately not a mock-up. */
+/* Mattia's commission, from the sheet Avin sent.
+ *
+ * One figure goes in: our price for the job, before VAT. Everything else
+ * follows from it —
+ *
+ *   Our price   the invoice, plus 5% VAT
+ *   To client   our price marked up, plus 5% VAT on that
+ *   Mattia      the difference between the two, and no VAT on it
+ *
+ * The mark-up on his sheet is 25% of our price, which makes Mattia's share a
+ * fifth of what the client pays. It is a box rather than a constant, the same
+ * as the two rates, because the next job may not be twenty-five.
+ *
+ * The USD and EUR blocks are the dirham figures divided by the rate, figure
+ * by figure, which is what the sheet does. Dividing each one separately and
+ * dividing the total give the same answer to the fil, so the columns still
+ * add up after the conversion — worth saying, because that is the usual way
+ * a converted table stops tying out.
+ */
 function vMattia(){
   return `
   <section class="panel">
-    <header><h3>Mattia&rsquo;s commission</h3><span class="hint">not built yet</span></header>
-    <div class="pad">
-      <p style="margin:0 0 14px;color:var(--ink2);font-size:15px">Nothing here yet &mdash; I do not know
-        what this one works out, and a calculator that guesses is worse than an empty tab.</p>
-      <p style="margin:0 0 12px;color:var(--ink2);font-size:14.5px">Four things and it can be built:</p>
-      <dl class="kv wide">
-        <dt>What goes in</dt><dd>The figures you would type &mdash; an invoice value, a rate, a number of something.</dd>
-        <dt>What comes out</dt><dd>The figure you want at the end, and whether anything sits between the two.</dd>
-        <dt>The formula</dt><dd>However you do it now, even if that is a line in a spreadsheet. The card tab
-          reproduces your workbook's formulas exactly rather than a tidier version, and this should too.</dd>
-        <dt>Who sees it</dt><dd>Everyone, or accounts only.</dd>
-      </dl>
+    <header><h3>Mattia&rsquo;s commission</h3>
+      <span class="hint">type our price before VAT &mdash; everything else follows</span></header>
+    <div class="pad" style="display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field mcyellow" style="margin:0;min-width:230px">
+          <label for="mcInv">Our price in AED, before VAT</label>
+          <input id="mcInv" class="num" type="number" value="10000" step="0.01">
+        </div>
+        <div class="field" style="margin:0;max-width:150px">
+          <label for="mcUp">Mark-up to the client</label>
+          <input id="mcUp" class="num" type="number" value="25" step="0.5">
+        </div>
+        <div class="field" style="margin:0;max-width:130px">
+          <label for="mcUsd">USD rate</label>
+          <input id="mcUsd" class="num" type="number" value="3.65" step="0.0001">
+        </div>
+        <div class="field" style="margin:0;max-width:130px">
+          <label for="mcEur">EUR rate</label>
+          <input id="mcEur" class="num" type="number" value="4.15" step="0.0001">
+        </div>
+      </div>
+      <div id="mcOut"></div>
     </div>
+    <p class="cap">VAT is the UAE standard rate of 5% and applies to our price and to the client&rsquo;s,
+      not to Mattia&rsquo;s share &mdash; that is the margin between the two invoices, not a supply of its own.
+      The rates are the ones on the sheet and can be typed over for a job priced at a different one.</p>
   </section>`;
+}
+
+const MCVAT = 0.05;
+
+function calcMattia(){
+  const num = (id, fallback) => {
+    const el = document.getElementById(id);
+    const v = el ? parseFloat(el.value) : NaN;
+    return isFinite(v) ? v : fallback;
+  };
+  const inv = Math.max(0, num('mcInv', 0));
+  const up  = Math.max(0, num('mcUp', 25)) / 100;
+  const rate = {AED: 1, USD: Math.max(0.0001, num('mcUsd', 3.65)),
+                        EUR: Math.max(0.0001, num('mcEur', 4.15))};
+
+  const ours   = inv;
+  const client = inv * (1 + up);
+  const mattia = client - ours;
+
+  const block = (cur) => {
+    const r = rate[cur], at = a => a / r;
+    const line = (label, amount, vatable) => {
+      const a = at(amount), v = vatable ? a * MCVAT : 0;
+      return `<tr${label === 'Mattia' ? ' class="tot"' : ''}>
+        <td>${label}</td>
+        <td class="n r">${money(a, 2)}</td>
+        <td class="n r">${vatable ? money(v, 2) : ''}</td>
+        <td class="n r netcol">${money(a + v, 2)}</td></tr>`;
+    };
+    return `
+    <section class="mcblock">
+      <div class="mchead">${cur}${cur === 'AED' ? '' :
+        ` <span>at ${money(r, 4).replace(/0+$/, '').replace(/\.$/, '')} to the dirham</span>`}</div>
+      <table style="table-layout:fixed;width:100%">
+        ${colsOf([31, 23, 20, 26])}
+        <thead><tr><th>${cur}</th><th class="r">Invoice</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
+        <tbody>
+          ${line('Our price', ours, true)}
+          ${line('To client', client, true)}
+          ${line('Mattia', mattia, false)}
+        </tbody>
+      </table>
+    </section>`;
+  };
+
+  const out = document.getElementById('mcOut');
+  if(!out) return;
+  out.innerHTML = `
+    <p class="mcsay">The client is invoiced <b>AED ${money(client, 2)}</b> before VAT &mdash;
+      our price plus ${money(up * 100, 2).replace(/\.00$/, '')}% &mdash; and
+      <b>Mattia takes AED ${money(mattia, 2)}</b>, which is
+      ${client ? money(mattia / client * 100, 1) : '0'}% of what the client pays.</p>
+    <div class="mcgrid">${['AED', 'USD', 'EUR'].map(block).join('')}</div>`;
 }
 
 function vTools(){
@@ -7721,6 +7805,11 @@ function render(){
       ['cfInv','cfCur','cfFxS','cfFxP'].forEach(id=>{const el=document.getElementById(id); if(!el) return;
         el.addEventListener('input',calcCard); el.addEventListener('change',calcCard);});
       calcCard();
+    }
+    if(document.getElementById('mcInv')){
+      ['mcInv','mcUp','mcUsd','mcEur'].forEach(id=>{const el=document.getElementById(id); if(!el) return;
+        el.addEventListener('input',calcMattia); el.addEventListener('change',calcMattia);});
+      calcMattia();
     }
     if(document.getElementById('pfOrd')){
       const el = document.getElementById('pfOrd');
