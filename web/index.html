@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041035">
+<link rel="manifest" href="manifest.webmanifest?v=202609041054">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1330,21 +1330,68 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .paytab select.acsel.stpaid{color:var(--good);font-weight:600}
   .paytab select.acsel.stunpaid{color:var(--ink3)}
   .paytab select.acsel.stinitiated{color:var(--warn)}
-  .paytab th.c,.paytab td.c{text-align:center;width:1%;white-space:nowrap;padding-left:8px;padding-right:8px}
+  .paytab th.c,.paytab td.c{text-align:center;padding-left:6px;padding-right:6px}
   .paytab input.rtick{width:auto;margin:0;accent-color:var(--good);transform:scale(1.15)}
-  /* The widest table in the portal by a distance: sixteen columns, and at any
-     normal screen width with the rail on the left it cannot all be in view.
-     Avin's own answer is to move the rail to the top, which is a bigger change
-     and comes later. Until then it scrolls sideways, and the date is pinned so
-     you never lose which row you are working down. */
-  .paytab.recon td.cell{max-width:130px}
-  .paytab.recon table{border-collapse:separate;border-spacing:0}
-  .paytab.recon th:first-child,.paytab.recon td:first-child{
-    position:sticky;left:0;z-index:2;background:var(--panel);
-    box-shadow:1px 0 0 var(--line)}
-  .paytab.recon thead th:first-child{z-index:3;background:var(--panel2)}
-  .paytab.recon tbody tr:hover td:first-child{background:var(--panel2)}
-  .scrollnote{font-size:11.5px;color:var(--ink3);padding:0 20px 12px}
+  /* Both payment tables lay out by decided width rather than by content.
+     A content-sized table has a minimum it will not shrink past — sixteen
+     columns came to 1,610px — so it scrolled sideways on a laptop and on a
+     1920 monitor alike, because a browser window is never the whole screen.
+     Fixed layout with percentage columns has no such minimum: everything
+     gives up width together and the table is exactly as wide as its panel. */
+  .paytab table{table-layout:fixed;width:100%}
+  /* Headings are nowrap everywhere else, which is right for a table that sizes
+     itself to its content and wrong for one with decided columns: the heading
+     hangs into the next column instead of the column being wide enough. */
+  .paytab th{white-space:normal;line-height:1.3;font-size:10px;letter-spacing:.05em}
+  /* A heading that breaks mid-word — BOO / KS — reads as damage. These three
+     are one short word each and get the width to stay one. */
+  .paytab th.c{font-size:9px;letter-spacing:.03em}
+  .paytab td,.paytab th{overflow-wrap:break-word;word-break:normal}
+  .paytab td.cell{max-width:none}
+  .paytab.recon table{font-size:12.5px}
+  .paytab.recon td,.paytab.recon th{padding:8px 7px}
+  /* a control in a fixed column takes the column's width, not its own */
+  .paytab select.acsel{width:100%;max-width:none;min-width:0}
+  .paytab .doc{max-width:100%}
+  .paytab .actpair .btn{padding:4px 8px}
+
+  /* the rail, put away: icons only, and everything that was words is gone */
+  .rail button.nav svg{flex:0 0 auto}
+  .railtog{position:absolute;top:14px;right:10px;background:none;border:0;padding:5px;
+    border-radius:7px;color:var(--brandDim);line-height:0;cursor:pointer}
+  .railtog:hover{background:rgba(255,255,255,.09);color:var(--brandInk)}
+  .rail{position:relative}
+  #app.tucked{grid-template-columns:62px minmax(0,1fr)}
+  #app.tucked .rail{padding:16px 7px;gap:12px;align-items:center}
+  #app.tucked .rail .markco,
+  #app.tucked .rail .navlabel,
+  #app.tucked .rail button.nav span,
+  #app.tucked .rail .who .m,
+  #app.tucked .rail .who b,
+  #app.tucked .rail .who span,
+  #app.tucked .rail .who .buildno,
+  #app.tucked .rail .appmark .one{display:none}
+  /* The wordmark does not shrink to 62px and a squashed logo is worse than
+     none. Collapsed, the rail is the toggle and the icons. */
+  #app.tucked .rail .mark{padding:0;width:100%}
+  #app.tucked .rail .appmark{display:none}
+  #app.tucked .rail nav{width:100%}
+  #app.tucked .rail button.nav{justify-content:center;padding:9px 0}
+  #app.tucked .rail button.nav[aria-current="true"]{box-shadow:none;background:var(--accent);color:#fff}
+  #app.tucked .rail .who{border-top:1px solid rgba(255,255,255,.12);padding-top:12px;width:100%;
+    display:flex;justify-content:center}
+  #app.tucked .rail .who .out{margin:0;padding:6px 8px;width:auto}
+  #app.tucked .railtog{position:static;margin:0 auto}
+  #app.tucked .railtog svg{transform:rotate(180deg)}
+  /* a screen too narrow for a rail already hides it; the toggle must not fight that */
+  @media(max-width:860px){ #app.tucked{grid-template-columns:minmax(0,1fr)} }
+  /* In a fixed layout a column cannot grow, so anything that refuses to wrap
+     hangs over the edge and the panel scrolls after all. Only the date and the
+     amount keep nowrap, and both are short enough to be given room. */
+  .paytab.recon td.act{white-space:normal}
+  .paytab.recon .actpair{flex-wrap:wrap}
+  .paytab.recon td.c{padding-left:3px;padding-right:3px}
+  .paytab.recon .pill{white-space:normal}
   .subtabs .cnt{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;
     border-radius:99px;background:var(--warn);color:#fff;font-size:10.5px;font-style:normal;
     font-weight:700;line-height:17px;text-align:center;vertical-align:middle}
@@ -1470,6 +1517,11 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
     <div class="mark">
     <div class="appmark"><img id="railMark" alt=""><span class="one"><svg class="crown" viewBox="0 0 24 14" aria-hidden="true"><path d="M2 13.6V4.2l5 4.4 5-6.4 5 6.4 5-4.4v9.4Z" fill="currentColor"/></svg>One</span></div>
     <div class="markco" id="railCo">CorpLex</div>
+    <button class="railtog" id="railTog" type="button" aria-label="Hide the menu" title="Hide the menu">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 6l-6 6 6 6"/></svg>
+    </button>
   </div>
     <nav id="nav"></nav>
     <div class="who">
@@ -1519,8 +1571,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041035';</script>
-<script src="config.js?v=202609041035"></script>
-<script type="module" src="boot.js?v=202609041035"></script>
+<script>window.__BUILD = '202609041054';</script>
+<script src="config.js?v=202609041054"></script>
+<script type="module" src="boot.js?v=202609041054"></script>
 </body>
 </html>

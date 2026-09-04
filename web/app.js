@@ -3960,6 +3960,12 @@ function statusPill2(s){
   return `<span class="pill ${s==='Paid'||s==='Approved'?'good':(s==='Rejected'?'bad':(s==='Withdrawn'?'mute':'warn'))}"><span class="dt"></span>${esc(s)}</span>`;
 }
 function modeLabel(id){ return (MODES.find(m=>m.id===id)||{}).label || id; }
+/* The same four, said in one word. 'Card (for portals)' is a whole column's
+ * width of its own, and on a table that has to fit sixteen columns the
+ * parenthesis is the first thing that has to go. The long name is still on the
+ * form, where there is room to explain. */
+const MODESHORT = {card:'Card', transfer:'Transfer', link:'Link', cash:'Cash'};
+function modeShort(id){ return MODESHORT[id] || modeLabel(id); }
 
 function vDocPop(){
   const d = state.doc; if(!d) return '';
@@ -4010,11 +4016,11 @@ function vPayApprove(){
     const tick = k => `<td class="c"><input type="checkbox" class="rtick"
       data-recon="${esc(r.id)}" data-field="${k}"${r[k]?' checked':''}${busy?' disabled':''}></td>`;
     return `
-      <td class="nw"><select class="acsel st${esc((r.payStatus||'Unpaid').toLowerCase())}"
+      <td><select class="acsel st${esc((r.payStatus||'Unpaid').toLowerCase())}"
         data-paystat="${esc(r.id)}"${busy?' disabled':''}>${PAYSTATUS.map(st=>
         `<option value="${esc(st)}"${(r.payStatus||'Unpaid')===st?' selected':''}>${esc(st)}</option>`).join('')}
       </select></td>
-      <td class="nw"><select class="acsel" data-acct="${esc(r.id)}"${busy?' disabled':''}>
+      <td><select class="acsel" data-acct="${esc(r.id)}"${busy?' disabled':''}>
         <option value=""${r.account?'':' selected'}>&mdash;</option>
         ${OFFERED().concat(ACCOUNTS.filter(a=>a.retired && a.id===r.account)).map(a=>
           `<option value="${a.id}"${r.account===a.id?' selected':''}>${esc(a.label)}</option>`).join('')}
@@ -4031,7 +4037,7 @@ function vPayApprove(){
       <td class="n r nw">${money(r.amount,2)}</td>
       <td class="cell">${esc(r.client||'—')}<div class="sub">${paidPill(c)}</div></td>
       <td class="cell">${esc(r.purpose)}</td>
-      <td class="nw">${esc(modeLabel(r.mode))}</td>
+      <td>${esc(modeShort(r.mode))}</td>
       <td class="cell">${esc(r.payee||'—')}</td>
       <td>${r.files.length ? r.files.map(f=>f.url
             ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
@@ -4058,11 +4064,32 @@ function vPayApprove(){
       </div></td></tr>`:''}`;
   };
 
-  const cols = `<th>Date</th><th>By</th><th>Order number</th><th class="r">Amount</th>
+  const cols = `<th>Date</th><th>By</th><th>Order no.</th><th class="r">Amount</th>
       <th>Client</th><th>Purpose</th><th>Mode</th><th>Vendor</th>
       <th>Document</th><th>Additional information</th>`;
-  const head  = `<thead><tr>${cols}<th class="act"></th></tr></thead>`;
-  const head2 = `<thead><tr>${cols}<th class="act"></th>
+
+  /* Percentages, with table-layout:fixed. A table sized by its content has a
+   * minimum width it will not go below, and sixteen columns of it came to
+   * 1,610px — which is why this scrolled sideways on a laptop AND on a 1920
+   * monitor, where the browser window is never the whole screen. Percentages
+   * have no minimum: the columns give up width in proportion and the table is
+   * exactly as wide as the space it is in, whatever that is.
+   *
+   * The share each one gets is roughly what it needs: a date and an amount are
+   * a known size, a purpose and a vendor are not. */
+  /* Summing to a little under a hundred. At exactly 100 the browser still
+   * finds a couple of dozen pixels of slop and shows a scrollbar over blank
+   * space, which is the one thing this whole change is meant to remove. */
+  const colgroup = ws => `<colgroup>${ws.map(w =>
+    `<col style="width:${(w * 0.95).toFixed(2)}%">`).join('')}</colgroup>`;
+  const wide   = colgroup([7.6, 7.4, 6.6, 6.6, 10.8, 10.8, 5.4, 10.0, 8.0, 11.2, 15.6]);
+  // Books, Bigin and Receipt are one word wide, and one word is wider than a
+  // checkbox: at 2.8% the RECEIPT heading hung 23px past the table and put the
+  // scrollbar back on its own.
+  const widest = colgroup([6.6, 6.0, 5.6, 5.8, 6.8, 6.8, 4.2, 7.2, 6.6, 9.0, 6.8, 7.8, 8.2, 4.2, 4.2, 4.2]);
+
+  const head  = `${wide}<thead><tr>${cols}<th class="act"></th></tr></thead>`;
+  const head2 = `${widest}<thead><tr>${cols}<th class="act"></th>
       <th>Payment status</th><th>Paid through</th>
       <th class="c">Books</th><th class="c">Bigin</th><th class="c">Receipt</th></tr></thead>`;
 
@@ -4082,7 +4109,6 @@ function vPayApprove(){
 
   <section class="panel">
     <header><h3>Already decided</h3><span class="hint">${done.length ? `${done.length} request${done.length===1?'':'s'}` : 'none yet'}</span></header>
-    ${done.length ? '<p class="scrollnote">Sixteen columns &mdash; scroll the table sideways for the reconciliation ones. The date stays put so you keep your place.</p>' : ''}
     <div class="tw paytab recon"><table>${head2}
       <tbody>${done.length ? done.map(r=>row(r,true)).join('')
         : '<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>
@@ -4147,7 +4173,7 @@ function vPayment(){
         <td class="n r nw">${money(r.amount,2)}</td>
         <td class="cell">${esc(r.client||'—')}</td>
         <td class="cell">${esc(r.purpose)}</td>
-        <td class="nw">${esc(modeLabel(r.mode))}</td>
+        <td>${esc(modeShort(r.mode))}</td>
         <td class="cell">${esc(r.payee||'—')}</td>
         <td>${r.files.map(f=>`<span class="docwrap">${f.url
               ? `<button type="button" class="doc" data-popdoc="${esc(f.url)}" data-name="${esc(f.name)}" title="${esc(f.name)}">${esc(f.name)}</button>`
@@ -6069,6 +6095,32 @@ function conBar(){
     <div class="subtabs">${subs.map(t=>`<button data-ctab="${esc(t.id)}" aria-current="${state.tab===t.id}" type="button">${esc(t.label)}</button>`).join('')}</div>
   </div>` : ''}`;
 }
+const NAVICON = {
+  home:        'M3 11.2 12 4l9 7.2M6 9.8V20h12V9.8',
+  dashboard:   'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  commission:  'M12 3v18M16.5 7.2A4 4 0 0 0 12.8 5h-1.3a3 3 0 0 0 0 6h1a3 3 0 0 1 0 6h-1.5a4 4 0 0 1-3.5-2.2',
+  invoices:    'M6 3h9l4 4v14H6zM15 3v4h4M9 12h7M9 16h5',
+  team:        'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a6 6 0 0 1 12 0M17 11a3 3 0 1 0-1.5-5.6M21 20a5 5 0 0 0-3.5-4.8',
+  leaderboard: 'M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3',
+  company:     'M4 21V6l7-3v18M11 21V9l7 2.5V21M2 21h20M7 9h1M7 13h1M7 17h1M14 14h1M14 18h1',
+  tools:       'M4 5h16v14H4zM4 9h16M8 13h2M8 16.5h2M14 13h2M14 16.5h2',
+  payment:     'M3 7h18v11H3zM3 11h18M7 15h4',
+  payapprove:  'M3 7h18v11H3zM3 11h18M15.5 15.5l1.6 1.6 3.2-3.4',
+  profile:     'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0',
+  attend:      'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',
+  people:      'M8 11a3.2 3.2 0 1 0 0-6.4A3.2 3.2 0 0 0 8 11ZM2 20a6 6 0 0 1 12 0M16.5 11.5a2.6 2.6 0 1 0 0-5.2M22 20a4.6 4.6 0 0 0-3.4-4.4',
+  requests:    'M7 3v3M17 3v3M3.5 8.5h17M4 6h16v15H4zM8.5 14.5l2.2 2.2 4.5-4.6',
+  loans:       'M3 8h18v11H3zM3 12h18M6.5 5.5 17 3.2M7 15.5h3',
+  myslip:      'M6 3h12v18l-3-2-3 2-3-2-3 2zM9.5 8h5M9.5 12h5M9.5 16h3',
+  myticket:    'M3 10.5a2 2 0 0 0 0 3V18h18v-4.5a2 2 0 0 1 0-3V6H3zM9 6v12'
+};
+function navIcon(id){
+  const d = NAVICON[id];
+  if(!d) return '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>';
+  return `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+}
+
 function renderNav(){
   const nav = document.getElementById('nav');
   const vis = STAFFTABS();
@@ -6077,7 +6129,8 @@ function renderNav(){
   nav.innerHTML = sec('My performance', grp('mine')) + sec('The wider picture', grp('wider'))
     + sec('Others', grp('other'))
     + sec('HR & Payroll', grp('hr'));
-  function btn(t){ return `<button class="nav" data-tab="${t.id}" aria-current="${state.tab===t.id}" type="button">${esc(t.label)}</button>`; }
+  // the title is what a collapsed rail has instead of the word
+  function btn(t){ return `<button class="nav" data-tab="${t.id}" aria-current="${state.tab===t.id}" type="button" title="${esc(t.label)}">${navIcon(t.id)}<span>${esc(t.label)}</span></button>`; }
   nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{ if(b.dataset.tab!=='payment') state.pqConfirm='';
     state.mode='staff'; state.tab=b.dataset.tab; render(); });
 }
@@ -6454,6 +6507,22 @@ function render(){
     mk.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); }; }
   CHARTS = {};
   if(state.tab !== 'payment') state.pqSeen = false;
+  {
+    const app = document.getElementById('app'), tg = document.getElementById('railTog');
+    let tucked = false;
+    try{ tucked = localStorage.getItem('corplexRail') === 'tucked'; }catch(e){}
+    app.classList.toggle('tucked', tucked);
+    if(tg && !tg.dataset.wired){
+      tg.dataset.wired = '1';
+      tg.onclick = () => {
+        const now = !document.getElementById('app').classList.contains('tucked');
+        document.getElementById('app').classList.toggle('tucked', now);
+        try{ localStorage.setItem('corplexRail', now ? 'tucked' : 'out'); }catch(e){}
+        tg.title = tg.ariaLabel = now ? 'Show the menu' : 'Hide the menu';
+      };
+    }
+    if(tg) tg.title = tg.ariaLabel = tucked ? 'Show the menu' : 'Hide the menu';
+  }
   const v = document.getElementById('view');
   const mainEl = document.querySelector('main');
   // the payment screen scrolls like every other screen: its table is eleven
