@@ -3956,6 +3956,19 @@ function reqName(r){
   return `${r.payee || 'the payment'} — AED ${money(r.amount, 2)}`;
 }
 
+/* Enough to know whose it is. Nobody in the office shares a first name, and
+ * a full one took three lines in a column two words wide. */
+function firstName(n){ return String(NM(n) || '').trim().split(/\s+/)[0] || n; }
+
+/* Amounts on this screen carry their currency, because not all of them are
+ * dirhams and a bare number that might be euros is not a figure at all. */
+function payAmt(r){ return `${esc(r.ccy || 'AED')} ${money(r.amount, 2)}`; }
+function sumBy(list){
+  const per = {};
+  list.forEach(r => { per[r.ccy || 'AED'] = (per[r.ccy || 'AED'] || 0) + r.amount; });
+  return Object.entries(per).map(([c, v]) => `${c} ${money(v, 2)}`).join(' + ');
+}
+
 function statusPill2(s){
   return `<span class="pill ${s==='Paid'||s==='Approved'?'good':(s==='Rejected'?'bad':(s==='Withdrawn'?'mute':'warn'))}"><span class="dt"></span>${esc(s)}</span>`;
 }
@@ -3966,6 +3979,89 @@ function modeLabel(id){ return (MODES.find(m=>m.id===id)||{}).label || id; }
  * form, where there is room to explain. */
 const MODESHORT = {card:'Card', transfer:'Transfer', link:'Link', cash:'Cash'};
 function modeShort(id){ return MODESHORT[id] || modeLabel(id); }
+
+function exportPayments(){
+  const rows = (reqs() || []).filter(r => r.status !== 'Pending');
+  const cell = v => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const acct = id => (ACCOUNTS.find(a => a.id === id) || {}).label || '';
+  const lines = [['Order No','Amount','Client','Purpose','Vendor','Paid through'].join(',')]
+    .concat(rows.map(r => [r.order || '', (r.ccy || 'AED') + ' ' + r.amount.toFixed(2),
+      r.client || '', r.purpose || '', r.payee || '', acct(r.account)].map(cell).join(',')));
+  /* A byte-order mark, because Excel opens a plain UTF-8 CSV as Latin-1 and
+   * turns every accented client name into mojibake. */
+  const blob = new Blob(['\ufeff' + lines.join('\r\n')], {type: 'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'CorpLex payments ' + HDATE() + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+function vPayEdit(){
+  const r = (reqs() || []).find(x => x.id === state.payEdit);
+  if(!r) return '';
+  const e = state.payEditForm || {};
+  const v = (k, d) => e[k] !== undefined ? e[k] : d;
+  return `
+  <div class="docpop" id="edPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="Correct this request" style="height:auto;max-height:90vh;width:min(620px,100%)">
+      <header>
+        <b>Correcting ${esc(reqName(r))}</b>
+        <button class="btn ghost sm" id="edShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody" style="display:block;padding:16px;background:var(--panel);overflow:auto">
+        ${r.status === 'Approved' ? `<div class="upmsg warn" style="margin:0 0 14px">
+          <b>This one has already been approved.</b> Correcting it now is allowed, and the
+          request will say so permanently &mdash; the row will read <i>corrected after approval</i>
+          with your name on it.</div>` : ''}
+        <div class="edform">
+          <label><span>Order number</span><input id="edOrder" value="${esc(v('order', r.order))}"></label>
+          <label><span>Amount</span>
+            <div class="amtrow">
+              <select id="edCcy">${['AED','EUR','USD'].map(c=>
+                `<option value="${c}"${v('ccy', r.ccy)===c?' selected':''}>${c}</option>`).join('')}</select>
+              <input id="edAmount" class="num" type="number" step="0.01" min="0" value="${esc(String(v('amount', r.amount)))}">
+            </div></label>
+          <label class="wide"><span>Client</span><input id="edClient" value="${esc(v('client', r.client))}"></label>
+          <label class="wide"><span>Purpose</span><input id="edPurpose" value="${esc(v('purpose', r.purpose))}"></label>
+          <label class="wide"><span>Vendor</span><input id="edPayee" value="${esc(v('payee', r.payee))}"></label>
+          <label><span>Mode</span><select id="edMode">${MODES.map(m=>
+            `<option value="${m.id}"${v('mode', r.mode)===m.id?' selected':''}>${esc(m.label)}</option>`).join('')}</select></label>
+          <label class="wide"><span>Additional information</span><input id="edExtra" value="${esc(v('extra', r.note))}"></label>
+        </div>
+        ${state.payEditErr ? `<div class="pqerr" style="margin-top:12px"><b>Not saved.</b><br>${esc(state.payEditErr)}</div>` : ''}
+        <div class="drow" style="margin-top:16px">
+          <button class="btn" id="edSave" type="button">Save the correction</button>
+          <button class="btn ghost" id="edCancel" type="button">Leave it as it is</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function vWaPop(){
+  if(!state.waMsg) return '';
+  return `
+  <div class="docpop" id="waPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="Message for Miraziz" style="height:auto;max-height:86vh">
+      <header>
+        <b>For the payments group</b>
+        <button class="btn ghost sm" id="waCopy" type="button">Copy</button>
+        <a class="btn sm" id="waGo" href="https://wa.me/?text=${encodeURIComponent(state.waMsg)}"
+           target="_blank" rel="noopener">Open WhatsApp</a>
+        <button class="btn ghost sm" id="waShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody" style="display:block;padding:16px;background:var(--panel)">
+        <pre class="wamsg">${esc(state.waMsg)}</pre>
+        <p class="cap" style="padding:12px 2px 0">WhatsApp does not let an app post into a group by itself,
+          so this opens with the message ready and the send stays yours.</p>
+      </div>
+    </div>
+  </div>`;
+}
 
 function vDocPop(){
   const d = state.doc; if(!d) return '';
@@ -3999,11 +4095,26 @@ function payBar(){
 function vPayApprove(){
   const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
   const queue = reqs().filter(r=>r.status==='Pending');
-  const done  = reqs().filter(r=>r.status!=='Pending');
-  const paidPill = c => c.known
-    ? (c.paid ? '<span class="pill good"><span class="dt"></span>client paid</span>'
-              : `<span class="pill bad"><span class="dt"></span>AED ${money(c.out)} owing</span>`)
-    : '<span class="pill mute">not in the sales book</span>';
+  const all   = reqs().filter(r=>r.status!=='Pending');
+  /* Order number and client, which are the two things anybody remembers about
+   * a payment. Not vendor or purpose: searching those turns up eleven results
+   * and the point of a search box is to turn up one. */
+  const find  = (state.paySearch || '').trim().toLowerCase();
+  const done  = !find ? all : all.filter(r =>
+    String(r.order || '').toLowerCase().includes(find) ||
+    String(r.client || '').toLowerCase().includes(find));
+
+  /* Waiting on Miraziz: initiated, and out of the Mashreq account. That pair
+   * is exactly what 'he has to authorise it in the banking portal' looks like
+   * in this table, which is why it can be gathered without anybody tagging
+   * anything. */
+  const forMiraziz = all.filter(r =>
+    r.status === 'Approved' && r.payStatus === 'Initiated' && r.account === 'mashreq');
+  const mirazizMsg = () => ['Hi Miraziz,', 'Kindly approve the following payments:', '']
+    .concat(forMiraziz.map((r, i) =>
+      `${i + 1}. ${r.ccy || 'AED'} ${money(r.amount, 2)} - ${r.order || '(no order number)'} - ${r.client || '(no client)'} - ${r.purpose}`))
+    .join('\n');
+  window.__mirazizMsg = forMiraziz.length ? mirazizMsg() : '';
 
   /* The reconciliation half of a decided row: paid or not, out of which
    * account, and Avin's own three ticks. Approving and paying are days apart —
@@ -4029,13 +4140,12 @@ function vPayApprove(){
   };
 
   const row = (r, withRecon) => {
-    const c = clientStatus(r.client);
     return `<tr${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
       <td class="n nw">${esc(r.date)}</td>
-      <td>${nm(r.by)}</td>
+      <td>${esc(firstName(r.by))}</td>
       <td class="n nw">${esc(r.order||'—')}</td>
-      <td class="n r nw">${money(r.amount,2)}</td>
-      <td class="cell">${esc(r.client||'—')}<div class="sub">${paidPill(c)}</div></td>
+      <td class="n r nw">${payAmt(r)}</td>
+      <td class="cell">${esc(r.client||'—')}</td>
       <td class="cell">${esc(r.purpose)}</td>
       <td>${esc(modeShort(r.mode))}</td>
       <td class="cell">${esc(r.payee||'—')}</td>
@@ -4047,10 +4157,14 @@ function vPayApprove(){
       <td class="act">${r.status==='Pending'
         ? `<div class="actpair">
              <button class="btn sm" data-approve="${esc(r.ref)}" type="button">Approve</button>
+             <button class="btn ghost sm ed" data-payedit="${esc(r.id)}" type="button" title="Correct this request">Correct</button>
              <button class="btn ghost sm x" data-reject="${esc(r.id)}" type="button" title="Turn it down">&times;</button>
            </div>`
-        : `${statusPill2(r.status)}${
-           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}`}</td>
+        : `${r.status==='Approved'
+             ? '<button class="btn ghost sm ed" data-payedit="' + esc(r.id) + '" type="button" title="Correct this request">Correct</button>'
+             : statusPill2(r.status)}${
+           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}${
+           r.edits ? `<div class="selfnote">corrected after approval${r.editedBy?' by '+esc(NM(r.editedBy)):''}</div>` : ''}`}</td>
       ${withRecon ? recon(r) : ''}
     </tr>${state.reject===r.id?`<tr><td colspan="11" style="background:var(--badBg)">
       <div class="rjbox">
@@ -4082,36 +4196,47 @@ function vPayApprove(){
    * space, which is the one thing this whole change is meant to remove. */
   const colgroup = ws => `<colgroup>${ws.map(w =>
     `<col style="width:${(w * 0.95).toFixed(2)}%">`).join('')}</colgroup>`;
-  const wide   = colgroup([7.6, 7.4, 6.6, 6.6, 10.8, 10.8, 5.4, 10.0, 8.0, 11.2, 15.6]);
+  const wide   = colgroup([7.4, 5.6, 6.0, 7.0, 13.4, 10.6, 5.2, 9.8, 7.8, 11.4, 15.8]);
   // Books, Bigin and Receipt are one word wide, and one word is wider than a
   // checkbox: at 2.8% the RECEIPT heading hung 23px past the table and put the
   // scrollbar back on its own.
-  const widest = colgroup([6.6, 6.0, 5.6, 5.8, 6.8, 6.8, 4.2, 7.2, 6.6, 9.0, 6.8, 7.8, 8.2, 4.2, 4.2, 4.2]);
+  const widest = colgroup([6.4, 4.4, 5.2, 6.2, 11.0, 7.6, 4.2, 7.6, 6.4, 8.8, 4.6, 6.6, 8.0, 4.2, 4.4, 4.4]);
 
   const head  = `${wide}<thead><tr>${cols}<th class="act"></th></tr></thead>`;
   const head2 = `${widest}<thead><tr>${cols}<th class="act"></th>
-      <th>Payment status</th><th>Paid through</th>
+      <th>Status</th><th>Paid through</th>
       <th class="c">Books</th><th class="c">Bigin</th><th class="c">Receipt</th></tr></thead>`;
 
   return `
-  ${vDocPop()}
+  ${vDocPop()}${vWaPop()}${vPayEdit()}
   ${payBar()}
   ${state.approve.ref ? vApprovePanel() : ''}
   <section class="panel">
     <header><h3>Requests waiting on you</h3>
-      <span class="hint">${queue.length ? `${queue.length} pending &middot; AED ${money(queue.reduce((s,r)=>s+r.amount,0),2)} &middot; ${queue.filter(r=>clientStatus(r.client).paid).length} where the client has paid` : 'nothing waiting'}</span></header>
+      <span class="hint">${queue.length ? `${queue.length} pending &middot; ${sumBy(queue)}` : 'nothing waiting'}</span></header>
     <div class="tw paytab"><table>${head}
       <tbody>${queue.length ? queue.map(r=>row(r,false)).join('')
         : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing is waiting on you.</td></tr>'}</tbody>
     </table></div>
-    <p class="cap">Your test is whether the client has paid, so the answer sits under the client's name instead of you looking it up. <b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
+    <p class="cap"><b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
   </section>
 
   <section class="panel">
-    <header><h3>Already decided</h3><span class="hint">${done.length ? `${done.length} request${done.length===1?'':'s'}` : 'none yet'}</span></header>
+    <header><h3>Already decided</h3>
+      <div class="dechead">
+        ${forMiraziz.length ? `<button class="btn ghost sm" id="payWa" type="button">
+          Ask Miraziz to approve ${forMiraziz.length}</button>` : ''}
+        <button class="btn ghost sm" id="payCsv" type="button"${all.length?'':' disabled'}>Export CSV</button>
+        <input id="paySearch" class="paysearch" type="search" placeholder="Order number or client"
+          value="${esc(state.paySearch || '')}" aria-label="Search the decided payments">
+      </div>
+      <span class="hint">${find
+        ? `${done.length} of ${all.length}`
+        : (all.length ? `${all.length} request${all.length===1?'':'s'}` : 'none yet')}</span></header>
     <div class="tw paytab recon"><table>${head2}
       <tbody>${done.length ? done.map(r=>row(r,true)).join('')
-        : '<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>
+        : `<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">${
+            find ? 'Nothing matches &ldquo;' + esc(state.paySearch) + '&rdquo;.' : 'Nothing has been decided yet.'}</td></tr>`}</tbody>
     </table></div>
   </section>`;
 }
@@ -4131,7 +4256,12 @@ function vPayment(){
         <input value="${esc(u)}" disabled style="opacity:.7"></div>
       <div class="frow">
         <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431" value="${esc(KEPT().order)}"></div>
-        <div class="field"><label for="pqAmount">Amount (AED) <i>*</i></label><input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="${esc(KEPT().amount ? String(KEPT().amount) : '')}"></div>
+        <div class="field"><label for="pqAmount">Amount <i>*</i></label>
+          <div class="amtrow">
+            <select id="pqCcy" aria-label="Currency">${['AED','EUR','USD'].map(c=>
+              `<option value="${c}"${(KEPT().ccy||'AED')===c?' selected':''}>${c}</option>`).join('')}</select>
+            <input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="${esc(KEPT().amount ? String(KEPT().amount) : '')}">
+          </div></div>
       </div>
       <div class="field"><label for="pqClient">Client name <i>*</i></label>
         <div class="combo">
@@ -4164,13 +4294,15 @@ function vPayment(){
   <section class="panel grow">
     <header><h3>My requests</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
     <div class="tw paytab"><table>
+      <colgroup>${[8.6, 7.6, 10.0, 11.4, 10.6, 7.0, 11.0, 8.6, 10.6, 10.2, 4.4]
+        .map(w => `<col style="width:${(w*0.97).toFixed(2)}%">`).join('')}</colgroup>
       <thead><tr><th>Date</th><th>Order number</th><th class="r">Amount</th><th>Client</th>
         <th>Purpose</th><th>Mode</th><th>Vendor</th><th>Document</th>
         <th>Additional information</th><th>Status</th><th class="act"></th></tr></thead>
       <tbody>${mine.length?mine.map(r=>`<tr>
         <td class="n nw">${esc(r.date)}</td>
         <td class="n nw">${esc(r.order||'—')}</td>
-        <td class="n r nw">${money(r.amount,2)}</td>
+        <td class="n r nw">${payAmt(r)}</td>
         <td class="cell">${esc(r.client||'—')}</td>
         <td class="cell">${esc(r.purpose)}</td>
         <td>${esc(modeShort(r.mode))}</td>
@@ -4198,10 +4330,9 @@ function vPayment(){
   return `${vDocPop()}${payBar()}
   <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
   <div class="payone">
-    <div>${form}</div>
-    <div>${state.pqDone ? vPaymentSent() : ''}</div>
-  </div>
-  ${minePanel}`;
+    <div>${form}${state.pqDone ? vPaymentSent() : ''}</div>
+    <div>${minePanel}</div>
+  </div>`;
 }
 /* What actually happened, said plainly. No invented email, because no email
  * leaves the portal yet — that is waiting on a sending address, and claiming
@@ -4228,14 +4359,15 @@ function pqGrab(){
   const put = (k, id) => { const x = v(id); if(x !== undefined) f[k] = x; };
   put('order','pqOrder'); put('amount','pqAmount'); put('client','pqClient');
   put('purpose','pqPurpose'); put('payee','pqPayee'); put('extra','pqNote');
-  put('mode','pqMode');
+  put('mode','pqMode'); put('ccy','pqCcy');
 }
 
 /* What was typed, so a redraw can put it back. */
 function KEPT(){
   const f = state.pqForm || {};
   return {order:f.order||'', amount:f.amount||'', client:f.client||'',
-          purpose:f.purpose||'', payee:f.payee||'', extra:f.extra||'', mode:f.mode||''};
+          purpose:f.purpose||'', payee:f.payee||'', extra:f.extra||'',
+          mode:f.mode||'', ccy:f.ccy||'AED'};
 }
 
 function vPaymentSent(){
@@ -4265,6 +4397,11 @@ function vPaymentSent(){
 }
 
 function pqBadge(){
+  // nothing to say: the client is a label on this screen, not a lookup
+  const b0 = document.getElementById('pqBadge'); if(b0) b0.innerHTML = '';
+  return;
+}
+function pqBadgeOld(){
   const el = document.getElementById('pqBadge'), inp = document.getElementById('pqClient');
   if(!el || !inp) return;
   const v = inp.value.trim();
@@ -4279,11 +4416,17 @@ function pqList(){
   const v = inp.value.trim().toLowerCase();
   if(v.length < 2){ box.classList.add('hidden'); return; }
   const hits = Object.keys(DATA.clients).filter(c=>c.toLowerCase().includes(v)).slice(0,8);
-  if(!hits.length){ box.innerHTML = '<div class="empty">No client matches — check the spelling or ask Avin to add it</div>'; box.classList.remove('hidden'); return; }
-  box.innerHTML = hits.map(c=>`<button type="button" data-client="${esc(c)}"><span>${esc(c)}</span></button>`).join('');
+  const typed = inp.value.trim();
+  const exact = hits.some(c => c.toLowerCase() === v);
+  // Whatever was typed is always offered, unless it is already on the list.
+  const addNew = exact ? '' :
+    `<button type="button" class="addnew" data-client="${esc(typed)}">
+       <span>Use &ldquo;${esc(typed)}&rdquo;</span><i>not on the client list &mdash; add it as typed</i></button>`;
+  box.innerHTML = hits.map(c=>`<button type="button" data-client="${esc(c)}"><span>${esc(c)}</span></button>`).join('') + addNew;
   box.classList.remove('hidden');
   box.querySelectorAll('[data-client]').forEach(b=>b.onmousedown=(ev)=>{
-    ev.preventDefault(); inp.value = b.dataset.client; box.classList.add('hidden'); pqBadge();
+    ev.preventDefault(); inp.value = b.dataset.client; box.classList.add('hidden');
+    pqGrab(); pqBadge();
   });
 }
 async function pqSubmit(){
@@ -4302,6 +4445,7 @@ async function pqSubmit(){
       payee:   need('pqPayee', 'Say who is being paid.'),
       extra:   (document.getElementById('pqNote').value || '').trim(),
       mode:    document.getElementById('pqMode').value,
+      ccy:     (document.getElementById('pqCcy') || {}).value || 'AED',
       amount:  parseFloat(document.getElementById('pqAmount').value) || 0
     };
     if(f.amount <= 0) throw new Error('Put in the amount.');
@@ -6514,7 +6658,8 @@ function render(){
     app.classList.toggle('tucked', tucked);
     if(tg && !tg.dataset.wired){
       tg.dataset.wired = '1';
-      tg.onclick = () => {
+      tg.onclick = (e) => {
+        e.stopPropagation();
         const now = !document.getElementById('app').classList.contains('tucked');
         document.getElementById('app').classList.toggle('tucked', now);
         try{ localStorage.setItem('corplexRail', now ? 'tucked' : 'out'); }catch(e){}
@@ -7035,6 +7180,54 @@ function render(){
      * turn up after the payment does. One hidden input for the screen, pointed
      * at whichever request the button belonged to. */
     // data-doc already belongs to the documents screen; this is its own name
+    {
+      const sb2 = document.getElementById('paySearch');
+      if(sb2){
+        // typed into, not submitted: the list narrows as you go
+        sb2.oninput = () => { state.paySearch = sb2.value; render();
+          const again = document.getElementById('paySearch');
+          if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); } };
+      }
+      const csv = document.getElementById('payCsv');
+      if(csv) csv.onclick = () => exportPayments();
+      const wa = document.getElementById('payWa');
+      if(wa) wa.onclick = () => { state.waMsg = window.__mirazizMsg || ''; render(); };
+      document.querySelectorAll('[data-payedit]').forEach(b => b.onclick = () => {
+        state.payEdit = b.dataset.payedit; state.payEditForm = null; state.payEditErr = ''; render(); });
+      const edGrab = () => {
+        const g = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+        state.payEditForm = {order:g('edOrder'), amount:g('edAmount'), client:g('edClient'),
+          purpose:g('edPurpose'), payee:g('edPayee'), mode:g('edMode'), extra:g('edExtra'), ccy:g('edCcy')};
+      };
+      const edBody = document.querySelector('#edPop .edform');
+      if(edBody){ edBody.addEventListener('input', edGrab); edBody.addEventListener('change', edGrab); }
+      const edOff = () => { state.payEdit = null; state.payEditForm = null; state.payEditErr = ''; render(); };
+      const edC = document.getElementById('edCancel'); if(edC) edC.onclick = edOff;
+      const edX = document.getElementById('edShut');  if(edX) edX.onclick = edOff;
+      const edP = document.getElementById('edPop');
+      if(edP) edP.onclick = e => { if(e.target === edP) edOff(); };
+      const edS = document.getElementById('edSave');
+      if(edS) edS.onclick = async () => {
+        edGrab();
+        const f = state.payEditForm || {};
+        edS.disabled = true; edS.textContent = 'Saving…';
+        const out = await window.__db.editPayment(state.payEdit, f);
+        if(out && out.error){
+          state.payEditErr = out.error; render(); return;
+        }
+        edOff();
+      };
+      const shut = document.getElementById('waShut');
+      if(shut) shut.onclick = () => { state.waMsg = null; render(); };
+      const wp = document.getElementById('waPop');
+      if(wp) wp.onclick = e => { if(e.target === wp){ state.waMsg = null; render(); } };
+      const cp = document.getElementById('waCopy');
+      if(cp) cp.onclick = async () => {
+        try{ await navigator.clipboard.writeText(state.waMsg || ''); cp.textContent = 'Copied'; }
+        catch(e){ cp.textContent = 'Select it and copy'; } };
+      const go = document.getElementById('waGo');
+      if(go) go.onclick = () => { setTimeout(()=>{ state.waMsg = null; render(); }, 300); };
+    }
     document.querySelectorAll('[data-paytab]').forEach(b=>b.onclick=()=>{
       state.tab=b.dataset.paytab; state.approve={ref:null,payStatus:'',account:'',remarks:''};
       state.reject=null; render(); });

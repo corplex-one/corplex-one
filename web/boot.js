@@ -690,7 +690,8 @@ window.__db = {
       const {data, error} = await sb.rpc('raise_payment_request', {
         p_payee: f.payee, p_purpose: f.purpose, p_amount: Number(f.amount),
         p_mode: f.mode, p_order: f.order || null, p_client: f.client || null,
-        p_extra: f.extra || null, p_company: 'corplex'});
+        p_extra: f.extra || null, p_company: 'corplex',
+        p_currency: f.ccy || 'AED'});
       if(error) throw error;
       if(!data || !data.id) throw new Error('The database accepted it but said nothing back.');
       const bad = [];
@@ -760,6 +761,27 @@ window.__db = {
       if(data) await reload();
       return data || 0;
     }catch(e){ return 0; }
+  },
+
+  /* Correcting one. Only what changed is sent; null means 'leave that alone',
+   * except for the three that can legitimately be emptied — order number,
+   * client and the note — where an empty string means 'make it empty'. */
+  async editPayment(id, f){
+    try{
+      const {data, error} = await sb.rpc('edit_payment_request', {
+        p_id: id,
+        p_payee:    f.payee    === undefined ? null : f.payee,
+        p_purpose:  f.purpose  === undefined ? null : f.purpose,
+        p_amount:   f.amount   === undefined ? null : Number(f.amount),
+        p_mode:     f.mode     === undefined ? null : f.mode,
+        p_order:    f.order    === undefined ? null : f.order,
+        p_client:   f.client   === undefined ? null : f.client,
+        p_extra:    f.extra    === undefined ? null : f.extra,
+        p_currency: f.ccy      === undefined ? null : f.ccy});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ return {error: (e && e.message) || String(e)}; }
   },
 
   async withdrawPayment(id){

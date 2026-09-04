@@ -646,6 +646,8 @@ function buildSales(db, byId, name, companies){
     at: r.raised_at || '',
     order: r.order_no || '', client: r.client || '', payee: r.payee || '',
     purpose: r.purpose || '', amount: +r.amount || 0, mode: r.mode,
+    ccy: r.currency || 'AED',
+    editedBy: name(r.edited_by), edits: +r.edits || 0,
     note: r.extra || '',
     status: STATUS[r.status] || r.status,
     decidedBy: name(r.decided_by), why: r.decided_why || '',

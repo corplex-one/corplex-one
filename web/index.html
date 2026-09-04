@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609041054">
+<link rel="manifest" href="manifest.webmanifest?v=202609041150">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1314,7 +1314,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   /* The raise screen: the form beside the confirmation, and the table across
      the page underneath both. My own requests carries eleven columns now, and
      in the old right-hand pane the last three fell off the edge. */
-  .payone{display:grid;grid-template-columns:minmax(330px,390px) minmax(0,1fr);
+  .payone{display:grid;grid-template-columns:minmax(300px,350px) minmax(0,1fr);
     gap:14px;align-items:start;margin-bottom:14px}
   .payone > div:empty{display:none}
   @media (max-width:1180px){ .payone{grid-template-columns:1fr} }
@@ -1354,6 +1354,30 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .paytab select.acsel{width:100%;max-width:none;min-width:0}
   .paytab .doc{max-width:100%}
   .paytab .actpair .btn{padding:4px 8px}
+  .paytab .btn.sm.ed{padding:3px 8px;font-size:11px;color:var(--ink3)}
+  .paytab .btn.sm.ed:hover{color:var(--accent2);border-color:var(--accent)}
+
+  /* the header of the decided list: search, export, and the Miraziz nudge */
+  .dechead{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .paysearch{width:190px;padding:5px 10px;font-size:12.5px}
+  .wamsg{margin:0;white-space:pre-wrap;font-family:'IBM Plex Sans',sans-serif;
+    font-size:13px;line-height:1.75;color:var(--ink);background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:16px}
+
+  /* currency beside the amount */
+  .amtrow{display:flex;gap:6px}
+  .amtrow select{width:74px;flex:0 0 auto}
+  .amtrow input{flex:1;min-width:0}
+
+  /* correcting a request */
+  .edform{display:grid;grid-template-columns:1fr 1fr;gap:13px 14px}
+  .edform label{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .edform label.wide{grid-column:1/-1}
+  .edform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+
+  /* a client who is not on the list yet */
+  .combolist .addnew{border-top:1px solid var(--line)}
+  .combolist .addnew i{display:block;font-style:normal;font-size:11px;color:var(--ink3);margin-top:2px}
 
   /* the rail, put away: icons only, and everything that was words is gone */
   .rail button.nav svg{flex:0 0 auto}
@@ -1571,8 +1595,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609041054';</script>
-<script src="config.js?v=202609041054"></script>
-<script type="module" src="boot.js?v=202609041054"></script>
+<script>window.__BUILD = '202609041150';</script>
+<script src="config.js?v=202609041150"></script>
+<script type="module" src="boot.js?v=202609041150"></script>
 </body>
 </html>
