@@ -101,7 +101,7 @@ const state = {
   payCompany: 'all',
   deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null,
   exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',
-  revQ: '', refShow: false, dirWho: null, attTab: 'me',
+  revQ: '', refShow: false, dirWho: null, attTab: 'me', slipRun: null,
   opForm: null, opDone: '', reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
@@ -6978,25 +6978,56 @@ function revNote(u){
   </button>`;
 }
 function vMySlip(){
-  const P = DATA.payroll, released = PAYST()==='closed';
-  const row0 = payrollRowFor(state.user);
-  const row = (row0 && row0.net !== undefined) ? row0 : null;
-  if(!row) return `${exitNote(state.user)}
+  const P = DATA.payroll;
+  const byNewest = (a, b) => a.key < b.key ? 1 : -1;
+
+  /* Every released month with a line for me — one per company, because
+     somebody paid by two of them is handed two payslips. */
+  const mine = (P.runs || []).slice().sort(byNewest).flatMap(r =>
+    r.status !== 'closed' ? [] :
+      (r.rows || []).filter(x => x.portalName === state.user && !x.dummy)
+        .map(row => ({run: r, row, key: r.key + '|' + (row.company || ''),
+                      label: r.label + ((r.rows || []).filter(y =>
+                        y.portalName === state.user && !y.dummy).length > 1
+                        ? ' \u00b7 ' + (P.label[row.company] || row.company) : '')})));
+
+  /* The newest month overall. If it is not released, that is worth one line —
+     it is not worth the whole page, which is what it used to take. */
+  const newest = (P.runs || []).slice().sort(byNewest)[0];
+  const waiting = newest && newest.status !== 'closed'
+    && (newest.rows || []).some(x => x.portalName === state.user && !x.dummy);
+  const soon = waiting ? `<div class="nudge">
+      <span class="ndot"></span>
+      <div><b>${esc(newest.label)} is not released yet</b>
+        <span>It appears here as soon as the run is approved, the payment is made and accounts
+          releases it. You will get a notification.</span></div>
+    </div>` : '';
+
+  /* These two come first and are shown whichever branch the page takes. They
+     used to sit at the foot of the one branch that got as far as drawing a
+     payslip, so the month a person most wanted to read about their revision
+     was the month the page said nothing at all. */
+  const notes = exitNote(state.user) + revNote(state.user);
+
+  if(!mine.length) return `${notes}${soon}
     <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
-    <h3 style="font-size:20px;margin-bottom:8px">No payslip for this month</h3>
-    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">${exitNote(state.user)
+    <h3 style="font-size:20px;margin-bottom:8px">No payslip yet</h3>
+    <p style="color:var(--ink2);max-width:56ch;margin:0 auto">${exitNote(state.user)
       ? 'Your last month is inside your final settlement above rather than on a payslip.'
-      : 'You are not on this payroll run. If that looks wrong, speak to accounts.'}</p></div></section>`;
-  if(!released) return `${exitNote(state.user)}
-    <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
-    <h3 style="font-size:20px;margin-bottom:8px">${esc(P.month)} is not released yet</h3>
-    <p style="color:var(--ink2);max-width:56ch;margin:0 auto">Your payslip appears here as soon as the run is approved, the payment is made and accounts releases it. You will get a notification.</p></div></section>`;
-  const s = slipOf(row);
-  /* On a phone the A4 sheet is unreadable, so the figures are shown as a list and
-     the document itself is one tap away. */
-  if(MOBILE()) return `
+      : waiting ? 'The month above is the first one due to you. Nothing is released yet.'
+      : 'No month has been released to you. If that looks wrong, speak to accounts.'}</p></div></section>`;
+
+  const here = mine.find(x => x.key === state.slipRun) || mine[0];
+  const s = slipOf(here.row);
+  const bar = mine.length > 1 ? `<div class="seg" id="slipSeg" style="margin-left:auto">${
+    mine.map(x => `<button data-mymonth="${esc(x.key)}" aria-pressed="${x.key === here.key}"
+      type="button">${esc(x.label)}</button>`).join('')}</div>` : '';
+
+  /* On a phone the A4 sheet is unreadable, so the figures are a list and the
+     document itself is one tap away. */
+  if(MOBILE()) return `${notes}${soon}
   <section class="panel">
-    <header><h3>${esc(P.month)}</h3><span class="pill good"><span class="dt"></span>Released</span></header>
+    <header><h3>${esc(here.label)}</h3><span class="pill good"><span class="dt"></span>Released</span>${bar}</header>
     <div class="mnet">
       <span>Total net pay</span>
       <b>AED ${money(s.net,2)}</b>
@@ -7016,22 +7047,20 @@ function vMySlip(){
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-3px;margin-right:7px"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Download as PDF</button>
     </div>
     <p class="cap">The full A4 payslip on ${esc(s.ent.legal)} letterhead. Amounts in AED.</p>
-    ${exitNote(state.user)}${revNote(state.user)}
     <div class="slwrap printonly">${slipHTML(s)}</div>
   </section>
-  <section class="panel">
-    <header><h3>Earlier payslips</h3></header>
-    <div class="pad"><p style="color:var(--ink2);margin:0">${esc(P.month)} is the first run through the portal. From here on, every released month stays in this list.</p></div>
-  </section>`;
-  // Every month that has been released, newest first. The sheet itself opens
-  // when you ask for it.
-  const mine = (P.runs || [])
-    .filter(r => r.status === 'closed')
-    .map(r => ({run: r, row: r.rows.find(x => x.portalName === state.user && !x.dummy)}))
-    .filter(x => x.row);
-  return `
+  ${mine.length > 1 ? `<section class="panel">
+    <header><h3>Earlier payslips</h3><span class="hint">${mine.length} in all</span></header>
+    <div class="pad" style="display:flex;flex-direction:column;gap:8px">${mine.map(x => {
+      const ss = slipOf(x.row);
+      return `<button class="btn ghost wide" data-mymonth="${esc(x.key)}" type="button"
+        style="justify-content:space-between">${esc(x.label)}<b>AED ${money(ss.net,2)}</b></button>`;
+    }).join('')}</div>
+  </section>` : ''}`;
+
+  return `${notes}${soon}
   <div class="strip tight">
-    <div class="stat"><span class="k">${esc(P.month)}</span>
+    <div class="stat"><span class="k">${esc(here.label)}</span>
       <span class="v"><span class="cur">AED</span>${money(s.net,2)}</span>
       <span class="n">paid ${esc(s.payDate)}</span></div>
     <div class="stat"><span class="k">Earnings</span>
@@ -7045,25 +7074,26 @@ function vMySlip(){
   </div>
 
   <section class="panel">
-    <header><h3>Your payslips</h3><span class="hint">click a month to open it</span></header>
+    <header><h3>Your payslips</h3><span class="hint">click a month to open it</span>${bar}</header>
     <div class="tw"><table>
       <thead><tr><th>Month</th><th>Paid on</th><th class="r">Earnings</th>
         <th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
       <tbody>${mine.map(x => { const ss = slipOf(x.row);
-        return '<tr class="sliprow" data-myslip="' + esc(x.run.key) + '">'
-          + '<td class="nw"><b>' + esc(x.run.label) + '</b></td>'
+        return '<tr class="sliprow' + (x.key === here.key ? ' on' : '') + '" data-myslip="' + esc(x.key) + '">'
+          + '<td class="nw"><b>' + esc(x.label) + '</b></td>'
           + '<td class="n nw">' + esc(ss.payDate) + '</td>'
           + '<td class="n r">' + money(ss.gross,2) + '</td>'
           + '<td class="n r">' + (ss.dedT ? money(ss.dedT,2) : '&mdash;') + '</td>'
           + '<td class="n r netcol">' + money(ss.net,2) + '</td>'
-          + '<td class="r"><button class="btn ghost" data-myslip="' + esc(x.run.key)
+          + '<td class="r"><button class="btn ghost" data-myslip="' + esc(x.key)
           + '" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>';
       }).join('')}
       </tbody></table></div>
-    <p class="cap">Every released month stays here. The payslip opens on ${esc(s.ent.legal)} letterhead and can be printed or saved as a PDF from the window.</p>
-  </section>
-  ${exitNote(state.user)}${revNote(state.user)}`;
+    <p class="cap">Every released month stays here. The payslip opens on ${esc(s.ent.legal)} letterhead and can be
+      printed or saved as a PDF from the window.${mine.length > 1 ? '' : ' From here on, every released month joins this list.'}</p>
+  </section>`;
 }
+
 function vSlips(){
   const P = DATA.payroll;
   const runs = P.runs || [];
@@ -8910,6 +8940,11 @@ function render(){
                + ', on file from ' + effLabel(g.from) + '.';
              state.opForm = {who:'', co:'', basic:'', allow:'', from:''}; }
       render(); }; }
+  /* Not data-slip: that already means "open this person's payslip" on the
+     console Payslips screen, and its handler is bound after this one and would
+     quietly take the button over. */
+  document.querySelectorAll('[data-mymonth]').forEach(b => b.onclick = () => {
+    state.slipRun = b.dataset.mymonth; render(); window.scrollTo({top: 0}); });
   { const c = document.getElementById('rvCo');
     if(c) c.onchange = () => { state.revForm.co = c.value; render(); }; }
   { const q = document.getElementById('revQ');
@@ -9568,8 +9603,11 @@ function render(){
     const pr=document.getElementById('slPrint'); if(pr) pr.onclick=()=>window.print();
     document.querySelectorAll('[data-myslip]').forEach(el => el.onclick = ev => {
       ev.stopPropagation();
-      const run = (DATA.payroll.runs||[]).find(r => r.key === el.dataset.myslip);
-      const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy);
+      const i = el.dataset.myslip.lastIndexOf('|');
+      const key = el.dataset.myslip.slice(0, i), co = el.dataset.myslip.slice(i + 1);
+      const run = (DATA.payroll.runs||[]).find(r => r.key === key);
+      const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy
+        && (x.company || '') === co);
       if(row) openSlipFor(row);
     });
   }
