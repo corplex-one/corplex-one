@@ -78,7 +78,9 @@ const TABLES = {
   /* A view, not a table: the eight figures the team screens draw, for the
      people in your own department, with no commission column in it to hide.
      Accounts and the owner read sales_commission itself and never need this. */
-  sales_team:       ['sales_team_figures'],
+  // Optional: the portal opens without it, minus the two team screens. It is
+  // created by migration 0044, which is run after this code is deployed.
+  sales_team:       ['sales_team_figures', null, true],
   sales_company:    ['sales_company'],
   sales_bands:      ['sales_bands'],
   sales_uploads:    ['sales_uploads'],
@@ -88,14 +90,29 @@ const TABLES = {
 
 // PostgREST caps a request at a thousand rows; the invoices alone are more
 // than that, so read every table in pages until it stops giving.
-async function readAll(table, order){
+//
+// A table marked optional is one the app can do without. That matters at a
+// deploy: the code goes up through Cloudflare in seconds and a migration is
+// run by hand afterwards, so for the minutes in between the browser is asking
+// for something that does not exist yet. Every read used to be required, and
+// Promise.all means one rejection loses the lot — so a new table in this list
+// would have taken the WHOLE PORTAL down for everybody until the migration was
+// run. A screen that is missing is a nuisance; a portal that will not open is
+// an outage, and the difference is one flag.
+async function readAll(table, order, optional){
   const PAGE = 1000;
   let from = 0, out = [];
   for(;;){
     let sel = sb.from(table).select('*').range(from, from + PAGE - 1);
     if(order) sel = sel.order(order);
     const {data, error} = await sel;
-    if(error) throw new Error(`${table}: ${error.message}`);
+    if(error){
+      if(!optional) throw new Error(`${table}: ${error.message}`);
+      // Said out loud rather than swallowed: the screens that need it will be
+      // quietly absent, and this is the only place that knows why.
+      console.warn(`${table} is not available (${error.message}) — the screens that read it will not appear`);
+      return [];
+    }
     out = out.concat(data || []);
     if(!data || data.length < PAGE) return out;
     from += PAGE;
@@ -104,8 +121,8 @@ async function readAll(table, order){
 
 async function loadAll(){
   const out = {};
-  await Promise.all(Object.entries(TABLES).map(async ([k, [table, order]]) => {
-    out[k] = await readAll(table, order);
+  await Promise.all(Object.entries(TABLES).map(async ([k, [table, order, optional]]) => {
+    out[k] = await readAll(table, order, optional);
   }));
   return out;
 }
