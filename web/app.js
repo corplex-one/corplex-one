@@ -4395,7 +4395,7 @@ function vDashboard(){
 
   return `
   <div class="strip">
-    <div class="stat"><span class="k">Total net sales · ${p==='FY'?'2026':p}</span><span class="v"><span class="cur">AED</span>${money(e.netTot)}</span>
+    <div class="stat"><span class="k">Total net sales · ${p==='FY'?esc(state.year):p}</span><span class="v"><span class="cur">AED</span>${money(e.netTot)}</span>
       <span class="n">from ${rows.length} invoice${rows.length===1?'':'s'} · ${money(invValue)} invoiced</span></div>
     <div class="stat"><span class="k">Counted for commission</span><span class="v" style="color:var(--good)"><span class="cur">AED</span>${money(e.totElig)}</span>
       <span class="n">${e.netTot?pct(e.totElig/e.netTot,1):'—'} of your net sales &mdash; see My commission</span></div>
@@ -4465,7 +4465,7 @@ function vCommission(){
 
   return `
   <div class="strip">
-    <div class="stat"><span class="k">Eligible net sales · ${fy?'2026':p}</span><span class="v"><span class="cur">AED</span>${money(e.totElig)}</span>
+    <div class="stat"><span class="k">Eligible net sales · ${fy?esc(state.year):p}</span><span class="v"><span class="cur">AED</span>${money(e.totElig)}</span>
       <span class="n">${flat?'flat '+pct(e.flat,0)+' — no target':(fy?'band set quarter by quarter':(deptOk?'band '+e.band:'department not commission-eligible'))}</span></div>
     <div class="stat"><span class="k">${mo?'Your own commission':'Commission earned'}</span><span class="v"><span class="cur">AED</span>${money(e.comm,2)}</span>
       <span class="n">${mo?`plus <b>AED ${money(mo.earned,2)}</b> manager override &mdash; total ${money(e.comm+mo.earned,2)}`:(e.totElig?pct(e.comm/e.totElig,2)+' of eligible net sales':'—')}</span></div>
@@ -4840,7 +4840,7 @@ function vLeaderboard(){
   const rows = list.map(x=>({label:x.name, value:x.net, me:x.me, color: x.me?'var(--c1)':(x.former?'color-mix(in srgb, var(--ink3) 40%, var(--panel))':'color-mix(in srgb, var(--c1) 38%, var(--panel))')}));
   return `
   <div class="strip">
-    <div class="stat"><span class="k">Your rank · ${state.period==='FY'?'2026':state.period}</span><span class="v">${myRank||'—'}<span class="cur" style="margin-left:6px">of ${list.length}</span></span><span class="n">${nm(me)}</span></div>
+    <div class="stat"><span class="k">Your rank · ${state.period==='FY'?esc(state.year):state.period}</span><span class="v">${myRank||'—'}<span class="cur" style="margin-left:6px">of ${list.length}</span></span><span class="n">${nm(me)}</span></div>
     <div class="stat"><span class="k">Your net sales</span><span class="v"><span class="cur">AED</span>${money((aggOf(me,state.period)||{}).netTot||0)}</span><span class="n">${PLABEL[state.period]}</span></div>
     <div class="stat"><span class="k">${esc(deptData(me).department)} net sales</span><span class="v"><span class="cur">AED</span>${money(deptNet(state.period, me))}</span><span class="n">${list.length} people with sales</span></div>
     <div class="stat"><span class="k">Top of the board</span><span class="v" style="font-size:16px;font-family:'IBM Plex Sans',sans-serif">${esc(list[0]?list[0].name:'\u2014')}</span><span class="n">${money(list[0]?list[0].net:0)}</span></div>
@@ -4942,7 +4942,7 @@ function vCompany(){
 
   return `
   <div class="strip">
-    <div class="stat"><span class="k">Invoiced 2026 YTD</span><span class="v"><span class="cur">AED</span>${money(t.inv)}</span><span class="n">${t.count} invoices, excl. VAT</span></div>
+    <div class="stat"><span class="k">Invoiced ${esc(state.year)}${state.year === HDATE().slice(0,4) ? ' YTD' : ''}</span><span class="v"><span class="cur">AED</span>${money(t.inv)}</span><span class="n">${t.count} invoices, excl. VAT</span></div>
     <div class="stat"><span class="k">Net sales</span><span class="v"><span class="cur">AED</span>${money(ytdNet)}</span><span class="n">after cost and partner commission</span></div>
     <div class="stat"><span class="k">Collected</span><span class="v" style="color:var(--good)"><span class="cur">AED</span>${money(t.inv-t.outstanding)}</span><span class="n">${pct(1-t.outstanding/t.inv,1)} of invoiced value</span></div>
     <div class="stat"><span class="k">Outstanding</span><span class="v" style="color:var(--bad)"><span class="cur">AED</span>${money(t.outstanding)}</span><span class="n">${pct(t.outstanding/t.inv,1)} of invoiced value</span></div>
@@ -6260,7 +6260,7 @@ function vTeam(){
 
   return `
   <div class="strip">
-    <div class="stat"><span class="k">${esc(DD.department)} net sales · ${p==='FY'?'2026':p}</span><span class="v"><span class="cur">AED</span>${money(dn)}</span>
+    <div class="stat"><span class="k">${esc(DD.department)} net sales · ${p==='FY'?esc(state.year):p}</span><span class="v"><span class="cur">AED</span>${money(dn)}</span>
       <span class="n">${tgt?pct(dn/tgt,0)+' of the '+money(tgt)+(p==='FY'?' annual':' quarterly')+' target':'no target set for this scope'}</span></div>
     <div class="stat"><span class="k">People with sales</span><span class="v">${active}<span class="cur" style="margin-left:6px">of ${people.filter(x=>x.role!=='former').length}</span></span>
       <span class="n">${people.some(x=>x.role==='former')?'plus '+people.filter(x=>x.role==='former').length+' who have since left':PLABEL[p]}</span></div>
@@ -8153,7 +8153,7 @@ function vAdmin(){
             .map(([k,l])=>`<button data-sco="${k}" aria-pressed="${(state.salesCo||'')===k}" type="button">${esc(l)}</button>`).join('')}</div></header>
       <div class="tw"><table class="cotab">
         ${colsOf([34, 22, 22, 22])}
-        <thead><tr><th>Name</th><th>Role</th><th>Commission</th><th class="r">${state.period==="FY"?"2026":state.period} net sales</th></tr></thead>
+        <thead><tr><th>Name</th><th>Role</th><th>Commission</th><th class="r">${state.period==="FY"?esc(state.year):state.period} net sales</th></tr></thead>
         <tbody>${staff.map(n=>{const e=aggOf(n,state.period)||{netTot:0,deptOk:'Yes'};
           const mg = DATA.managers && DATA.managers[n];
           const fmr = roleOf(n)==='former';
@@ -8236,7 +8236,8 @@ const TABS = [
   // These three are made of other people's rows, so they still ask whether the
   // department's figures arrived at all.
   {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&seesDeptSales(u)},
-  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:seesDeptSales},
+  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
+   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},
   {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},
   {id:'tools',       group:'other', label:'Calculator', title:'Calculator'},
   // payment requests are a CorpLex process; POA and Lex do not use them
