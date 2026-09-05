@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609052229">
+<link rel="manifest" href="manifest.webmanifest?v=202609052239">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1833,7 +1833,9 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .subtabs .cnt{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;
     border-radius:99px;background:var(--warn);color:#fff;font-size:10.5px;font-style:normal;
     font-weight:700;line-height:17px;text-align:center;vertical-align:middle}
+  .subtabs .cnt.mute{background:var(--sunk);color:var(--ink3)}
   .subtabs button[aria-current="true"] .cnt{background:var(--accentInk);color:var(--accent)}
+  .subtabs button[aria-current="true"] .cnt.mute{background:rgba(255,255,255,.22);color:#fff}
 
   /* a document, over the page rather than in place of it */
   .docpop{position:fixed;inset:0;z-index:80;background:rgba(20,12,24,.62);
@@ -2009,8 +2011,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609052229';</script>
-<script src="config.js?v=202609052229"></script>
-<script type="module" src="boot.js?v=202609052229"></script>
+<script>window.__BUILD = '202609052239';</script>
+<script src="config.js?v=202609052239"></script>
+<script type="module" src="boot.js?v=202609052239"></script>
 </body>
 </html>

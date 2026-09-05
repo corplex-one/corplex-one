@@ -5906,15 +5906,18 @@ function vDocPop(){
   </div>`;
 }
 
-/* The two tabs of the payment page. Only accounts sees the second one, so for
+/* The three tabs of the payment page. Only accounts sees the last two, so for
  * everybody else there is nothing to draw and the bar does not appear. */
+const PAYTABS = [['payment','Request for payment'], ['payapprove','Approve payments'],
+                 ['paypast','Past payments']];
 function payBar(){
   if(!canUpload(state.user)) return '';
-  const tabs = [['payment','Request for payment'], ['payapprove','Approve payments']];
   const waiting = reqs().filter(r=>r.status==='Pending').length;
-  return `<div class="subbar"><div class="subtabs">${tabs.map(([id,label])=>
+  const past = reqs().filter(r=>r.status!=='Pending' && r.status!=='Withdrawn').length;
+  return `<div class="subbar"><div class="subtabs">${PAYTABS.map(([id,label])=>
     `<button data-paytab="${id}" aria-current="${state.tab===id}" type="button">${esc(label)}${
-      id==='payapprove' && waiting ? ` <i class="cnt">${waiting}</i>` : ''}</button>`).join('')}</div></div>`;
+      id==='payapprove' && waiting ? ` <i class="cnt">${waiting}</i>` : ''}${
+      id==='paypast' && past ? ` <i class="cnt mute">${past}</i>` : ''}</button>`).join('')}</div></div>`;
 }
 
 function vPayApprove(){
@@ -6054,9 +6057,12 @@ function vPayApprove(){
       <th class="c" title="Books">Bk</th><th class="c" title="Bigin">Bg</th>
       <th class="c" title="Receipt">Rc</th><th class="act"></th></tr></thead>`;
 
+  const past = state.tab === 'paypast';
+
   return `
   ${vDocPop()}${vWaPop()}${vPayEdit()}${vExport()}
   ${payBar()}
+  ${past ? '' : `
   ${state.approve.ref ? vApprovePanel() : ''}
   <section class="panel">
     <header><h3>Requests waiting on you</h3>
@@ -6065,9 +6071,11 @@ function vPayApprove(){
       <tbody>${queue.length ? queue.map(r=>row(r,false)).join('')
         : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing is waiting on you.</td></tr>'}</tbody>
     </table></div>
-    <p class="cap"><b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
-  </section>
+    <p class="cap"><b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.
+      A request that has been decided moves to <b>Past payments</b>.</p>
+  </section>`}
 
+  ${!past ? '' : `
   <section class="panel">
     <header><h3>Already decided</h3>
       <span class="hint" style="margin-left:0">${find
@@ -6090,7 +6098,7 @@ function vPayApprove(){
       <b>Click an order number</b> to copy that payment's details. The icon under <b>Doc</b> opens the document.
       A cell that is cut off says the rest when you hover it, with a Copy beside it.
       The pencil at the end corrects a request.</p>
-  </section>`;
+  </section>`}`;
 }
 
 function vPayment(){
@@ -8485,6 +8493,8 @@ const TABS = [
    gate:u=>exitsWaitingOn(u).length > 0, hide:true},
   {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
    gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},
+  {id:'paypast',     group:'other', label:'Past payments', title:'Past payments',
+   gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},
   {id:'profile',     group:'hr',    label:'My profile',       title:'My profile', hide:true},
   {id:'attend',      group:'hr',    label:'My attendance',    title:'My attendance', gate:tracksAtt},
   /* Called, not passed: isApprover is declared further down the file, and a
@@ -8623,7 +8633,7 @@ function renderNav(){
    the approvals waiting on them. Navigation sits in a fixed footer. */
 const MOBILE = () => window.matchMedia('(max-width:720px)').matches;
 const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company',
-                 'tools','payment','payapprove'];
+                 'tools','payment','payapprove','paypast'];
 const onPhone = t => !(MOBILE() && MOBHIDE.includes(t.id));
 
 const MICO = {
@@ -9037,7 +9047,7 @@ function renderChrome(){
   let t = TABS.find(x=>x.id===state.tab) || {id:state.tab, title:'Home'};
   if(t.id==='admin' && canUpload(state.user)) t = Object.assign({}, t, {title:'Upload & admin'});
   if(t.id==='company') t = Object.assign({}, t, {title: deptData(state.user).department});
-  const ttl = state.tab === 'payapprove' ? 'Payment request'
+  const ttl = (state.tab === 'payapprove' || state.tab === 'paypast') ? 'Payment request'
             : MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;
   document.getElementById('pageTitle').innerHTML = `${esc(ttl)}${(periodic && !MOBILE())?`<small>${esc(PLABEL[state.period]+' · '+state.year)}</small>`:''}`;
 }
@@ -9256,7 +9266,7 @@ function render(){
      wide by definition rather than by a list somebody has to remember to add
      to. The named staff screens keep their place on the list. */
   mainEl.classList.toggle('wide', state.mode === 'console'
-    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));
+    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove','paypast'].includes(state.tab));
   const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
   const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
   if(SALESTABS.includes(state.tab) && activeCo().sales && !yearHeld){
@@ -9281,7 +9291,7 @@ function render(){
     return;
   }
   v.innerHTML = (CON?conBar():'') + ({home:vHome, dashboard:vDashboard, commission:vCommission, invoices:vInvoices,
-                  leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payapprove:vPayApprove, exitapprove:vExitApprove, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
+                  leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payapprove:vPayApprove, paypast:vPayApprove, exitapprove:vExitApprove, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
                   profile:vProfile, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
                   leaverules:vLeaveRules, deskonly:vDeskOnly, ...PAGEVIEW,
@@ -10028,7 +10038,7 @@ function render(){
       calcPOA();
     }
   }
-  if(state.tab==='payment' || state.tab==='payapprove'){
+  if(state.tab==='payment' || state.tab==='payapprove' || state.tab==='paypast'){
     const cs=document.getElementById('pqClient');
     if(cs){
       cs.addEventListener('input',()=>{ pqList(); pqBadge(); });
