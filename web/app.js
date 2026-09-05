@@ -109,7 +109,7 @@ const state = {
   askOnly: null, askBack: 'home', gratMonth: '2026-08', peopleTab: '', leaveTab: 'leave', calcTab: 'card', invRaw: null, invPrint: false,
   payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
   pfDirty: null, pfSaved: '', upBusy: null,
-  payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',
+  payRun: null, slipOpen: null, mode: 'staff',
   payInternal: false,
   payFilter: {ch:'all', visa:'all', text:''},
   atFilter: {status:'all', country:'all', text:''},
@@ -3665,8 +3665,8 @@ function alertsFor(u){
       add('pr-release', `${DATA.payroll.month} payment is initiated`, 'Release it to publish payslips', 'payroll');
     if(canUpload(u) && PAYST()==='returned')
       add('pr-back', `Miraziz sent the ${DATA.payroll.month} payroll back`, state.payNote || 'No note given', 'payroll', 'bad');
-    if(role==='owner' && state.sepStage===2)
-      add('pr-sep', `Payroll ${NEXTRUN.month} needs your approval`, 'Uploaded by Avin, waiting on you', 'payroll', 'warn', {run:'sep'});
+    // a run waiting on the owner is already covered by pr-approve above,
+    // which reads the run's real status rather than a counter on this screen
     if(PAYST()==='closed' && !canAdmin(u) && payrollRowFor(u))
       add('slip', `Your ${DATA.payroll.month} payslip is ready`, 'Released by accounts — view or download it', 'myslip', 'good');
   }
@@ -5926,92 +5926,48 @@ function channelOf(r){
   return r.company==='Lex' ? 'blex' : (r.company==='POA' ? 'bpoa' : 'bcp');
 }
 const vatOf = r => (DATA.payroll.vatOn||[]).includes(r.name) ? Math.round(r.net*0.05*100)/100 : 0;
-const NEXTRUN = {key:'sep', label:'Sep 2026', month:'September 2026', proc:'Sep-2026'};
+
+/* The month after the last one there is. Runs are keyed '2026-09', and this
+   is the only place that arithmetic happens. */
+function nextRunKey(){
+  const keys = (DATA.payroll.runs || []).map(r => r.key).sort();
+  const last = keys[keys.length - 1];
+  if(!last) return '';
+  const [y, m] = last.split('-').map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+}
+/* A month can be started once the one before it is closed. Anything else is
+   two open months at a time, which is how a figure gets typed into the wrong
+   one. The reason is returned rather than a bare false, because a button that
+   is simply absent teaches nobody anything. */
+function nextRunWhy(){
+  const runs = (DATA.payroll.runs || []);
+  if(!runs.length) return 'There is no payroll in the portal yet.';
+  const open = runs.filter(r => r.status !== 'closed')
+                   .sort((a, b) => a.key < b.key ? -1 : 1);
+  if(open.length) return `${MKEY(open[0].key)} is still ${open[0].status}. Close it and the next month can be started.`;
+  return '';
+}
 function runSeg(){
   const runs = (DATA.payroll.runs || []);
   if(!runs.length) return '';
   const here = state.payRun || (runs[0] && runs[0].key);
+  const nk = nextRunKey();
   return `<div class="seg" id="runSeg" style="margin-left:18px">
     ${runs.slice().sort((a,b)=>a.key<b.key?-1:1).map(r=>
       `<button data-run="${esc(r.key)}" aria-pressed="${here===r.key}" type="button">${
         esc(MKEY(r.key))} &middot; ${esc(r.status)}</button>`).join('')}
+    ${nk && canUpload(state.user) && !nextRunWhy()
+      ? `<button id="payNext" type="button" title="Build the ${esc(MKEY(nk))} lines from what the portal holds today">+ ${esc(MKEY(nk))}</button>`
+      : ''}
   </div>`;
 }
-function vPayrollNext(){
-  const P = DATA.payroll, T = DATA.tickets;
-  const staff = P.rows.filter(r=>!r.dummy);
-  const lastNet = staff.reduce((s,r)=>s+r.net,0);
-  const dueSep = T.employees.filter(r=>r.proc===NEXTRUN.proc);
-  const dueNext = T.employees.filter(r=>r.proc==='Oct-2026');
-  const step = (n,label,done,now) =>
-    `<div class="wfstep${done?' done':''}${now?' now':''}"><i>${done?'✓':n}</i><span>${label}</span></div>`;
-  const sg = state.sepStage, up = sg>=1;
-  return `
-  <div class="strip">
-    <div class="stat"><span class="k">${esc(NEXTRUN.month)}</span>
-      <span class="v" style="font-size:19px;font-family:'IBM Plex Sans',sans-serif">${
-        sg===0?'<span class="pill mute">Not started</span>':
-        sg===1?'<span class="pill warn"><span class="dt"></span>Draft</span>':
-        '<span class="pill warn"><span class="dt"></span>Waiting for Miraziz</span>'}</span>
-      <span class="n">${sg===0?'waiting for the monthly file':sg===1?'ready to submit to Miraziz':'submitted for approval'}</span></div>
-    <div class="stat"><span class="k">People carried forward</span><span class="v">${staff.length}</span>
-      <span class="n">from the August run, across three companies</span></div>
-    <div class="stat"><span class="k">August net, for reference</span><span class="v"><span class="cur">AED</span>${money(lastNet,2)}</span>
-      <span class="n">last closed run</span></div>
-    <div class="stat"><span class="k">Air tickets due</span>
-      <span class="v" style="color:var(--${dueSep.length?'accent2':'good'})">${dueSep.length?money(dueSep.reduce((s,r)=>s+r.rate,0),0):'0'}</span>
-      <span class="n">${dueSep.length?dueSep.length+' to include this run':'none fall due in the '+NEXTRUN.proc+' run'}</span></div>
-  </div>
+/* vPayrollNext lived here: a September screen driven by state.sepStage,
+   offering to upload a payroll spreadsheet. Payroll moved into the database
+   and the screen was never wired to anything — nothing called it, and the one
+   button that pointed at it set a key no run has. Removed rather than left
+   for somebody to find and believe. */
 
-  <section class="panel">
-    <header><h3>${esc(NEXTRUN.month)} run</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
-      ${runSeg()}
-    </header>
-    <div class="pad">
-      <div class="wfbar">
-        ${step(1,'Prepared by Avin', sg>=1, sg===0)}
-        ${step(2,'Submitted for approval', sg>=2, sg===1)}
-        ${step(3,'Approved by Miraziz', false, sg===2)}
-        ${step(4,'Paid and closed', false, false)}
-      </div>
-      <div style="display:flex;gap:10px;margin-top:18px;flex-wrap:wrap;align-items:center">
-        ${canUpload(state.user) && sg===0 ? '<button class="btn" id="sepUpload" type="button">Upload the September file</button><span style="color:var(--ink3);font-size:12.5px">CORPLEX PAYROLL TEMPLATE.xlsx &mdash; the PAYROLL sheet is all the portal reads</span>' : ''}
-        ${canUpload(state.user) && sg===1 ? '<button class="btn" id="sepSubmit" type="button">Submit to Miraziz for approval</button><button class="btn ghost" id="sepReset" type="button">Remove the file</button>' : ''}
-        ${sg===2 ? '<span style="color:var(--warn);font-size:13px">With Miraziz. He is notified by email and in the portal.</span>'+(canUpload(state.user)?'<button class="btn ghost" id="sepReset" type="button">Pull it back</button>':'') : ''}
-        ${!canUpload(state.user) && sg===0 ? '<span style="color:var(--ink3);font-size:12.5px">Avin has not started this month yet.</span>' : ''}
-      </div>
-    </div>
-  </section>
-
-  <div class="grid g2">
-    <section class="panel">
-      <header><h3>Carry forward into ${esc(NEXTRUN.month)}</h3><span class="hint">changes to make before you submit</span></header>
-      <div class="tw"><table>
-        <thead><tr><th>Who</th><th>What changes</th></tr></thead>
-        <tbody>
-          <tr><td class="nw">Fakhridin Kochkorov</td><td style="color:var(--ink2)">Moves to Lex from September &mdash; company, visa and paid-from all become Lex</td></tr>
-          <tr><td class="nw">Air tickets</td><td style="color:var(--ink2)">${dueSep.length
-            ? dueSep.map(r=>nm(r.name)+' &mdash; AED '+money(r.rate,0)).join('; ')
-            : 'None due in the '+NEXTRUN.proc+' run. Next are '+dueNext.map(r=>nm(r.name)).join(' and ')+' in the Oct-2026 run.'}</td></tr>
-          <tr><td class="nw">Commission and advances</td><td style="color:var(--ink2)">Entered by hand in the file &mdash; the portal does not pull them from the sales pages</td></tr>
-          <tr><td class="nw">Abdullokh Fozilov</td><td style="color:var(--ink2)">5% VAT is added on top of his net, as he is billed through another company</td></tr>
-          <tr><td class="nw">Dummy employees</td><td style="color:var(--ink2)">Pavel, Natalia U., Natalia P. and Abboskhon stay off the staff totals</td></tr>
-        </tbody></table></div>
-      <p class="cap">These are the things that caught you out in August, brought forward so they do not have to be remembered.</p>
-    </section>
-
-    <section class="panel">
-      <header><h3>How a run works</h3></header>
-      <div class="pad"><dl class="kv wide">
-        <dt>1 &middot; Fill</dt><dd>Fill the PAYROLL sheet of the monthly template &mdash; yellow columns only, the grey ones calculate themselves</dd>
-        <dt>2 &middot; Upload</dt><dd>Upload it here. The portal splits it by company and works out the payment channels</dd>
-        <dt>3 &middot; Check</dt><dd>Read the register and the money-out panel, and fix anything odd before you submit</dd>
-        <dt>4 &middot; Submit</dt><dd>Miraziz is notified by email and in the portal, and sees only the totals he needs to approve</dd>
-        <dt>5 &middot; Close</dt><dd>Once paid, close the run. It stays here as a locked record and the next month opens</dd>
-      </dl></div>
-    </section>
-  </div>`;
-}
 // The newest run's status, read from the database every time rather than
 // from a copy kept on the page. See the note in mkweb.mjs.
 const PAYST = () => (DATA.payroll && DATA.payroll.status) || 'draft';
@@ -6112,6 +6068,7 @@ function vPayroll(){
 
   <section class="panel">
     <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
+      ${runSeg()}
       <span class="pill mute" style="margin-left:14px">${esc(HERE ? HERE.label : DATA.payroll.month)}</span>
       <div class="seg" id="coSeg" style="margin-left:auto">
         <button data-co="all" aria-pressed="${co==='all'}" type="button">All</button>
@@ -6138,7 +6095,9 @@ function vPayroll(){
         ${isPrep && st==='approved' ? '<button class="btn" id="payInit" type="button">Mark it paid</button><span style="color:var(--good);font-size:13px">Approved by '+esc(HERE&&HERE.approver||'the owner')+' &mdash; AED '+money(staffNet,2)+'</span>' : ''}
         ${isPrep && st==='initiated' ? '<button class="btn" id="payClose" type="button">Close the month and release payslips</button><span style="color:var(--warn);font-size:13px">Paid. Closing publishes '+staff.length+' payslips to staff.</span>' : ''}
         ${!isPrep && ['approved','initiated'].includes(st) ? '<span style="color:var(--ink3);font-size:12.5px">With Avin &mdash; '+(st==='initiated'?'paid, not yet closed':'not yet paid')+'.</span>' : ''}
-        ${st==='closed' ? `${isPrep?`<button class="btn" id="payNext" type="button">Start the ${esc(NEXTRUN.label)} run</button><button class="btn ghost" id="paySlips" type="button">Payslips</button>`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED ${money(staffNet,2)}, and ${staff.length} payslips released to staff</span>` : ''}
+        ${st==='closed' ? `${isPrep?`${nextRunKey() && !nextRunWhy()
+            ? `<button class="btn" id="payNextBtn" type="button">Start the ${esc(MKEY(nextRunKey()))} run</button>` : ''}<button class="btn ghost" id="paySlips" type="button">Payslips</button>`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED ${money(staffNet,2)}, and ${staff.length} payslips released to staff</span>` : ''}
+        ${isPrep && st==='closed' && nextRunKey() && !nextRunWhy() ? `<span style="color:var(--ink3);font-size:12.5px">Builds the ${esc(MKEY(nextRunKey()))} lines from the salaries, joining dates and leave the portal holds today &mdash; including any revision letter that has gone out since.</span>` : ''}
         ${isApprover && st==='draft' ? '<span style="color:var(--ink3);font-size:12.5px">Avin has not submitted this month yet.</span>' : ''}
         ${isPrep && st==='submitted' ? '<button class="btn ghost" id="payWithdraw" type="button">Withdraw it</button><span style="color:var(--ink3);font-size:12.5px">With Miraziz. Withdrawing puts it back to a draft you can edit.</span>' : ''}
       </div>
@@ -7192,21 +7151,23 @@ function mailHTML(m, wk){
       `<div class="dsec"><h4>${esc(dLong(W.from))}</h4>
       ${P(`<b>${esc(W.who)}</b> is working from home today${W.from!==W.to?` and until <b>${esc(dayLabel(W.to))}</b>`:''}. Reachable as normal &mdash; just not at their desk.`)}</div>`);
 
-    case 'pay-sub': return mailShell('Miraziz Makhamatzhanov &lt;his work email&gt;',
-      `${esc(NEXTRUN.month)} payroll needs your approval`,
-      `${P(`Avin has submitted the <b>${esc(NEXTRUN.month)}</b> payroll.`)}
+    case 'pay-sub': return (() => { const M = MKEY(DATA.payroll.monthKey || nextRunKey() || '2026-01');
+      return mailShell('Miraziz Makhamatzhanov &lt;his work email&gt;',
+      `${esc(M)} payroll needs your approval`,
+      `${P(`Avin has submitted the <b>${esc(M)}</b> payroll.`)}
       <table class="dtab">
         <tr><td>People</td><td class="r"><b>${DATA.payroll.rows.length}</b></td></tr>
         <tr><td>Companies</td><td class="r">CorpLex, POA and Lex Estates</td></tr>
         <tr><td>Total net</td><td class="r"><b>AED ${money(DATA.payroll.rows.reduce((s,r)=>s+r.net,0),2)}</b></td></tr>
       </table>
-      ${P(`Open <b>Payroll</b> in the accounts console to approve it or send it back with a note. Payslips stay hidden from staff until you approve and Avin releases the payment.`)}`);
+      ${P(`Open <b>Payroll</b> in the accounts console to approve it or send it back with a note. Payslips stay hidden from staff until you approve and Avin releases the payment.`)}`); })();
 
-    case 'pay-back': return mailShell('Avin Mascarenhas &lt;his work email&gt;',
-      `Miraziz sent the ${esc(NEXTRUN.month)} payroll back`,
-      `${P(`Miraziz has sent the <b>${esc(NEXTRUN.month)}</b> payroll back rather than approving it.`)}
+    case 'pay-back': return (() => { const M = MKEY(DATA.payroll.monthKey || nextRunKey() || '2026-01');
+      return mailShell('Avin Mascarenhas &lt;his work email&gt;',
+      `Miraziz sent the ${esc(M)} payroll back`,
+      `${P(`Miraziz has sent the <b>${esc(M)}</b> payroll back rather than approving it.`)}
       ${P(`<b>His note:</b> “Check Fakhridin &mdash; he moved to Lex this month, the recharge looks wrong.”`)}
-      ${P(`Fix it and submit again. Nothing has been paid and no payslip is visible to anyone.`)}`);
+      ${P(`Fix it and submit again. Nothing has been paid and no payslip is visible to anyone.`)}`); })();
 
     case 'slip': return mailShell('Each person, their own &lt;work email&gt;',
       `Your ${esc(DATA.payroll.month)} payslip is ready`,
@@ -9259,9 +9220,7 @@ function render(){
         g.disabled = true; g.textContent = 'Reading the records\u2026';
         await window.__db.generateRun(state.payRun);
         render(); }; }
-    on('sepUpload',()=>{state.sepStage=1;render();});
-    on('sepReset',()=>{state.sepStage=0;render();});
-    on('sepSubmit',()=>{state.sepStage=2;render();});
+
     // Every one of these can be refused by the database. None of them assumes
     // it worked: the panel re-reads the run afterwards either way.
     const RUNKEY = () => DATA.payroll.monthKey;
@@ -9271,7 +9230,18 @@ function render(){
     act('payWithdraw', k => window.__db.unsubmitRun(k));
     act('payClose',    k => window.__db.closeRun(k));
     on('paySlips',()=>{state.tab='payslips';render();});
-    on('payNext',()=>{state.payRun='sep';render();});
+    /* This set state.payRun to 'sep'. No run is keyed 'sep' — they are keyed
+       '2026-09' — so the payroll screen fell through its own guard and put you
+       back on the month you were already looking at. Nothing happened, twice,
+       and there was no error to go on. */
+    { const go = async (b) => {
+        const k = nextRunKey(); if(!k) return;
+        b.disabled = true;
+        const made = await window.__db.generateRun(k);
+        if(made) state.payRun = k;
+        render(); };
+      ['payNext', 'payNextBtn'].forEach(id => {
+        const b = document.getElementById(id); if(b) b.onclick = () => go(b); }); }
     act('paySubmit',   k => window.__db.submitRun(k));
     act('payApprove',  k => window.__db.approveRun(k));
     on('payReturn',()=>{ state.payAsk = true; render(); });
