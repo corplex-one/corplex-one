@@ -2667,7 +2667,7 @@ function vOnPayroll(){
             ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td>
         <td class="r nw">${orphan
           ? `<button class="btn ghost sm" data-salclr="${esc(r.n)}|${esc((r.c||{}).company || '')}" type="button"
-              title="${esc(NM(r.n))} is ${esc((BASIS[b]||b).toLowerCase())}, so nothing pays this figure">Take it off</button>`
+              title="${esc(NM(r.n))} is ${esc((BASIS[b]||b).toLowerCase())}, so nothing pays this figure">Clear the figure</button>`
           : ''}</td></tr>`; },
       empty: 'Nobody on the staff list yet.'
     })}
@@ -8867,11 +8867,24 @@ function render(){
     const i = b.dataset.salclr.lastIndexOf('|');
     const who = b.dataset.salclr.slice(0, i), co = b.dataset.salclr.slice(i + 1);
     const p = (salParts(who).co || []).find(c => c.company === co) || {};
-    if(!confirm('Take ' + money(p.salary || 0, 2) + ' off ' + NM(who) + "'s file"
+    /* The most recent month that actually paid them a salary. If there is one,
+       the figure is not a leftover and the basis is the thing to look at. */
+    const paid = (DATA.payroll.runs || []).slice()
+      .sort((x, y) => y.key < x.key ? -1 : 1)
+      .map(run => { const row = (run.rows || []).find(r =>
+              (r.portalName || r.name) === who && +r.salary > 0);
+            return row ? {label: run.label, salary: +row.salary} : null; })
+      .find(Boolean);
+    if(!confirm('Clear ' + money(p.salary || 0, 2) + ' from ' + NM(who) + "'s file"
       + (p.label ? ' at ' + p.label : '') + '?\n\n'
-      + NM(who) + ' is ' + (BASIS[BASISOF(who)] || '').toLowerCase() + ', so nothing pays this figure.\n'
-      + 'Any revision letter that set it stays exactly where it is \u2014 the letter went out\n'
-      + 'and they have a copy of it.')) return;
+      + 'This removes the figure and nothing else. ' + NM(who) + ' stays on the staff list,\n'
+      + 'stays ' + (BASIS[BASISOF(who)] || '').toLowerCase() + ', and no past payroll changes.\n'
+      + 'Any revision letter that set it stays where it is \u2014 the letter went out.\n\n'
+      + (paid
+         ? 'CHECK THIS FIRST: the ' + paid.label + ' run paid ' + NM(who) + ' '
+           + money(paid.salary, 2) + ' as salary.\nIf that is still how they are paid then they are not '
+           + (BASIS[BASISOF(who)] || '').toLowerCase() + ' \u2014 change\nthe basis instead and leave this figure alone.'
+         : 'No payroll month has paid ' + NM(who) + ' a salary, so nothing is losing a figure it uses.'))) return;
     b.disabled = true;
     await window.__db.clearSalary(who, co);
     render(); });
