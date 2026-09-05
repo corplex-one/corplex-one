@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609051213">
+<link rel="manifest" href="manifest.webmanifest?v=202609051306">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -446,6 +446,7 @@ main.fixed .content{flex:1;min-height:0;overflow:hidden;max-width:none;padding-b
 .regtable tr.tot td.netcol{font-weight:700}
 @media(min-width:1200px){
   .regblock .tw{overflow:visible}
+  .regblock .tw-dgrid, .regblock .tw-rgstr{overflow-x:auto}
   .regbar{position:sticky;top:56px;z-index:12}
   .regtable thead th{position:sticky;top:95px;z-index:11}
   .regtable thead th.s1,.regtable thead th.s2{z-index:13}
@@ -1249,7 +1250,7 @@ select:disabled,select option:disabled{color:var(--ink3)}
    to fit thirteen columns into a panel. So it keeps its real widths and
    scrolls sideways inside .tw rather than crushing a date into '16 Fe…'. The
    employee column is what you read down, so it is the widest and it stays. */
-.dgrid{min-width:1460px}
+.dgrid{min-width:1900px}
 .dgrid th,.dgrid td{padding-left:9px;padding-right:9px}
 /* The group heading: one document, spanning its three columns. */
 .dgrid tr.dgrp th.grp{text-align:center;font-size:11.5px;letter-spacing:.06em;
@@ -1258,8 +1259,24 @@ select:disabled,select option:disabled{color:var(--ink3)}
    On the heading it runs the full height; on a cell it is quieter. */
 .dgrid th.b,.dgrid td.b{border-left:1px solid var(--line)}
 .dgrid td.num{font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}
-/* The copy the employee uploaded. Narrow on purpose - it holds one icon. */
-.dgrid th:last-child{width:auto}
+
+/* ---------- the staff register ----------
+   Twelve columns of somebody's own words — two of them addresses — so this one
+   scrolls sideways like the documents grid, but its cells wrap instead of
+   ending in an ellipsis. Avin: 'I am ok with horizontal scrolling, but need to
+   see everything clearly', and half an address is not clearly. */
+.rgstr{min-width:2000px}
+.rgstr th,.rgstr td{padding-left:9px;padding-right:9px;vertical-align:top}
+.rgstr td{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45}
+.rgstr td.nw{white-space:nowrap}
+.rgstr tr.dgrp th.grp{text-align:center;font-size:11.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink2);padding-bottom:3px}
+.rgstr th.b,.rgstr td.b{border-left:1px solid var(--line)}
+.rgstr .miss{font-style:normal;opacity:.5}
+/* The copy the employee uploaded: one icon, under a heading that says what it
+   is. Both centred, so the paperclip sits under the word rather than beside
+   the date to its left. */
+.dgrid th.doc{text-align:center}
 .dgrid td.clipc{text-align:center;padding-left:0;padding-right:0;overflow:visible}
 .clip{font-size:15px;line-height:1;background:none;border:0;padding:3px 5px;border-radius:6px;
   color:var(--ink2);cursor:pointer}
@@ -1941,8 +1958,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609051213';</script>
-<script src="config.js?v=202609051213"></script>
-<script type="module" src="boot.js?v=202609051213"></script>
+<script>window.__BUILD = '202609051306';</script>
+<script src="config.js?v=202609051306"></script>
+<script type="module" src="boot.js?v=202609051306"></script>
 </body>
 </html>

@@ -86,6 +86,11 @@ const canSeeTeam = u => ['manager','admin','owner'].includes(roleOf(u)) || sales
 const canSeeTeamCommission = u => ['admin','owner'].includes(roleOf(u));
 const canUpload = u => roleOf(u)==='admin';
 const canAdmin = u => ['admin','owner'].includes(roleOf(u));
+/* Narrower than canAdmin on purpose: accounts, and not the owner. The staff
+   register is the one console screen the owner is not offered — see the long
+   note where it is built for why that is a choice about whose screen it is
+   rather than a restriction the database enforces. */
+const isAccounts = u => roleOf(u) === 'admin';
 const IC = {q:0,date:1,no:2,client:3,type:4,amt:5,exp:6,pc:7,net:8,elig:9,status:10,bal:11,shared:12,cn:13,ontime:14,forfeit:15,pr:16,sp:17,pm:18,recd:19,sort:20,role:21};
 
 const state = {
@@ -371,7 +376,7 @@ function byCompany(list, o){
       <div class="regbar"><b>${esc(c.name)}</b>
         <span>${rs.length} ${rs.length === 1 ? 'person' : 'people'}</span>
         ${o.note ? `<em>${o.note(rs, c)}</em>` : ''}</div>
-      <div class="tw"><table class="cotab${o.cls ? ' ' + o.cls : ''}">${o.cols || ''}
+      <div class="tw${o.cls ? ' tw-' + o.cls : ''}"><table class="cotab${o.cls ? ' ' + o.cls : ''}">${o.cols || ''}
         ${o.head}<tbody>${rs.map(o.row).join('')}${o.foot ? o.foot(rs, c) : ''}</tbody></table></div>
     </div>`;
   }).join('');
@@ -892,7 +897,15 @@ const EDTABLES = {
 
      A key is 'Rana Amine|passport|no' or 'Rana Amine|passport|exp'. Dropping
      the last segment gives 'Rana Amine|passport', which is the key both
-     writers already take, so the split at the end is the whole of it. */
+     writers already take, so the split at the end is the whole of it.
+
+     The date of birth is the third thing this table writes, under the key
+     'Rana Amine|dob|d'. It used to be a table of its own further down the
+     page, which meant correcting somebody's passport and their birth date —
+     both read off the same passport, in the same sitting — was two Edits, two
+     confirmations and two Saves. Avin's sketch of this screen puts the date of
+     birth in the second column, so that is where it is, and it goes in on the
+     same Save as everything else in the row. */
   basis: {
     title: 'Who is on payroll',
     now:  k => BASISOF(k),
@@ -911,26 +924,33 @@ const EDTABLES = {
     title: 'Staff documents',
     now:  k => { const i = k.lastIndexOf('|'), who = k.slice(0, i), rest = k.slice(i + 1);
                  const j = who.lastIndexOf('|'), n = who.slice(0, j), kind = who.slice(j + 1);
-                 return rest === 'no' ? REFOF(n, kind) : (((HR().docs||{})[n] || {})[kind]) || ''; },
+                 return kind === 'dob' ? (bdayToISO(bdayOf(n)) || '')
+                      : rest === 'no'  ? REFOF(n, kind)
+                      : (((HR().docs||{})[n] || {})[kind]) || ''; },
     name: k => { const i = k.lastIndexOf('|'), who = k.slice(0, i), rest = k.slice(i + 1);
                  const j = who.lastIndexOf('|'), n = who.slice(0, j), kind = who.slice(j + 1);
+                 if(kind === 'dob') return NM(n) + ' \u2014 date of birth';
                  const t = DOCTYPES().find(x => x.k === kind);
                  return NM(n) + ' \u2014 ' + ((t && t.label) || kind)
                       + (rest === 'no' ? ' number' : ' expiry'); },
     /* A number is shown whole here, not masked: this is the one moment you are
        being asked to check that it is right. */
-    fmt:  (v, k) => (k && k.slice(k.lastIndexOf('|') + 1) === 'exp')
-            ? (v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file')
-            : (String(v || '').trim() || 'not on file'),
+    fmt:  (v, k) => { const rest = k ? k.slice(k.lastIndexOf('|') + 1) : '';
+      return (rest === 'exp' || rest === 'd')
+        ? (v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file')
+        : (String(v || '').trim() || 'not on file'); },
     save: async d => {
-      const nos = {}, exp = {};
-      Object.keys(d).forEach(k => { const i = k.lastIndexOf('|');
-        (k.slice(i + 1) === 'no' ? nos : exp)[k.slice(0, i)] = d[k]; });
+      const nos = {}, exp = {}, dob = {};
+      Object.keys(d).forEach(k => { const i = k.lastIndexOf('|'), rest = k.slice(i + 1);
+        const who = k.slice(0, i);
+        if(rest === 'd') dob[who.slice(0, who.lastIndexOf('|'))] = d[k];
+        else (rest === 'no' ? nos : exp)[who] = d[k]; });
       /* Numbers first. If they fail the dates are not attempted, so what the
          confirmation listed and what was written cannot drift apart silently
          \u2014 the error names the half that did not go in. */
-      if(Object.keys(nos).length && !await window.__db.saveDocRefs(nos))  return null;
-      if(Object.keys(exp).length && !await window.__db.saveDocDates(exp)) return null;
+      if(Object.keys(nos).length && !await window.__db.saveDocRefs(nos))   return null;
+      if(Object.keys(exp).length && !await window.__db.saveDocDates(exp))  return null;
+      if(Object.keys(dob).length && !await window.__db.setBirthDates(dob)) return null;
       return true;
     }
   },
@@ -2430,7 +2450,23 @@ function vDocsEdit(){
       const ORDER = ['eid','passport','visa','labour'];
       const DOCS = ORDER.map(k => types.find(t => t.k === k)).filter(Boolean)
         .concat(types.filter(t => !ORDER.includes(t.k)));
-      const each = (100 - 21) / (DOCS.length * 3);
+      /* Thirteen columns wide plus the birth date, so the widths are set from
+         what each one actually has to hold at the grid's own width — a masked
+         number, a date in words, and the word "Document" whole. The heading
+         came out as "DOCUME…" the first time these were guessed at. */
+      const each = (100 - 16.5 - 8) / (DOCS.length * 3);
+      /* Second column, off the same passport as the rest of the row. A date
+         held without a year still shows what there is, with the gap named,
+         because 'not on file' would be a lie about a birthday everybody
+         already wishes somebody. */
+      const dobCell = n => {
+        const key = n + '|dob|d';
+        return `<td class="n b">${edCell('docs', key,
+          x => `<input class="ff dt" type="date"${edAttr('docs', key)} value="${esc(x)}" max="${esc(HDATE())}">`,
+          x => x ? `<span class="edread">${esc(dayLabel(x))} ${esc(String(x).slice(0,4))}</span>`
+                 : bdayOf(n) ? `<span class="edread">${esc(bdayDM(n))}</span> <span class="pill warn">no year</span>`
+                 : '<span class="miss">\u2014</span>')}</td>`;
+      };
       const refCell = (n, k) => {
         const v = REFOF(n, k);
         return `<td class="num b">${edCell('docs', n + '|' + k + '|no',
@@ -2455,17 +2491,17 @@ function vDocsEdit(){
       };
       return byCompany(rows, {
         who: n => n, cls: 'dgrid',
-        cols: colsOf([21].concat([].concat(...DOCS.map(() => [each * 1.20, each * 1.25, each * 0.55])))),
+        cols: colsOf([16.5, 8].concat([].concat(...DOCS.map(() => [each * 1.15, each * 0.955, each * 0.895])))),
         note: rs => `${rs.filter(n => gaps(n)).length} still to fill in`,
         head: `<thead>
-          <tr class="dgrp"><th></th>${DOCS.map(t =>
+          <tr class="dgrp"><th></th><th></th>${DOCS.map(t =>
             `<th class="grp b" colspan="3">${esc(t.label)}</th>`).join('')}</tr>
-          <tr><th>Employee</th>${DOCS.map(() =>
-            '<th class="b">Number</th><th>Expiry</th><th></th>').join('')}</tr>
+          <tr><th>Employee</th><th class="b">Date of birth</th>${DOCS.map(() =>
+            '<th class="b">Number</th><th>Expiry</th><th class="doc">Document</th>').join('')}</tr>
         </thead>`,
         row: n => `<tr>
           <td class="nw"${full(NM(n) + (gaps(n) ? ' \u2014 ' + gaps(n) + ' still blank' : ''))}>${nm(n)}${gaps(n)?` <span class="pill mute">${gaps(n)} blank</span>`:''}</td>
-          ${DOCS.map(t => refCell(n, t.k) + expCell(n, t.k) + clip(n, t.k)).join('')}</tr>`,
+          ${dobCell(n)}${DOCS.map(t => refCell(n, t.k) + expCell(n, t.k) + clip(n, t.k)).join('')}</tr>`,
         empty: 'Nobody matches that.'
       });
     })()}
@@ -2521,41 +2557,77 @@ function vDocsAdmin(){
   ${vProfilesAdmin()}
 
   ${(() => {
-    const roll = USERS.map(x => x.name);
-    const noYear = roll.filter(n => bdayOf(n) && !bdayYr(n)).length;
-    const none   = roll.filter(n => !bdayOf(n)).length;
-    return `<section class="panel">
-    <header><h3>Dates of birth</h3>
-      <span class="hint">${none || noYear
-        ? [none ? none + ' missing' : '', noYear ? noYear + ' without a year' : ''].filter(Boolean).join(' \u00b7 ')
-        : 'all on file'}</span>
-      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">${edBar('bdate')}</span></header>
-    ${edConfirm('bdate')}${edSaved('bdate')}
-    ${byCompany(roll.slice().sort((a, b) =>
-        (bdayToISO(bdayOf(a)) ? 1 : 0) - (bdayToISO(bdayOf(b)) ? 1 : 0) || a.localeCompare(b)), {
-      who: n => n,
-      cols: colsOf([34, 26, 40]),
-      head: `<thead><tr><th>Employee</th><th>Date of birth</th><th>Turns</th></tr></thead>`,
-      row: n => { const iso = bdayToISO(bdayOf(n));
-        const age = iso ? (() => { const t = HDATE();
-          let y = +t.slice(0,4) - +iso.slice(0,4);
-          if(t.slice(5) < iso.slice(5)) y--;
-          return y; })() : null;
-        return `<tr>
-        <td class="nw">${nm(n)}</td>
-        <td class="n nw">${edCell('bdate', n,
-          x => `<input class="ff dt" type="date"${edAttr('bdate', n)} value="${esc(x)}" max="${esc(HDATE())}">`,
-          x => x ? `<span class="edread">${esc(dayLabel(x))} ${esc(String(x).slice(0,4))}</span>`
-                 : bdayOf(n) ? `<span class="edread">${esc(bdayDM(n))}</span> <span class="pill warn">no year</span>`
-                 : '<span class="miss">not on file</span>')}</td>
-        <td style="color:var(--ink2)">${age === null ? '\u2014'
-          : age + ' this year' + (quietBday(n) ? ' \u00b7 asked not to be announced' : '')}</td></tr>`; },
+    /* The columns are Avin's, in his order and under his headings. Each one is
+       a label and the way to read it off the person, so the head, the body and
+       the count of what is still blank cannot fall out of step with each
+       other. */
+    const P = n => PROF(n) || {};
+    const GROUPS = [
+      ['Personal details', [
+        ['Gender',             9, n => P(n).gender],
+        ['Marital status',    10, n => P(n).marital],
+        ['Personal mobile',   14, n => P(n).mobile],
+        ['Personal email',    20, n => P(n).pemail],
+        ['Address in the UAE',26, n => P(n).uaeAddr]]],
+      ['Home country', [
+        ['Home country',      12, n => P(n).homeCountry],
+        ['Home address',      26, n => P(n).homeAddr],
+        ['Contact person',    15, n => P(n).homeContact],
+        ['Contact number',    14, n => P(n).homePhone]]],
+      ['Emergency contact in the UAE', [
+        ['Name',              15, n => P(n).ecName],
+        /* One long word that cannot wrap, so it needs the width outright or it
+           reads 'RELATIONSH...' */
+        ['Relationship',      15, n => P(n).ecRel],
+        ['Phone number',      14, n => P(n).ecPhone]]]
+    ];
+    const COLS = [].concat(...GROUPS.map(g => g[1]));
+    const val   = (n, c) => String(c[2](n) || '').trim();
+    const blank = n => COLS.filter(c => !val(n, c)).length;
+    const roll  = USERS.map(x => x.name);
+    /* The rows with the most missing come first, for the same reason they do
+       on the documents grid: this screen exists to be worked down. */
+    const rows  = roll.slice().sort((a, b) => blank(b) - blank(a) || a.localeCompare(b));
+    const short = rows.filter(n => blank(n)).length;
+    /* Weights, not percentages: the name is worth 34 of them and each column
+       above is worth what it has to hold, and the lot is scaled to a hundred
+       so the same numbers hold whatever the table is worth in pixels. The name
+       column is the widest because it carries a full legal name AND the count
+       of what is missing beside it; at a third of this it ended in an
+       ellipsis, which on a register of people is the one column that must
+       never be cut. */
+    const wide  = COLS.reduce((s, c) => s + c[1], 0) + 34;
+    const w     = x => x * 100 / wide;
+    const cell  = (n, c, first) => { const v = val(n, c);
+      return `<td${first ? ' class="b"' : ''}>${v ? esc(v) : '<span class="miss">\u2014</span>'}</td>`; };
+    return `<section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Staff register</h3>
+      <span class="pill ${short ? 'warn' : 'good'}"><span class="dt"></span>${
+        short ? short + (short === 1 ? ' person has' : ' people have') + ' something missing'
+              : 'nothing missing'}</span>
+      <span class="hint" style="margin-left:auto">filled in by the employee, not by you</span></header>
+    ${byCompany(rows, {
+      who: n => n, cls: 'rgstr',
+      cols: colsOf([w(34)].concat(COLS.map(c => w(c[1])))),
+      note: rs => `${rs.filter(n => blank(n)).length} of ${rs.length} incomplete`,
+      head: `<thead>
+        <tr class="dgrp"><th></th>${GROUPS.map(g =>
+          `<th class="grp b" colspan="${g[1].length}">${esc(g[0])}</th>`).join('')}</tr>
+        <tr><th>Employee name</th>${GROUPS.map(g => g[1].map((c, i) =>
+          `<th${i ? '' : ' class="b"'}>${esc(c[0])}</th>`).join('')).join('')}</tr>
+      </thead>`,
+      row: n => `<tr>
+        <td class="nw"${full(NM(n) + (blank(n) ? ' \u2014 ' + blank(n) + ' still blank' : ''))}>${nm(n)}${
+          blank(n) ? ` <span class="pill mute">${blank(n)} blank</span>` : ''}</td>
+        ${GROUPS.map(g => g[1].map((c, i) => cell(n, c, !i)).join('')).join('')}</tr>`,
       empty: 'Nobody on the staff list yet.'
     })}
-    <p class="cap">This comes off the passport, not off a form &mdash; a birth date one digit out is a gratuity
-      calculation and a visa application both quietly wrong, which is why it is yours to set and not theirs to
-      type. The people with nothing on file are at the top. <b>Colleagues see the day and the month only</b>;
-      the year is on this screen and on the person's own profile, nowhere else.</p>
+    <p class="cap">Read only, and it stays that way: every line of it is the person&rsquo;s own account of
+      themselves, kept on their profile. A blank is something to ask them for, not something to fill in from
+      memory &mdash; a home address or a next of kin taken down second-hand is worse than an empty box, because
+      it looks answered. The table scrolls sideways; the name column is what you read down.
+      <b>Only accounts can open this screen.</b> A manager cannot, and the database gives them nothing from
+      this table but their own row, so a personal mobile or a home address never reaches a colleague.</p>
   </section>`;
   })()}`;
 }
@@ -8041,7 +8113,8 @@ const TABS = [
   // ---- Documents: the hero stays put as you move between these four
   {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:canAdmin, con:true},
   {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:canAdmin, con:true},
-  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true}
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
+  {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true}
 ];
 const PERIODTABS = ['dashboard','commission','invoices','team','leaderboard','company'];
 const ALLOWED = () => TABS.filter(t=>!t.con && (!t.gate || t.gate(state.user)));
@@ -8446,8 +8519,9 @@ const PAGE = {
   // document pages all carry the same strip, and moving between them does not
   // make the count you were reading disappear.
   docsadmin:  ['docs',    ['Document expiry'], true],
-  docdates:   ['docs',    ['Staff Documents', 'Dates of birth'], true],
-  profiles:   ['docs',    ['Profile completeness'], true]
+  docdates:   ['docs',    ['Staff Documents'], true],
+  profiles:   ['docs',    ['Profile completeness'], true],
+  staffreg:   ['docs',    ['Staff register'], true]
 };
 const PAGESRC = {admin: () => vAdmin(), hradmin: () => vHRAdmin(), docs: () => vDocsAdmin()};
 
@@ -8496,6 +8570,14 @@ function render(){
   // broken.
   if(state.mode==='console' && MOBILE()){ state.mode = 'staff'; state.tab = 'deskonly'; }
   if(state.mode!=='console' && (TABS.find(t=>t.id===state.tab)||{}).con) state.tab='home';
+  /* A screen this person may not open is not opened, however they arrived at
+     it. They land on the first console screen they may have rather than on an
+     error, because being told 'no' by a page that then shows you nothing at
+     all reads as a broken link. */
+  if(state.mode==='console'){
+    const t = TABS.find(x => x.id === state.tab);
+    if(t && t.con && t.gate && !t.gate(state.user)) state.tab = (CONTABS()[0] || {id:'addstaff'}).id;
+  }
   // The company-wide figures for the year being looked at, put where every
   // sales screen already reads them from.
   if(DATA.yearFigures && DATA.yearFigures[state.year])
