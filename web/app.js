@@ -3251,6 +3251,17 @@ function vAsks(){
   const nLoan = (HR().loans||[]).filter(x=>x.status==='Pending' && x.approver===u).length;
   const nLtr  = canUpload(u) ? (HR().letters||[]).filter(x=>x.status==='Pending' && x.type!=='revision').length : 0;
   const badge = n => n ? ` <span class="segn">${n}</span>` : '';
+  /* One section, no switcher: a row of tabs with one tab in it is furniture.
+     Except that Letters is not only a thing you ASK for — it is where a letter
+     ISSUED to you arrives, a salary revision above all, and My payslip links
+     straight to it. Taking the tab away outright would stand the owner's own
+     revision letter behind a door with no handle, and the link from his
+     payslip would land him on the advances ledger. So the tab is gone until
+     there is something in it for him, which is the same rule as Leave & WFH
+     and Approve payments. He is still never shown the request form. */
+  if(roleOf(u) === 'owner'
+     && !(HR().letters || []).some(x => x.who === u
+            && !(x.type === 'revision' && x.status !== 'Issued'))) return vLoans();
   return `
   <div class="seg segbig" id="askSeg">
     <button data-ask="loans" aria-pressed="${sec==='loans'}" type="button">Advances${badge(nLoan)}</button>
@@ -3457,7 +3468,7 @@ function vLoans(){
       </tbody></table></div>
   </section>`:''}
 
-  <div class="grid g2 gtop">
+  ${roleOf(u) === 'owner' ? '' : `<div class="grid g2 gtop">
     <section class="panel">
       <header><h3>Request an advance</h3><span class="hint">${amt?'goes to '+esc((goesTo||'').split(' ')[0]):'who approves depends on the amount'}</span></header>
       <div class="pad">
@@ -3482,9 +3493,9 @@ function vLoans(){
         <dt>Leaving</dt><dd>Anything still outstanding is taken out of your final settlement.</dd>
       </dl></div>
     </section>
-  </div>
+  </div>`}
 
-  ${adm ? `<section class="panel">
+  ${adm && roleOf(u) !== 'owner' ? `<section class="panel">
     <header><h3>Your advances</h3>
       <span class="hint">accounts take advances like anybody else &mdash; these are yours</span>
       <span style="margin-left:auto;color:var(--ink3);font-size:12.5px">${mine.length}</span></header>
@@ -8266,10 +8277,17 @@ const TABS = [
   {id:'requests',    group:'hr',    label:'Leave & WFH',      title:'Leave and working from home',
    gate:u => roleOf(u) !== 'owner'
      || (HR().requests || []).some(r => r.mgr === u && r.status === 'Pending')},
-  {id:'loans',       group:'hr',    label:'Advances & letters', title:'Advances and letters'},
+  /* Letters is a thing a person asks for. The owner does not, so the page is
+     the advances ledger and the queue waiting on him — and the name in the
+     rail says what it now is rather than what it used to be. */
+  {id:'loans',       group:'hr',
+   label: roleOf(window.__ME) === 'owner' ? 'Advances' : 'Advances & letters',
+   title: roleOf(window.__ME) === 'owner' ? 'Advances' : 'Advances and letters'},
 
   {id:'myslip',      group:'hr',    label:'My payslip',       title:'My payslip', gate:u=>!isPartner(u)},
-  {id:'myticket',    group:'hr',    label:'My air ticket',    title:'My air ticket', gate:u=>!isPartner(u)},
+  // A partner is not on the scheme, and neither is the owner.
+  {id:'myticket',    group:'hr',    label:'My air ticket',    title:'My air ticket',
+   gate:u => !isPartner(u) && roleOf(u) !== 'owner'},
   // ---- Pay: the month, and everything that lands on a payslip
   {id:'payroll',    group:'con', sec:'pay',    label:'Payroll',        title:'Payroll', gate:canAdmin, con:true},
   {id:'payslips',   group:'con', sec:'pay',    label:'Payslips',       title:'Payslips', gate:canAdmin, con:true},
