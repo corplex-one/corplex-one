@@ -457,7 +457,10 @@ window.__db = {
          mobile:'mobile', pemail:'personal_email', uaeAddr:'uae_address',
          homeAddr:'home_address', homeContact:'home_contact', homePhone:'home_phone',
          ecName:'ec_name', ecRel:'ec_relation', ecPhone:'ec_phone', ecAlt:'ec_alt',
-         gender:'gender', marital:'marital'},
+         gender:'gender', marital:'marital',
+         /* A blank one is the person's to fill. Changing one accounts has
+            already recorded is refused by the database, not by this file. */
+         eid:'emirates_id', passport:'passport_no', visa:'visa_no', labour:'labour_no'},
 
   // Everything the person changed, in one go, when they press Save. The two
   // tables are split by who may read them, so a save may touch either or both.

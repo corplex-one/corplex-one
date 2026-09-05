@@ -3833,6 +3833,40 @@ const UPLOADS = () => HR().uploadTypes || [];
    screen; masked by default because they are government identifiers and this
    table is looked at with somebody standing behind you. */
 const REFOF = (n, k) => ((HR().ref || {})[n] || {})[k] || '';
+/* Emirates ID, passport and residence visa are wanted from everybody; the
+   labour card is not, and the upload list has said so all along. One list,
+   so the two screens cannot disagree about what is needed. */
+const REFKINDS = [
+  {k:'eid',      label:'Emirates ID',    ph:'784-0000-0000000-0'},
+  {k:'passport', label:'Passport',       ph:'as printed on the page'},
+  {k:'visa',     label:'Residence visa', ph:'the number on the visa'},
+  {k:'labour',   label:'Labour card',    ph:'the MOHRE number'}
+];
+const refNeeded = k => ((HR().uploadTypes || []).find(t => t.k === k) || {}).need !== false;
+/* What a person is shown for each of the four. A number accounts holds is
+   read-only and masked; a blank one is a box. */
+function refRows(u){
+  const mine = u === state.user;
+  let shown = 0;
+  const rows = REFKINDS.map(t => {
+    const v = REFOF(u, t.k);
+    if(v){ shown++;
+      return `<dt>${esc(t.label)}</dt><dd style="font-family:inherit;font-weight:600">
+        <span class="refval" data-full="${esc(v)}">${esc(maskRef(v))}</span>${shown === 1 ?
+        ` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>` : ''}</dd>`;
+    }
+    if(!mine) return '';
+    return `<dt>${esc(t.label)}${refNeeded(t.k) ? '' : ' <span class="pill mute">optional</span>'}</dt>
+      <dd style="font-family:inherit"><input class="refin" data-pf="${esc(t.k)}"
+        value="${esc((state.pfDirty || {})[t.k] || '')}" placeholder="${esc(t.ph)}"
+        aria-label="${esc(t.label)} number"></dd>`;
+  }).join('');
+  const missing = REFKINDS.filter(t => !REFOF(u, t.k));
+  if(!mine && !shown) return '';
+  return rows + (!mine && missing.length
+    ? `<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">${
+        esc(missing.map(x => x.label).join(', '))}</dd>` : '');
+}
 /* Two characters, four dots, four characters — the same shape whatever the
    document, so it fits a column and two rows can still be told apart. It is
    deliberately not "everything but the last digit": a mask that keeps almost
@@ -3866,6 +3900,10 @@ const PFIELDS = [
    note:'Only you and accounts see this. Colleagues get the work number.', row:2},
   {k:'pemail',      label:'Personal email',         group:'you',   req:true,  ph:'you@example.com', row:3},
   {k:'uaeAddr',     label:'Address in the UAE',     group:'you',   req:true,  ph:'Flat, building, area, emirate', row:3},
+  {k:'eid',         label:'Emirates ID',            group:'ref',   req:true,  ref:true},
+  {k:'passport',    label:'Passport',               group:'ref',   req:true,  ref:true},
+  {k:'visa',        label:'Residence visa',         group:'ref',   req:true,  ref:true},
+  {k:'labour',      label:'Labour card',            group:'ref',   req:false, ref:true},
   {k:'homeCountry', label:'Home country',           group:'home',  req:true,  pick:'country', row:1},
   {k:'homeAddr',    label:'Permanent address',      group:'home',  req:true,  ph:'Address back home', row:1},
   {k:'homeContact', label:'Contact there',          group:'home',  req:false, ph:'Name of someone at that address', row:2},
@@ -3914,7 +3952,7 @@ function vProfile(){
       : `<input id="pf_${f.k}" data-pf="${f.k}" value="${esc(p[f.k]||'')}" placeholder="${esc(f.ph||'')}">`}${
       f.note ? `<span class="pfhint">${esc(f.note)}</span>` : ''}</div>`;
   const grp = g => {
-    const fs = PFIELDS.filter(f=>f.group===g);
+    const fs = PFIELDS.filter(f=>f.group===g && !f.ref);
     const rows = [...new Set(fs.map(f=>f.row||0))];
     return rows.map(r => {
       const line = fs.filter(f=>(f.row||0)===r);
@@ -3951,7 +3989,7 @@ function vProfile(){
       <div class="pad">${grp('you')}</div>
     </section>
     <section class="panel">
-      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span></header>
+      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; a document number with a box is yours to fill in</span></header>
       <div class="pad"><dl class="kv">
         ${ro('Employee ID', r.id)}
         ${ro('Company', co.name)}
@@ -3962,18 +4000,9 @@ function vProfile(){
         ${ro('Reports to', mgrName(u) || '—')}
         ${ro('Work email', emailOf(u) || r.email)}
         ${phoneOf(u) ? ro('Work phone', phoneOf(u)) : ''}
-        ${(() => {
-          const REFS = [['eid','Emirates ID'],['passport','Passport'],['visa','Residence visa'],['labour','Labour card']];
-          const have = REFS.filter(([k]) => REFOF(u, k));
-          if(!have.length) return '';
-          return have.map(([k, l], i) => `<dt>${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
-            <span class="refval" data-full="${esc(REFOF(u, k))}">${esc(maskRef(REFOF(u, k)))}</span>${i ? '' :
-            ` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>`}</dd>`).join('')
-            + (have.length < REFS.length ? `<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">${
-                esc(REFS.filter(([k]) => !REFOF(u, k)).map(x => x[1]).join(', '))}</dd>` : '');
-        })()}
+        ${refRows(u)}
       </dl>
-      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID, passport, residency visa and labour card numbers</b> are held because payroll, insurance and the MOHRE filings need them &mdash; only you and accounts can see them, on any screen, they are never in an email, and they are masked until you press Show. They are accounts&rsquo; to type, off the documents themselves; if one of them is wrong or missing here, tell accounts. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
+      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID, passport, residency visa and labour card numbers</b> are held because payroll, insurance and the MOHRE filings need them &mdash; only you and accounts can see them, on any screen, they are never in an email, and they are masked until you press Show. A number that is missing is yours to type in from the document; once it is on file it becomes accounts&rsquo; to correct, because they check it against the document itself &mdash; so if one shown here is wrong, tell them rather than us both holding a different number. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
     </section>
     <section class="panel">
       <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>

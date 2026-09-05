@@ -147,6 +147,11 @@ export function buildData(db, meId){
       ecName: p.ec_name || '', ecRel: p.ec_relation || '',
       ecPhone: p.ec_phone || '', ecAlt: p.ec_alt || '',
       gender: p.gender || '', marital: p.marital || '',
+      /* The four numbers live in the profile as well as in hr.ref, because
+         the profile is what completeness is measured against and what the
+         person fills in. hr.ref stays: the console reads it. */
+      eid: p.emirates_id || '', passport: p.passport_no || '',
+      visa: p.visa_no || '', labour: p.labour_no || '',
       updated: p.updated_at ? String(p.updated_at).slice(0,10) : ''
     });
     /* The four references, together, because the screen shows them together.
