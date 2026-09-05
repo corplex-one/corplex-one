@@ -70,6 +70,7 @@ const TABLES = {
   document_dates:   ['document_dates'],
   company_docs:     ['company_docs'],
   exits:            ['exits'],
+  exit_lines:       ['exit_lines'],
   tickets:          ['ticket_entitlements'],
   ticket_history:   ['ticket_history'],
   sales_invoices:   ['sales_invoices'],
@@ -165,6 +166,29 @@ async function start(session){
     busy(false);
     return;
   }
+
+  /* Somebody who has left.
+   *
+   * Until now nothing checked: the sign-in found a person by their login and
+   * let them in, so "switching off access" meant deleting the account in
+   * Supabase and was therefore something to remember on the right day.
+   *
+   * Initiating an exit marks the record inactive and writes the last working
+   * day, and both are needed here. Inactive alone would lock somebody out the
+   * moment accounts started the paperwork — often a fortnight before they
+   * actually go — so the door closes the day AFTER their last day and not
+   * before. Nothing is deleted; they simply cannot get in.
+   */
+  const today = new Date().toISOString().slice(0, 10);
+  if(mine.active === false && mine.last_day && String(mine.last_day).slice(0, 10) < today){
+    await sb.auth.signOut();
+    show($('login')); settled();
+    say('Your last working day has passed, so this account is closed. '
+      + 'If you need a payslip or your settlement, email accounts@corplex.ae.', 'bad');
+    busy(false);
+    return;
+  }
+
   ME = mine;
 
   DB = await loadAll();
@@ -1034,6 +1058,98 @@ window.__db = {
     }catch(e){ oops(e, 'That reporting line'); await reload(); return null; }
   },
 
+  /* The exit settlement.
+   *
+   * Every one of these is an RPC rather than a write, because the stages have
+   * an order and a table with an update policy cannot enforce one. The
+   * database decides who may approve, what a freeze means, and whether a
+   * month may close; this only asks. See 0038_exit_settlement.sql.
+   */
+  async saveExit(x){
+    const id = this.empId(x.who);
+    if(!id){ oops(new Error(x.who + ' is not in the staff list'), 'That settlement'); return null; }
+    try{
+      const {data, error} = await sb.rpc('exit_save', {
+        p_exit: x.id || null, p_employee: id,
+        p_last_day: x.lastDay, p_settled: x.settled || x.lastDay,
+        p_reason: x.reason || null, p_notes: x.notes || null,
+        p_lines: x.lines || []});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'That settlement'); await reload(); return null; }
+  },
+
+  /* The figures are worked out on screen from the same data the screen shows,
+     and handed over to be written down as they stand. The database does not
+     recompute them — that is what freezing means. */
+  async initiateExit(exitId, c){
+    try{
+      const frozen = {
+        period: c.period, paidDays: c.paidDays, lop: c.lop,
+        salary: c.salary, basic: c.basic, dayBasic: c.dayBasic,
+        mBasic: c.mBasic, mAllow: c.mAllow, monthPay: c.monthPay,
+        grat: c.grat, years: c.years, days: c.days, capped: !!c.capped,
+        leaveDays: c.leaveDays, leaveCash: c.leaveCash,
+        ticket: c.ticket, adv: c.adv,
+        extra: (c.extra || []).map(l => ({label: l.label, amount: +l.amount || 0, deduct: !!l.deduct})),
+        addOn: c.addOn, takeOff: c.takeOff, net: c.net,
+        doj: c.doj, lwd: c.lwd, settleDate: c.settleDate
+      };
+      const {error} = await sb.rpc('exit_initiate',
+        {p_exit: exitId, p_frozen: frozen, p_net: c.net});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Initiating the exit'); await reload(); return null; }
+  },
+
+  async approveExit(exitId){
+    try{
+      const {error} = await sb.rpc('exit_approve', {p_exit: exitId});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That approval'); await reload(); return null; }
+  },
+
+  // undo by accounts and sent-back by an approver are the same move
+  async sendExitBack(exitId, why){
+    try{
+      const {error} = await sb.rpc('exit_send_back', {p_exit: exitId, p_why: why || null});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Sending it back'); await reload(); return null; }
+  },
+
+  async withdrawExit(exitId){
+    try{
+      const {error} = await sb.rpc('exit_withdraw', {p_exit: exitId});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Withdrawing the settlement'); await reload(); return null; }
+  },
+
+  async decideExit(exitId, mode){
+    try{
+      const {error} = await sb.rpc('exit_decide', {p_exit: exitId, p_mode: mode});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'That decision'); await reload(); return null; }
+  },
+
+  async exitPaid(exitId, on){
+    try{
+      const {error} = await sb.rpc('exit_paid', {p_exit: exitId, p_on: on || null});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Marking it paid'); await reload(); return null; }
+  },
+
   /* Saving a whole table at once, having been shown what will change.
    *
    * Avin: 'I am finding this risky... Imagine leave balance increased by a
@@ -1139,6 +1255,51 @@ window.__db = {
         : sb.from('document_dates').delete().eq('employee_id', id).eq('kind', kind));
     }
     return this.saveAll('Document dates', jobs);
+  },
+
+  /* The date of birth. Held as text on the staff row — '16 Feb 1991' — and
+   * sent that way, because that is what every reader of it already parses.
+   * The trigger on employees refuses this for anybody but accounts, whatever
+   * the screen offers, so there is no check to repeat here. */
+  MONS3: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
+
+  async setBirthDates(map){
+    const jobs = [];
+    for(const [who, v] of Object.entries(map)){
+      const id = this.empId(who);
+      if(!id){ oops(new Error(who + ' is not in the staff list'), 'Dates of birth'); return null; }
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || '').trim());
+      if(v && !m){ oops(new Error('"' + v + '" is not a date'), 'Dates of birth'); return null; }
+      const txt = m ? (+m[3]) + ' ' + this.MONS3[+m[2] - 1] + ' ' + m[1] : null;
+      jobs.push(() => sb.from('employees').update({birthday: txt}).eq('id', id));
+    }
+    return this.saveAll('Dates of birth', jobs);
+  },
+
+  /* The four government reference numbers. They live on employee_private
+   * beside the Emirates ID, under that table's rule — the person themselves,
+   * and accounts — so the database refuses this for anybody else however the
+   * screen was reached. One upsert per person rather than one per number:
+   * changing somebody's passport and their labour card together is a single
+   * row either way, and two upserts on one row race each other. */
+  REFCOL: {eid: 'emirates_id', passport: 'passport_no', visa: 'visa_no', labour: 'labour_no'},
+
+  async saveDocRefs(map){
+    const byPerson = {};
+    for(const [k, v] of Object.entries(map)){
+      const i = k.lastIndexOf('|'), who = k.slice(0, i), kind = k.slice(i + 1);
+      const col = this.REFCOL[kind];
+      if(!col){ oops(new Error('There is no field for "' + kind + '"'), 'Document numbers'); return null; }
+      const id = this.empId(who);
+      if(!id){ oops(new Error(who + ' is not in the staff list'), 'Document numbers'); return null; }
+      // A cleared box means "there is no number on file", not an empty string.
+      (byPerson[id] || (byPerson[id] = {}))[col] = String(v || '').trim() || null;
+    }
+    const jobs = Object.entries(byPerson).map(([id, cols]) => () =>
+      sb.from('employee_private').upsert(
+        Object.assign({employee_id: id, updated_at: new Date().toISOString()}, cols),
+        {onConflict: 'employee_id'}));
+    return this.saveAll('Document numbers', jobs);
   },
 
   /* The payroll figures. Each one goes through set_payroll_line, which is

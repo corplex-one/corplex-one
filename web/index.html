@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609042102">
+<link rel="manifest" href="manifest.webmanifest?v=202609042341">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -680,6 +680,25 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
 .slwords{text-align:right;margin:14px 0 0;font-size:12.5px;color:#1b1b1b}
 .slwords span{color:#5a5a5a}
 .slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}
+.revsent{max-height:420px;overflow-y:auto}
+.revsent thead th{position:sticky;top:0;background:var(--panel);z-index:1;box-shadow:0 1px 0 var(--line)}
+/* the settlement box on a month: beside the run, never inside it */
+.exbox{margin:16px 18px 18px;border:1px solid var(--warn);border-radius:10px;overflow:hidden;background:var(--panel)}
+.exbox.done{border-color:var(--line)}
+.exboxh{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--warnBg);
+  font-size:13px;font-weight:700;color:var(--warn);flex-wrap:wrap}
+.exbox.done .exboxh{background:var(--goodBg);color:var(--good)}
+.exboxh span{margin-left:auto;font-weight:400;color:var(--ink2);font-size:12.5px}
+.exbox .cap{border-top:1px solid var(--line2)}
+/* the free lines on a settlement, and the small segmented add/deduct */
+.exline{display:grid;grid-template-columns:minmax(0,1fr) 130px auto;gap:9px;margin-bottom:9px;align-items:center}
+.exline .ff{width:100%}
+.exline .ff.n{text-align:right;font-variant-numeric:tabular-nums}
+.seg.sm button{padding:5px 11px;font-size:12px}
+.exdrop{border:0;background:none;color:var(--ink3);font-size:16px;line-height:1;padding:0 4px;margin-left:6px;
+  cursor:pointer;vertical-align:-1px}
+.exdrop:hover{color:var(--bad)}
+@media (max-width:700px){.exline{grid-template-columns:1fr;gap:7px}}
 /* the settlement: the payslip's paper, a leaver's document */
 .settle .slhead{border-bottom:0;padding-bottom:13px}
 .stbar{text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
@@ -1172,6 +1191,38 @@ select:disabled,select option:disabled{color:var(--ink3)}
 .frow.c3{grid-template-columns:1fr 1fr 1fr}
 .frow .field{margin-bottom:14px}
 .bdrow{display:grid;grid-template-columns:96px 1fr;gap:8px}
+/* A field that is shown rather than typed. It sits on the same baseline as the
+   inputs beside it so a row does not go ragged, but it carries no border and no
+   background — the point is that there is nothing here to press. */
+.pfread{min-height:38px;display:flex;align-items:center;gap:6px;font-size:15px;color:var(--ink)}
+/* "Nothing on file" wherever a value is expected and absent. */
+.miss{color:var(--ink3);font-style:italic}
+/* Inside the grid the same span stands for one blank cell among many, so it is
+   a quiet dash rather than eight italic sentences a row. */
+.dgrid .miss{font-style:normal;opacity:.5}
+
+/* ---------- the staff documents grid ----------
+   Four documents across, three things under each, and there is no honest way
+   to fit thirteen columns into a panel. So it keeps its real widths and
+   scrolls sideways inside .tw rather than crushing a date into '16 Fe…'. The
+   employee column is what you read down, so it is the widest and it stays. */
+.dgrid{min-width:1460px}
+.dgrid th,.dgrid td{padding-left:9px;padding-right:9px}
+/* The group heading: one document, spanning its three columns. */
+.dgrid tr.dgrp th.grp{text-align:center;font-size:11.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink2);padding-bottom:3px}
+/* A hairline at the start of each document, so the eye knows where one ends.
+   On the heading it runs the full height; on a cell it is quieter. */
+.dgrid th.b,.dgrid td.b{border-left:1px solid var(--line)}
+.dgrid td.num{font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}
+/* The copy the employee uploaded. Narrow on purpose - it holds one icon. */
+.dgrid th:last-child{width:auto}
+.dgrid td.clipc{text-align:center;padding-left:0;padding-right:0;overflow:visible}
+.clip{font-size:15px;line-height:1;background:none;border:0;padding:3px 5px;border-radius:6px;
+  color:var(--ink2);cursor:pointer}
+.clip:hover{background:var(--panel2);color:var(--ink)}
+.clip.no{opacity:.32;cursor:default;filter:grayscale(1)}
+.clip.no:hover{background:none}
 .pfgrid{align-items:stretch}
 .pfgrid > .panel{display:flex;flex-direction:column;height:100%}
 .pfgrid > .panel > .pad{flex:1}
@@ -1317,7 +1368,12 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   /* the two attendance forms, side by side; the day's own segments run the
      width of the left card rather than the page */
   .attpair > section{min-width:0}
-  .attpair .rgform{grid-template-columns:minmax(0,1fr)}
+  /* Which day, checked in at, checked out at — one row, as Avin asked. It sat
+     in half the width and was stacked into three; at the widths this runs at
+     the three fit that half, and under 900px the pair collapses to one column
+     anyway, which is where stacking them is right. */
+  .attpair .rgform{grid-template-columns:minmax(0,1.5fr) 1fr 1fr;gap:10px}
+  @media (max-width:900px){ .attpair .rgform{grid-template-columns:minmax(0,1fr)} }
   @media (max-width:1180px){ .attpair{grid-template-columns:minmax(0,1fr)} }
 
   /* the two lines under the three leave columns: one gap, not two margins
@@ -1390,6 +1446,11 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .nudge.loud .ndot{background:var(--bad)}
   .nudge b{display:block;font-size:14.5px}
   .nudge span:not(.ndot){display:block;color:var(--ink2);font-size:13.5px;margin-top:2px}
+  /* A banner may carry one action. It sits at the right, centred against the
+     two lines of text, and drops under them when there is no room. */
+  .nudge > div{flex:1;min-width:0}
+  .nudge > .btn{flex:none;align-self:center;margin-left:auto}
+  @media(max-width:640px){ .nudge{flex-wrap:wrap} .nudge > .btn{margin-left:20px} }
 
   /* what the record says about where a check-in came from */
   .wmark{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:20px;
@@ -1404,8 +1465,13 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .ciwrow input{flex:1;min-width:0}
 
   /* fixing a missed day */
-  .rgform{display:grid;grid-template-columns:minmax(0,1.6fr) 130px 130px;gap:14px;
-    margin-bottom:16px}
+  /* Three fixed tracks rather than a fraction, because this form is drawn at
+     two widths: half the screen beside Check in and out, and the whole of it
+     on the Regularization tab. A 1.6fr day box is right in the first and
+     absurd in the second. */
+  .rgform{display:grid;grid-template-columns:minmax(200px,380px) 150px 150px;gap:14px;
+    justify-content:start;margin-bottom:16px}
+  .rgform label.wide{max-width:700px}
   .rgform label{display:flex;flex-direction:column;gap:5px;min-width:0}
   .rgform label.wide{grid-column:1/-1}
   .rgform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
@@ -1827,8 +1893,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609042102';</script>
-<script src="config.js?v=202609042102"></script>
-<script type="module" src="boot.js?v=202609042102"></script>
+<script>window.__BUILD = '202609042341';</script>
+<script src="config.js?v=202609042341"></script>
+<script type="module" src="boot.js?v=202609042341"></script>
 </body>
 </html>

@@ -81,7 +81,7 @@ export function buildData(db, meId){
     // ACT on somebody — confirm them, correct their joining, send their letter
     // — have something to name them by that a rename cannot break. It is never
     // printed: checkscreens fails the build if a UUID reaches a screen.
-    ids:{}, joined:{}, probation:{}, revisions:[],
+    ids:{}, joined:{}, probation:{}, revisions:[], ref:{},
     // the rules that decide who counts as sales. Empty here reads as "nobody
     // qualifies", which is why these must come from settings, not a placeholder.
     revDept:     S.rev_dept     || {},
@@ -143,6 +143,11 @@ export function buildData(db, meId){
       gender: p.gender || '', marital: p.marital || '',
       updated: p.updated_at ? String(p.updated_at).slice(0,10) : ''
     });
+    /* The four references, together, because the screen shows them together.
+       They arrive only for the person themselves and for accounts — the rules
+       on employee_private decide that, not this file. */
+    hr.ref[n] = {eid: p.emirates_id || '', passport: p.passport_no || '',
+                 visa: p.visa_no || '', labour: p.labour_no || ''};
     if(p.emirates_id) hr.eid[n] = p.emirates_id;
   });
 
@@ -385,7 +390,11 @@ export function buildData(db, meId){
     // in a variable, which meant it survived exactly as long as the tab did.
     note: r.note || '',
     submittedBy: name(r.submitted_by), paidBy2: name(r.paid_by),
-    rows: (db.payroll_lines || []).filter(l => l.run_id === r.id).map(lineOf)
+    /* A line marked excluded belongs to somebody whose exit has been
+       initiated: they are off this month's run and their settlement is a box
+       beside it instead. The line is kept rather than deleted so that sending
+       the settlement back can put them straight back on. */
+    rows: (db.payroll_lines || []).filter(l => l.run_id === r.id && !l.excluded).map(lineOf)
   }));
 
   const run = runs[0];
@@ -396,9 +405,9 @@ export function buildData(db, meId){
       preparedBy: name(run.prepared_by), approver: name(run.approver),
       label: Object.fromEntries(Object.values(companies).map(c => [c.code, c.name])),
       channels: S.payroll_channels || [],
-      vatOn: (db.payroll_lines || []).filter(l => l.vat).map(l => name(l.employee_id) || l.name)
+      vatOn: (db.payroll_lines || []).filter(l => l.vat && !l.excluded).map(l => name(l.employee_id) || l.name)
     });
-    const lines = (db.payroll_lines || []).filter(l => l.run_id === run.id);
+    const lines = (db.payroll_lines || []).filter(l => l.run_id === run.id && !l.excluded);
     if(lines.length) payroll.rows = lines.map(l => ({
       lineId: l.id, vat: !!l.vat,
       name: l.name, portalName: name(l.employee_id) || l.name, id: l.staff_no || '',
@@ -489,9 +498,36 @@ export function buildData(db, meId){
     expiry: d.expiry ? String(d.expiry).slice(0,10) : ''
   }));
 
+  /* A settlement, at whatever stage it has reached.
+   *
+   * `frozen` is the whole calculation as it stood when the exit was initiated,
+   * written down so that a salary revision or another month of leave accrual
+   * cannot move a figure somebody has signed a declaration for. While it is
+   * still a draft there is nothing frozen and the screen works it out live. */
+  const exLines = {};
+  (db.exit_lines || []).forEach(l => (exLines[l.exit_id] = exLines[l.exit_id] || []).push({
+    id: l.id, label: l.label || '', amount: Number(l.amount) || 0,
+    deduct: !!l.deduct, sort: l.sort || 0
+  }));
+  Object.values(exLines).forEach(a => a.sort((p, q) => p.sort - q.sort));
+
   hr.exits = (db.exits || []).map(x => ({
+    id: x.id,
     who: name(x.employee_id), lastDay: String(x.last_day).slice(0,10),
-    reason: x.reason || '', status: x.status, notes: x.notes || ''
+    settled: x.settled_on ? String(x.settled_on).slice(0,10) : '',
+    reason: x.reason || '', status: x.status || 'draft', notes: x.notes || '',
+    month: x.pay_month || '',
+    frozen: x.frozen || null,
+    net: x.net === null || x.net === undefined ? null : Number(x.net),
+    mgr: x.manager_id ? name(x.manager_id) : '',
+    mgrOkBy: x.mgr_ok_by ? name(x.mgr_ok_by) : '',
+    mgrOkAt: x.mgr_ok_at ? String(x.mgr_ok_at).slice(0,10) : '',
+    ownerOkBy: x.owner_ok_by ? name(x.owner_ok_by) : '',
+    ownerOkAt: x.owner_ok_at ? String(x.owner_ok_at).slice(0,10) : '',
+    backWhy: x.back_why || '', backBy: x.back_by ? name(x.back_by) : '',
+    payMode: x.pay_mode || '', paidOn: x.paid_on ? String(x.paid_on).slice(0,10) : '',
+    by: x.created_by ? name(x.created_by) : '',
+    lines: exLines[x.id] || []
   })).filter(x => x.who);
 
   hr.letterTypes   = S.letter_types   || [];

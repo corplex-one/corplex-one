@@ -99,7 +99,9 @@ const state = {
   invFilter: {q:'Q2', status:'all', text:'', type:'all', sp:'all', pm:'all', role:'all'},
   invSort: {key:null, dir:1},
   payCompany: 'all',
-  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null, reqForm: null, reqSent: false, onOfficeNet: true,
+  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null,
+  exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',
+  revQ: '', refShow: false, dirWho: null, attTab: 'me', reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
   lnForm: null, lnSent: false, exitWho: '', exitLwd: '', exitSettle: '', mailPick: 'weekly', mailWeek: null,
@@ -571,6 +573,18 @@ const REQTYPES = [
 const LEAVEONLY = () => REQTYPES.filter(t=>!t.wfh);
 const MIDX = {Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12};
 const bdayOf = u => ((HR().birthdays||{})[u]||{}).d || '';
+/* '16 Feb 1991' is what is on file; '16 Feb' is what a colleague sees. BDM is
+   the one that goes on a screen unless the viewer is the person themselves or
+   accounts, and BYEAR is how a screen asks whether the year is known yet. */
+const BDM    = v => String(v || '').split(' ').slice(0, 2).join(' ');
+const BYEAR  = v => (String(v || '').split(' ')[2] || '');
+const bdayDM = u => BDM(bdayOf(u));
+const bdayYr = u => BYEAR(bdayOf(u));
+// '16 Feb 1991' <-> '1991-02-16', for the one box that sets it
+const bdayToISO = v => { const p = String(v||'').split(' '); const mm = MIDX[p[1]];
+  return (p[2] && mm) ? `${p[2]}-${String(mm).padStart(2,'0')}-${String(+p[0]).padStart(2,'0')}` : ''; };
+const bdayFromISO = v => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v||'').trim());
+  return m ? `${+m[3]} ${Object.keys(MIDX)[+m[2]-1]} ${m[1]}` : ''; };
 function bdayDate(u){
   const dm = bdayOf(u); if(!dm) return '';
   const [d,m] = dm.split(' '); const mm = MIDX[m]; if(!mm) return '';
@@ -703,7 +717,7 @@ const usesPool = id => !!rType(id).pool;
 const isUnpaid = id => rType(id).pay==='none';
 function typeAllowed(u, t){
   if(t.onBday){
-    if(!bdayOf(u)) return {ok:false, why:'add your birthday on My profile first'};
+    if(!bdayOf(u)) return {ok:false, why:'accounts has not put your birthday on file yet \u2014 ask them'};
     const K = bdayBal(u);
     if(K.today && K.credited > 0 && K.open <= 0)
       return {ok:false, why: K.pending > 0 ? 'already requested, waiting on your manager' : 'already taken today'};
@@ -771,6 +785,8 @@ const CMARK = {
 };
 const cmark = (k, sz) => `<svg viewBox="0 0 24 24" width="${sz||24}" height="${sz||24}" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${CMARK[k]}</svg>`;
 const quietBday = u => !!((HR().profile||{})[u]||{}).quietBday;
+// the year is yours and accounts', and nobody else's, on any screen
+const SEESALL = u => u === state.user || canAdmin(state.user);
 const dmOf = iso => iso.slice(5);
 // everyone's birthday as a MM-DD, minus anyone who asked to be left out
 function bdayMap(){
@@ -787,7 +803,7 @@ function bdayMap(){
 function celebsOn(iso){
   const key = dmOf(iso), bm = bdayMap();
   const bdays = Object.keys(bm).filter(n=>bm[n]===key)
-    .map(n=>({n, dm:(HR().birthdays[n]||{}).d}));
+    .map(n=>({n, dm:BDM((HR().birthdays[n]||{}).d)}));
   const annis = USERS.map(x=>x.name).map(n=>{
     const j = parseDoj(((HR().balances||{})[n]||{}).doj);
     if(!j) return null;
@@ -867,14 +883,48 @@ const EDTABLES = {
             : String(v || '\u2014'),
     save: d => window.__db.saveHolidays(d, HR().holidays || [])
   },
-  docdates: {
-    title: 'Document expiry dates',
-    now:  k => { const i = k.lastIndexOf('|');
-                 return (((HR().docs||{})[k.slice(0,i)] || {})[k.slice(i+1)]) || ''; },
-    name: k => { const i = k.lastIndexOf('|'), t = DOCTYPES().find(x => x.k === k.slice(i+1));
-                 return NM(k.slice(0,i)) + ' \u2014 ' + ((t && t.label) || k.slice(i+1)); },
+  /* The grid holds a number and an expiry date for each of four documents,
+     and it is one table on the screen, so it is one table here: one Edit, one
+     list of what is about to change, one Save. Two Edit buttons on one grid
+     would mean a number and its own expiry could not be corrected in the same
+     sitting, which is exactly how they arrive — off one card.
+
+     A key is 'Rana Amine|passport|no' or 'Rana Amine|passport|exp'. Dropping
+     the last segment gives 'Rana Amine|passport', which is the key both
+     writers already take, so the split at the end is the whole of it. */
+  bdate: {
+    title: 'Dates of birth',
+    now:  k => bdayToISO(bdayOf(k)),
+    name: k => NM(k) + ' \u2014 date of birth',
     fmt:  v => v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file',
-    save: d => window.__db.saveDocDates(d)
+    save: d => window.__db.setBirthDates(d)
+  },
+  docs: {
+    title: 'Staff documents',
+    now:  k => { const i = k.lastIndexOf('|'), who = k.slice(0, i), rest = k.slice(i + 1);
+                 const j = who.lastIndexOf('|'), n = who.slice(0, j), kind = who.slice(j + 1);
+                 return rest === 'no' ? REFOF(n, kind) : (((HR().docs||{})[n] || {})[kind]) || ''; },
+    name: k => { const i = k.lastIndexOf('|'), who = k.slice(0, i), rest = k.slice(i + 1);
+                 const j = who.lastIndexOf('|'), n = who.slice(0, j), kind = who.slice(j + 1);
+                 const t = DOCTYPES().find(x => x.k === kind);
+                 return NM(n) + ' \u2014 ' + ((t && t.label) || kind)
+                      + (rest === 'no' ? ' number' : ' expiry'); },
+    /* A number is shown whole here, not masked: this is the one moment you are
+       being asked to check that it is right. */
+    fmt:  (v, k) => (k && k.slice(k.lastIndexOf('|') + 1) === 'exp')
+            ? (v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file')
+            : (String(v || '').trim() || 'not on file'),
+    save: async d => {
+      const nos = {}, exp = {};
+      Object.keys(d).forEach(k => { const i = k.lastIndexOf('|');
+        (k.slice(i + 1) === 'no' ? nos : exp)[k.slice(0, i)] = d[k]; });
+      /* Numbers first. If they fail the dates are not attempted, so what the
+         confirmation listed and what was written cannot drift apart silently
+         \u2014 the error names the half that did not go in. */
+      if(Object.keys(nos).length && !await window.__db.saveDocRefs(nos))  return null;
+      if(Object.keys(exp).length && !await window.__db.saveDocDates(exp)) return null;
+      return true;
+    }
   },
   payline: {
     title: 'Payroll figures',
@@ -1128,6 +1178,16 @@ function monthSummary(u, ym){
 }
 
 /* ---------- HR views ---------- */
+function attTabs(){
+  const T = [['me','My attendance'], ['reg','Regularization']];
+  const cur = T.some(x => x[0] === state.attTab) ? state.attTab : 'me';
+  const wait = REG().mine.filter(r => r.status === 'Pending').length;
+  return {cur, bar: `<div class="seg segbig" id="attSeg">${T.map(([v, l]) =>
+    `<button data-att="${v}" aria-pressed="${cur === v}" type="button">${esc(l)}${
+      v === 'reg' && wait ? ` <span class="pill warn" style="margin-left:6px;padding:0 7px">${wait}</span>` : ''
+    }</button>`).join('')}</div>`};
+}
+
 function vAttend(){
   const u = state.user, today = HDATE();
   if(!tracksAtt(u)) return `<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
@@ -1155,8 +1215,22 @@ function vAttend(){
     <td>${esc(g.loc)}${whereMark(g)}</td><td class="n r">${g.out?hhmm(mins(g.out)-mins(g.in)):'—'}</td>
     <td style="color:var(--ink2);font-size:12.5px">${esc(g.note||'')}</td></tr>`;
 
+  const AT = attTabs();
+  /* The list is on both halves on purpose. On Regularization it is the point
+     of the page; under the form on My attendance it is the answer to "did
+     that go anywhere", four inches from where the question was asked. */
+  if(AT.cur === 'reg') return `
+  ${nudgeBanner(u)}
+  ${AT.bar}
+  ${regularForm(u) || `<section class="panel"><div class="pad" style="padding:40px 24px;color:var(--ink2)">
+    <b style="display:block;font-size:16px;margin-bottom:6px;color:var(--ink)">Nothing to fix</b>
+    Every working day since ${esc(dayLabel(REG().from || today))} has a check-in and a check-out.
+    If you spot one that does not, it will appear here.</div></section>`}
+  ${regularList(u)}`;
+
   return `
   ${nudgeBanner(u)}
+  ${AT.bar}
   <div class="strip">
     <div class="stat"><span class="k">Today &middot; ${esc(dayName(today))} ${esc(dayLabel(today))}</span>
       <span class="v" style="font-size:19px;font-family:'IBM Plex Sans',sans-serif">${open?'<span class="pill good"><span class="dt"></span>Checked in</span>':(a&&a.segs.length?'<span class="pill mute">Checked out</span>':'<span class="pill warn"><span class="dt"></span>Not checked in</span>')}</span>
@@ -1219,8 +1293,10 @@ function vAttend(){
       </tbody></table></div>`:''}
   </section>
 
-  ${regularPanel(u) || '<div></div>'}
+  ${regularForm(u) || '<div></div>'}
   </div>
+
+  ${REG().mine.length ? regularList(u) : ''}
 
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>${esc(MONTHNAME[+ym.slice(5)-1])} ${ym.slice(0,4)}</h3>
@@ -1792,13 +1868,59 @@ function vPeople(){
         <header><h3>Good to know</h3></header>
         <div class="pad"><dl class="kv wide">
           ${row('Home country', esc((p.homeCountry) || ''))}
-          ${row('Birthday', (bdayOf(who) && !quietBday(who)) ? esc(bdayOf(who)) : '')}
+          ${row('Birthday', (bdayDM(who) && !quietBday(who))
+            ? esc(bdayDM(who)) + (SEESALL(who) && bdayYr(who)
+                ? ' <span style="color:var(--ink3)">' + esc(bdayYr(who)) + '</span>' : '') : '')}
           ${row('With us', yw ? (yw.years < 1 ? `Joined ${esc(yw.doj)}` : `${yw.years} year${yw.years===1?'':'s'} &middot; joined ${esc(yw.doj)}`) : '')}
           ${row('Next booked off', nl ? `${esc(reqLabel(nl.type))} &middot; ${esc(dayLabel(nl.from))}${nl.from!==nl.to?' \u2013 '+esc(dayLabel(nl.to)):''}` : 'Nothing booked')}
+          ${row('Gender', esc(p.gender || ''))}
+          ${row('Marital status', esc(p.marital || ''))}
         </dl></div>
       </section>
     </div>
-    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Personal numbers, home addresses, documents and emergency contacts are not shown to colleagues \u2014 accounts holds those.</p>`;
+
+    ${(() => {
+      /* The rest of their profile. Drawn only where there is something in it,
+         so a card does not fill up with a column of dashes reproaching
+         somebody who has not got round to it yet. */
+      const own  = SEESALL(who);
+      const home = [
+        ['Permanent address', p.homeAddr],
+        ['Contact there',     p.homeContact],
+        ['Their phone',       p.homePhone]
+      ].filter(x => String(x[1] || '').trim());
+      const emg = [
+        ['Name',            p.ecName],
+        ['Relationship',    p.ecRel],
+        ['Phone',           p.ecPhone],
+        ['Alternate phone', p.ecAlt]
+      ].filter(x => String(x[1] || '').trim());
+      const here = [
+        ['Address in the UAE', p.uaeAddr],
+        ['Personal email',     p.pemail ? `<a href="mailto:${esc(p.pemail)}">${esc(p.pemail)}</a>` : ''],
+        own ? ['Personal mobile', p.mobile
+                ? `${esc(p.mobile)} <span class="pill mute">not shown to colleagues</span>` : '']
+            : null
+      ].filter(Boolean).filter(x => String(x[1] || '').trim());
+      const D = profDone(who);
+      const panel = (h, hint, list) => list.length ? `<section class="panel">
+        <header><h3>${h}</h3>${hint ? `<span class="hint">${hint}</span>` : ''}</header>
+        <div class="pad"><dl class="kv wide">${list.map(x =>
+          `<dt>${esc(x[0])}</dt><dd>${/^</.test(String(x[1])) ? x[1] : esc(x[1])}</dd>`).join('')}
+        </dl></div></section>` : '';
+      const any = here.length || home.length || emg.length;
+      if(!any) return `<section class="panel"><div class="pad" style="padding:34px 24px;text-align:center;color:var(--ink3)">
+        ${esc(NM(who))} has not filled in a profile yet \u2014 ${D.total - D.done} of ${D.total} things still to go.</div></section>`;
+      return `<div class="grid g3 gtop">
+        ${panel('Where they live', 'in the UAE', here)}
+        ${panel('Back home', '', home)}
+        ${panel('In an emergency', 'who we call', emg)}
+      </div>`;
+    })()}
+    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Everyone in the group can see this page. Documents,
+      document numbers, pay and the year of somebody's birth are not on it and never are \u2014 those are accounts' and the
+      person's own. Personal mobiles are not on it either: colleagues get the work number.
+      ${SEESALL(who) ? '' : `If something here is wrong about you, it is yours to fix on <b>My profile</b>.`}</p>`;
   }
 
   // ---- the directory ----
@@ -2182,7 +2304,7 @@ function myLoanName(u){
   const r = payrollRowFor(u); return r ? r.name : u;
 }
 
-function exitCalc(name, lwd){
+function exitCalc(name, lwd, o){
   const r = payrollRowFor(name); if(!r || !lwd) return null;
   const B = leaveBal(name), j = parseDoj(r.doj);
   const P = salParts(name);
@@ -2203,6 +2325,11 @@ function exitCalc(name, lwd){
   const ticket = tk ? (tk.backlog||0) : 0;
   const adv = (HR().loans||[]).filter(l=>l.who===name && l.status==='Approved').reduce((s,l)=>s+loanLeft(l),0);
   const r2 = v => Math.round(v*100)/100;
+  /* The things the portal cannot know: a bonus, a quarter's commission, a
+     laptop that did not come back. Free lines rather than a list I invent. */
+  const extra = (o && o.lines) || [];
+  const addOn = r2(extra.filter(x => !x.deduct).reduce((s, x) => s + (+x.amount || 0), 0));
+  const takeOff = r2(extra.filter(x => x.deduct).reduce((s, x) => s + (+x.amount || 0), 0));
   /* Payroll runs on a thirty-day month, so somebody who leaves on the 31st
      has worked a whole month and never thirty-one thirtieths of one. */
   const period = MONFULL[+lwd.slice(5,7)-1] + ' ' + lwd.slice(0,4);
@@ -2222,8 +2349,9 @@ function exitCalc(name, lwd){
     grat:r2(grat), leaveDays, leaveCash:r2(leaveCash), ticket:r2(ticket), adv:r2(adv),
     period,
     paidDays, lop, mBasic, mAllow, monthPay,
-    settleDate: state.exitSettle || lwd,
-    net: r2(monthPay + grat + leaveCash + ticket - adv),
+    extra, addOn, takeOff,
+    settleDate: (o && o.settled) || state.exitSettle || lwd,
+    net: r2(monthPay + grat + leaveCash + ticket + addOn - takeOff - adv),
     capped: years>=1 && (grat >= salary*24 - 0.5)};
 }
 
@@ -2241,7 +2369,7 @@ function vDocs(){
     <header><h3>Your documents</h3>
       ${worst?`<span class="pill ${worst.state==='expired'?'bad':'warn'}"><span class="dt"></span>${worst.state==='expired'?'Something has expired':'Something is due'}</span>`
         :'<span class="pill good"><span class="dt"></span>All valid</span>'}
-      <span class="hint">expiry dates only &mdash; no document numbers are held</span></header>
+      <span class="hint">accounts and you &mdash; nobody else</span></header>
     <div class="tw"><table>
       <thead><tr><th>Document</th><th>Expires</th><th>When</th><th>Status</th></tr></thead>
       <tbody>${rows.map(r=>`<tr>
@@ -2250,7 +2378,7 @@ function vDocs(){
         <td class="nw" style="color:var(--ink2)">${r.exp?esc(inWord(r.days)):'not on file'}</td>
         <td>${r.exp?DOCPILL(r.state):'<span class="pill mute">Not on file</span>'}</td></tr>`).join('')}
       </tbody></table></div>
-    <p class="cap">${HR().docs && HR().docs[u] && HR().docs[u].sample ? '<b>Sample dates.</b> Send accounts the real expiry dates and these fill in. ':''}The portal holds the expiry date only. Passport, Emirates ID and visa numbers are deliberately not stored anywhere in it. Accounts will contact you before anything expires &mdash; you do not need to chase.</p>
+    <p class="cap">${HR().docs && HR().docs[u] && HR().docs[u].sample ? '<b>Sample dates.</b> Send accounts the real expiry dates and these fill in. ':''}The portal holds the expiry date, the copy you upload, and &mdash; since September 2026 &mdash; the number itself, for your Emirates ID, passport, residency visa and labour card. They are held because payroll, insurance and the MOHRE filings need them, and because a gap in your file is better found here than at a renewal counter. <b>Only you and accounts can see them</b>, on any screen; they are masked even there, and they never go in an email or on a list. Accounts will contact you before anything expires &mdash; you do not need to chase.</p>
   </section>`;
 }
 
@@ -2261,37 +2389,65 @@ function vDocsEdit(){
   const gaps = n => types.filter(t=>!((HR().docs||{})[n]||{})[t.k]).length + (eidOf(n)?0:1);
   const rows = roll.slice().sort((a,b)=>gaps(b)-gaps(a) || a.localeCompare(b));
   const left = USERS.map(x=>x.name).reduce((s,n)=>s+gaps(n),0);
-  const cell = (n, k) => {
-    const v = ((HR().docs||{})[n]||{})[k] || '';
-    const d = v ? dTo(v) : null;
-    const col = d===null ? '' : d<0 ? 'var(--bad)' : d<=60 ? 'var(--warn)' : '';
-    return `<td class="r">${edCell('docdates', n + '|' + k,
-      x => `<input class="ff dt" type="date"${edAttr('docdates', n + '|' + k)} value="${esc(x)}"${col?` style="border-color:${col};color:${col}"`:''}>`,
-      x => x ? `<span class="edread"${col?` style="color:${col}"`:''}>${esc(dayLabel(x))} ${esc(String(x).slice(0,4))}</span>`
-             : '<span class="edread none">\u2014</span>')}</td>`;
-  };
   return `
   <section class="panel invpanel" style="height:auto;max-height:none">
-    <header><h3>Fill in document dates</h3>
+    <header><h3>Staff Documents</h3>
       <span class="pill ${left?'warn':'good'}"><span class="dt"></span>${left} still blank</span>
       <input id="docQ" placeholder="Find a name" value="${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
-      ${edBar('docdates')}
+      <button class="btn ghost edbtn" id="refShow" type="button">${state.refShow?'Hide the numbers':'Show the numbers'}</button>
+      ${edBar('docs')}
     </header>
-    ${edSaved('docdates')}${edConfirm('docdates')}
-    ${byCompany(rows, {
-      who: n => n, cls: 'invtable',
-      cols: colsOf([25, 23].concat(types.map(() => 52 / types.length))),
-      note: rs => `${rs.filter(n => gaps(n)).length} still to fill in`,
-      head: `<thead><tr><th>Employee</th><th>Emirates ID number</th>
-        ${types.map(t=>`<th class="r">${esc(t.label)}</th>`).join('')}</tr></thead>`,
-      row: n => `<tr>
-        <td class="nw">${nm(n)}${gaps(n)?` <span class="pill mute">${gaps(n)} blank</span>`:''}</td>
-        <td><input class="ff" data-deid="${esc(n)}" value="${esc(eidOf(n))}" placeholder="784-0000-0000000-0"
-          style="font-variant-numeric:tabular-nums;width:100%;min-width:0"></td>
-        ${types.map(t=>cell(n, t.k)).join('')}</tr>`,
-      empty: 'Nobody matches that.'
-    })}
-    <p class="cap">The rows with the most blanks come first. Type a date and the expiry table, the reminders and the person&rsquo;s own page all follow it straight away &mdash; a wrong date is a missed warning, so take them off the card rather than from memory. <b>Passport and visa numbers are never stored</b>, only the expiry dates and the copy the employee uploads.</p>
+    ${edSaved('docs')}${edConfirm('docs')}
+    ${(() => {
+      /* The four, in the order Avin wrote them. */
+      const ORDER = ['eid','passport','visa','labour'];
+      const DOCS = ORDER.map(k => types.find(t => t.k === k)).filter(Boolean)
+        .concat(types.filter(t => !ORDER.includes(t.k)));
+      const each = (100 - 21) / (DOCS.length * 3);
+      const refCell = (n, k) => {
+        const v = REFOF(n, k);
+        return `<td class="num b">${edCell('docs', n + '|' + k + '|no',
+          x => `<input class="ff"${edAttr('docs', n + '|' + k + '|no')} value="${esc(x)}" placeholder="\u2014">`,
+          () => v ? `<span class="edread"${full(state.refShow ? '' : v)}>${esc(state.refShow ? v : maskRef(v))}</span>`
+                  : '<span class="miss">\u2014</span>')}</td>`;
+      };
+      const expCell = (n, k) => {
+        const v = ((HR().docs||{})[n]||{})[k] || '';
+        const d = v ? dTo(v) : null;
+        const col = d === null ? '' : d < 0 ? 'var(--bad)' : d <= 60 ? 'var(--warn)' : '';
+        return `<td class="n">${edCell('docs', n + '|' + k + '|exp',
+          x => `<input class="ff dt" type="date"${edAttr('docs', n + '|' + k + '|exp')} value="${esc(x)}"${col?` style="border-color:${col};color:${col}"`:''}>`,
+          x => x ? `<span class="edread"${col?` style="color:${col}"`:''}>${esc(dayLabel(x))} ${esc(String(x).slice(0,4))}</span>`
+                 : '<span class="miss">\u2014</span>')}</td>`;
+      };
+      const clip = (n, k) => {
+        const f = fileOf(n, k);
+        return `<td class="clipc">${f
+          ? `<button class="clip on" data-docsee="${esc(n)}|${esc(k)}" type="button" title="Open the copy" aria-label="Open ${esc(NM(n))}&rsquo;s ${esc(k)}">\u{1F4CE}</button>`
+          : `<span class="clip no" title="No copy on file" aria-label="No copy on file">\u{1F4CE}</span>`}</td>`;
+      };
+      return byCompany(rows, {
+        who: n => n, cls: 'dgrid',
+        cols: colsOf([21].concat([].concat(...DOCS.map(() => [each * 1.20, each * 1.25, each * 0.55])))),
+        note: rs => `${rs.filter(n => gaps(n)).length} still to fill in`,
+        head: `<thead>
+          <tr class="dgrp"><th></th>${DOCS.map(t =>
+            `<th class="grp b" colspan="3">${esc(t.label)}</th>`).join('')}</tr>
+          <tr><th>Employee</th>${DOCS.map(() =>
+            '<th class="b">Number</th><th>Expiry</th><th></th>').join('')}</tr>
+        </thead>`,
+        row: n => `<tr>
+          <td class="nw"${full(NM(n) + (gaps(n) ? ' \u2014 ' + gaps(n) + ' still blank' : ''))}>${nm(n)}${gaps(n)?` <span class="pill mute">${gaps(n)} blank</span>`:''}</td>
+          ${DOCS.map(t => refCell(n, t.k) + expCell(n, t.k) + clip(n, t.k)).join('')}</tr>`,
+        empty: 'Nobody matches that.'
+      });
+    })()}
+    <p class="cap">The rows with the most blanks come first. A number is masked until you press <b>Show the
+      numbers</b> &mdash; they are government references and this screen gets looked at with somebody standing
+      behind you. The paperclip opens the copy the employee uploaded; hollow and amber means there is none. A date
+      in <b style="color:var(--bad)">red</b> has already passed and one in <b style="color:var(--warn)">amber</b>
+      is inside two months. Typing a date feeds the expiry table, the reminders and the person&rsquo;s own page, so
+      take them off the card rather than from memory.</p>
   </section>`;
 }
 
@@ -2330,29 +2486,51 @@ function vDocsAdmin(){
         <td>${DOCPILL(r.state)}</td></tr>`).join('')
         :'<tr><td colspan="5" style="color:var(--ink3)">Nothing in this view.</td></tr>'}
       </tbody></table></div>
-    <p class="cap">Warning windows: visa and labour card 60 days, Emirates ID 45 days, passport 180 days, company documents 90 days. Employees upload their own copies and type their own expiry dates. <b>Emirates ID numbers</b> are held here for payroll, insurance and MOHRE, masked on screen and never sent in an email; <b>passport and visa numbers are not stored at all</b> &mdash; the uploaded copy is the record.</p>
+    <p class="cap">Warning windows: visa and labour card 60 days, Emirates ID 45 days, passport 180 days, company documents 90 days. Employees upload their own copies and type their own expiry dates. The four <b>reference numbers</b> &mdash; Emirates ID, passport, residency visa, labour card &mdash; are held on the grid below, masked until you ask for them, readable by the person themselves and by accounts and by nobody else. They never go in an email or on a team list.</p>
   </section>
 
   ${vDocsEdit()}
 
   ${vProfilesAdmin()}
 
-  <section class="panel">
-    <header><h3>Staff directory</h3><span class="hint">accounts only &mdash; never in an email or a team list</span></header>
-    ${byCompany(USERS.map(x=>x.name), {
+  ${(() => {
+    const roll = USERS.map(x => x.name);
+    const noYear = roll.filter(n => bdayOf(n) && !bdayYr(n)).length;
+    const none   = roll.filter(n => !bdayOf(n)).length;
+    return `<section class="panel">
+    <header><h3>Dates of birth</h3>
+      <span class="hint">${none || noYear
+        ? [none ? none + ' missing' : '', noYear ? noYear + ' without a year' : ''].filter(Boolean).join(' \u00b7 ')
+        : 'all on file'}</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">${edBar('bdate')}</span></header>
+    ${edConfirm('bdate')}${edSaved('bdate')}
+    ${byCompany(roll.slice().sort((a, b) =>
+        (bdayToISO(bdayOf(a)) ? 1 : 0) - (bdayToISO(bdayOf(b)) ? 1 : 0) || a.localeCompare(b)), {
       who: n => n,
-      cols: colsOf([27, 19, 22, 32]),
-      head: `<thead><tr><th>Name</th><th>Work phone</th><th>Emirates ID</th><th>Work email</th></tr></thead>`,
-      row: n => `<tr>
-        <td class="nw">${esc(n)}</td>
-        <td class="n nw">${esc(phoneOf(n)||'—')}</td>
-        <td class="n nw" style="color:var(--ink2)">${eidOf(n)?`<span data-eid="${esc(eidOf(n))}">${esc(maskEID(eidOf(n)))}</span>`:'—'}</td>
-        <td class="nw" style="color:var(--ink2)">${esc(emailOf(n)||'—')}</td></tr>`,
+      cols: colsOf([34, 26, 40]),
+      head: `<thead><tr><th>Employee</th><th>Date of birth</th><th>Turns</th></tr></thead>`,
+      row: n => { const iso = bdayToISO(bdayOf(n));
+        const age = iso ? (() => { const t = HDATE();
+          let y = +t.slice(0,4) - +iso.slice(0,4);
+          if(t.slice(5) < iso.slice(5)) y--;
+          return y; })() : null;
+        return `<tr>
+        <td class="nw">${nm(n)}</td>
+        <td class="n nw">${edCell('bdate', n,
+          x => `<input class="ff dt" type="date"${edAttr('bdate', n)} value="${esc(x)}" max="${esc(HDATE())}">`,
+          x => x ? `<span class="edread">${esc(dayLabel(x))} ${esc(String(x).slice(0,4))}</span>`
+                 : bdayOf(n) ? `<span class="edread">${esc(bdayDM(n))}</span> <span class="pill warn">no year</span>`
+                 : '<span class="miss">not on file</span>')}</td>
+        <td style="color:var(--ink2)">${age === null ? '\u2014'
+          : age + ' this year' + (quietBday(n) ? ' \u00b7 asked not to be announced' : '')}</td></tr>`; },
       empty: 'Nobody on the staff list yet.'
     })}
-    <p class="cap">Emirates ID numbers are masked. <button class="btn ghost" id="eidAll" type="button" style="padding:2px 10px;font-size:12px">Show all</button>
-      &nbsp;They are held because payroll, insurance and MOHRE filings need them. They never appear in an email, on a team list, or on anyone's page but their own.</p>
+    <p class="cap">This comes off the passport, not off a form &mdash; a birth date one digit out is a gratuity
+      calculation and a visa application both quietly wrong, which is why it is yours to set and not theirs to
+      type. The people with nothing on file are at the top. <b>Colleagues see the day and the month only</b>;
+      the year is on this screen and on the person's own profile, nowhere else.</p>
   </section>`;
+  })()}`;
 }
 
 /* ---------- gratuity provision ----------
@@ -2567,6 +2745,18 @@ function vRevisions(){
           <div class="field"><label for="rvAllow">New other allowance</label><input id="rvAllow" inputmode="decimal" placeholder="0.00" value="${esc(g.allow)}"></div>
         </div>
         <button class="btn wide" id="rvIssue" type="button"${ok?'':' disabled'}>Write the draft</button>
+        ${(() => {
+          const g = state.revForm || {};
+          if(!g.eff) return '';
+          const shut = (DATA.payroll.runs || []).filter(r => r.status === 'closed'
+            && r.key >= String(g.eff).slice(0, 7));
+          if(!shut.length) return '';
+          return `<div class="note" style="margin-top:14px;border-left-color:var(--bad)">
+            <b>${esc(shut.map(r => r.label).join(', '))} ${shut.length === 1 ? 'is' : 'are'} already closed and paid.</b>
+            A revision dated ${esc(effLabel(g.eff))} cannot reach ${shut.length === 1 ? 'that month' : 'those months'} \u2014 a closed
+            run is never restated. The difference for ${shut.length === 1 ? 'it' : 'them'} will not appear on any payroll
+            month, so pay it by hand or date this from the first open month instead.</div>`;
+        })()}
         ${state.revSent?`<div class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Drafted. Nothing has moved.</b> ${esc(state.revSent)}'s letter is waiting below. The salary on file, the payslip and the gratuity provision all still read the old figure until you send it.</div>`:''}
       </div>
       <div>
@@ -2601,7 +2791,8 @@ function vRevisions(){
               <span class="dsub">basic ${money(r.basic,2)} &middot; other ${money(r.allow,2)}</span>
             </div>
             <div class="dact">
-              ${state.revAsk===r.revId ? '' : `<button class="btn sm" data-rvsend="${esc(r.revId)}" type="button">Send it</button>
+              ${state.revAsk===r.revId ? '' : `<button class="btn ghost sm" data-rvsee="${esc(r.ref)}" type="button">View</button>
+              <button class="btn sm" data-rvsend="${esc(r.revId)}" type="button">Send it</button>
               <button class="btn ghost sm" data-rvdrop="${esc(r.revId)}" type="button">Withdraw</button>`}
             </div>
           </div>
@@ -2622,10 +2813,16 @@ function vRevisions(){
   </section>
 
   ${SENTREV().length ? `<section class="panel">
-    <header><h3>Sent</h3><span class="hint" style="margin-left:auto">the last few letters that went out</span></header>
-    <div class="tw"><table>
+    <header><h3>Sent</h3>
+      <span class="pill mute">${SENTREV().length}</span>
+      <input id="revQ" placeholder="Find a name" value="${esc(state.revQ||'')}"
+        style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+      <span class="hint">every letter that has gone out</span></header>
+    <div class="tw revsent"><table>
       <thead><tr><th class="s1">Employee</th><th>Letter</th><th>From</th><th class="r">Was</th><th class="r">Now</th><th class="r">Basic</th><th>Sent</th></tr></thead>
-      <tbody>${SENTREV().slice(0,12).map(r => `<tr>
+      <tbody>${SENTREV().filter(r => !state.revQ
+        || NM(r.who).toLowerCase().includes(state.revQ.toLowerCase())
+        || String(r.ref).toLowerCase().includes(state.revQ.toLowerCase())).map(r => `<tr>
         <td class="s1 nw">${nm(r.who)}</td>
         <td class="nw" style="color:var(--ink2)">${esc(r.ref)}</td>
         <td class="nw" style="color:var(--ink2)">${esc(dayLabel(r.eff))} ${esc(r.eff.slice(0,4))}</td>
@@ -2661,7 +2858,7 @@ function vRevisions(){
 function vAsks(){
   const u = state.user, sec = state.askTab === 'letters' ? 'letters' : 'loans';
   const nLoan = (HR().loans||[]).filter(x=>x.status==='Pending' && x.approver===u).length;
-  const nLtr  = canUpload(u) ? (HR().letters||[]).filter(x=>x.status==='Pending').length : 0;
+  const nLtr  = canUpload(u) ? (HR().letters||[]).filter(x=>x.status==='Pending' && x.type!=='revision').length : 0;
   const badge = n => n ? ` <span class="segn">${n}</span>` : '';
   return `
   <div class="seg segbig" id="askSeg">
@@ -2674,8 +2871,14 @@ function vAsks(){
 function vLetters(){
   const u = state.user, adm = canUpload(u);
   const L = HR().letters || [];
-  const mine = L.filter(x=>x.who===u).sort((a,b)=>b.asked.localeCompare(a.asked));
-  const inbox = L.filter(x=>x.status==='Pending');
+  /* And out of the person's own list until it is issued — otherwise a draft
+     tells somebody about a pay rise before it has been decided to send it. */
+  const mine = L.filter(x=>x.who===u && !(x.type==='revision' && x.status!=='Issued'))
+    .sort((a,b)=>b.asked.localeCompare(a.asked));
+  /* A revision is accounts' own draft, not a request from staff waiting on a
+     decision. It has no business in this queue: issuing it from here marks the
+     letter issued without moving the salary. */
+  const inbox = L.filter(x=>x.status==='Pending' && x.type!=='revision');
   const f = state.ltForm || (state.ltForm = {type:'salary', to:'', why:''});
   const t = LTYPE(f.type);
   const open = state.ltOpen ? L.find(x=>x.id===state.ltOpen) : null;
@@ -2919,24 +3122,37 @@ function vLoans(){
 }
 
 function vExits(){
+  const open = state.exitOpen ? EXITS().find(x => x.id === state.exitOpen) : null;
+  if(open) return vExitOne(exitOf(open));
+
   const sel = state.exitWho, lwd = state.exitLwd || '';
   const staff = DATA.payroll.rows.filter(r=>!r.dummy).map(r=>r.name).sort();
-  const c = (sel && lwd) ? exitCalc(sel, lwd) : null;
+  const lines = state.exitLines || [];
+  const c = (sel && lwd) ? exitCalc(sel, lwd, {lines}) : null;
+  const list = EXITS().slice().sort((a,b)=>
+    (EXSTAGE[a.status]||0)-(EXSTAGE[b.status]||0) || a.lastDay.localeCompare(b.lastDay));
   const line = (l,v,neg) => `<tr><td>${l}</td><td class="n r"${neg?' style="color:var(--bad)"':''}>${neg?'(':''}${money(Math.abs(v),2)}${neg?')':''}</td></tr>`;
+  const already = sel ? exitFor(sel) : null;
+
   return `
   <section class="panel">
-    <header><h3>Final settlement</h3><span class="hint">nothing here changes the payroll &mdash; it is a calculation and a checklist</span></header>
+    <header><h3>${state.exitId ? 'Change this settlement' : 'Work out a settlement'}</h3>
+      <span class="hint">nothing is written down until you save it</span></header>
     <div class="pad">
-      <div class="grid g2" style="gap:14px">
+      <div class="grid g3" style="gap:14px">
         <div class="field" style="margin:0"><label for="exWho">Employee</label>
-          <select id="exWho"><option value="">Choose someone</option>
-            ${staff.map(n=>`<option value="${esc(n)}"${sel===n?' selected':''}>${esc(n)}</option>`).join('')}</select></div>
+          <select id="exWho"${state.exitId?' disabled':''}><option value="">Choose someone</option>
+            ${staff.map(n=>`<option value="${esc(n)}"${sel===n?' selected':''}>${esc(NM(n))}</option>`).join('')}</select></div>
         <div class="field" style="margin:0"><label for="exLwd">Last working day</label>
           <input id="exLwd" type="date" value="${esc(lwd)}"></div>
         <div class="field" style="margin:0"><label for="exSettle">Settlement date</label>
           <input id="exSettle" type="date" value="${esc(state.exitSettle || lwd)}"${lwd?'':' disabled'}>
           <span class="pfhint">The day the money leaves. Defaults to the last working day.</span></div>
       </div>
+      ${already && already.id !== state.exitId
+        ? `<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>${nm(sel)} already has a settlement in progress</b>
+            &mdash; ${esc(EXLABEL[already.status] || already.status)}. <button class="btn ghost sm" data-exopen="${esc(already.id)}" type="button">Open it</button></p>`
+        : ''}
       ${!c?`<p class="note" style="margin-top:16px">Pick someone and a last working day. Everything else is worked out from what the portal already holds &mdash; joining date, salary, leave balance, unclaimed air tickets and any advance still running.</p>`:''}
     </div>
   </section>
@@ -2967,24 +3183,135 @@ function vExits(){
           ${line('End-of-service gratuity', c.grat)}
           ${line('Leave encashment — '+c.leaveDays+' days at daily basic', c.leaveCash)}
           ${c.ticket?line('Unclaimed air tickets', c.ticket):''}
+          ${lines.map((x,i)=>`<tr><td>${x.label?esc(x.label):'<i style="color:var(--ink3)">describe this line</i>'}
+            <button class="exdrop" data-exdrop="${i}" type="button" title="Remove this line" aria-label="Remove this line">&times;</button></td>
+            <td class="n r"${x.deduct?' style="color:var(--bad)"':''}>${x.deduct?'(':''}${money(Math.abs(+x.amount||0),2)}${x.deduct?')':''}</td></tr>`).join('')}
           ${c.adv?line('Advance still outstanding', -c.adv, true):''}
           <tr class="tot"><td><b>Final settlement</b></td><td class="n r netcol"><b>AED ${money(c.net,2)}</b></td></tr>
         </tbody></table></div>
-      <p class="cap">Everything above goes on one document &mdash; open it with the button, print it or save it as a PDF, and it comes out on ${esc(visaEnt(sel).legal)} letterhead with a receipt for ${nm(sel)} to sign. Gratuity on the standard rule &mdash; ${c.years<1?'under one year of service, so none is due':'21 days of basic pay for each of the first five years and 30 days a year after that'}${c.capped?', capped at two years of total pay':''}. Leave and gratuity are both calculated on <b>basic</b>, not total salary. Check it against the contract before anything is paid.</p>
+      <div class="pad" style="padding-top:14px">
+        ${lines.map((x,i)=>`<div class="exline">
+          <input class="ff" placeholder="What is it for" value="${esc(x.label)}" data-exlbl="${i}">
+          <input class="ff n" type="number" step="0.01" min="0" placeholder="0.00" value="${x.amount===''?'':esc(String(x.amount))}" data-examt="${i}">
+          <div class="seg sm"><button data-exsign="${i}" data-v="add" aria-pressed="${x.deduct?'false':'true'}" type="button">Add</button><button data-exsign="${i}" data-v="less" aria-pressed="${x.deduct?'true':'false'}" type="button">Deduct</button></div>
+        </div>`).join('')}
+        <div class="btns" style="margin-top:${lines.length?'12px':'0'}">
+          <button class="btn ghost" id="exAdd" type="button">Add a line</button>
+          <button class="btn" id="exSave" type="button"${state.exBusy?' disabled':''}>${
+            state.exBusy ? 'Saving\u2026' : state.exitId ? 'Save the changes' : 'Save as draft'}</button>
+          ${state.exitId?'<button class="btn ghost" id="exCancel" type="button">Stop editing</button>':''}
+        </div>
+      </div>
+      <p class="cap">A line is a description and an amount &mdash; a bonus, a quarter's commission, a laptop that did
+        not come back. Gratuity on the standard rule &mdash; ${c.years<1?'under one year of service, so none is due':'21 days of basic pay for each of the first five years and 30 days a year after that'}${c.capped?', capped at two years of total pay':''}.
+        Leave and gratuity are both worked out on <b>basic</b>, not total salary.</p>
     </section>
-  </div>
+  </div>`:''}
 
   <section class="panel">
-    <header><h3>Before the last day</h3><span class="hint">tick these off</span></header>
-    <div class="pad"><dl class="kv wide">
-      <dt>Handover</dt><dd>Named successor for live files and clients, and their portal access updated.</dd>
-      <dt>Company property</dt><dd>Laptop, phone, SIM, access card and keys returned.</dd>
-      <dt>Portal access</dt><dd>Account switched off on the last working day so payslips and data are no longer reachable.</dd>
-      <dt>Visa and labour card</dt><dd>Cancellation started with the PRO &mdash; the expiry dates are on the Documents page.</dd>
-      <dt>Air ticket</dt><dd>${c.ticket?`AED ${money(c.ticket,2)} of unclaimed entitlement is included above.`:'Nothing unclaimed.'}</dd>
-      <dt>Final payslip</dt><dd>The last month's pay is inside the settlement above, so take ${nm(sel)} off the ${esc(c.period)} run rather than paying the month twice.</dd>
-    </dl></div>
-  </section>`:''}`;
+    <header><h3>Settlements</h3>
+      <span class="hint">${list.length ? list.filter(x=>x.status!=='paid').length + ' open' : 'none yet'}</span></header>
+    ${list.length ? `<div class="tw"><table class="cotab">
+      ${colsOf([21, 13, 12, 15, 15, 24])}
+      <thead><tr><th>Employee</th><th>Last day</th><th>Month</th><th class="r">Settlement</th><th>Stage</th><th class="r"></th></tr></thead>
+      <tbody>${list.map(x=>{
+        const cc = exitOf(x).c;
+        return `<tr>
+        <td>${nm(x.who)}</td>
+        <td class="n nw">${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)}</td>
+        <td class="nw" style="color:var(--ink2)">${x.month ? esc(MONTHNAME[+x.month.slice(5)-1] + ' ' + x.month.slice(0,4)) : '\u2014'}</td>
+        <td class="n r netcol">${money(x.net === null ? cc.net : x.net, 2)}</td>
+        <td class="nw">${exitPill(x.status)}</td>
+        <td class="r nw">${x.status === 'draft'
+          ? `<button class="btn ghost sm" data-exedit="${esc(x.id)}" type="button">Edit</button>
+             <button class="btn sm" data-exgo="${esc(x.id)}" type="button">Initiate exit process</button>`
+          : `<button class="btn ghost sm" data-exopen="${esc(x.id)}" type="button">Open</button>`}</td></tr>`;}).join('')}
+      </tbody></table></div>` : '<div class="pad"><p style="margin:0;color:var(--ink3)">Nothing saved yet. Work one out above and save it as a draft.</p></div>'}
+    <p class="cap">A draft is yours to change as often as you need to, right up to the day.
+      <b>Initiate</b> writes the figures down, posts the settlement to the month of the last working day, and takes
+      the person off that month's payroll and off the staff list &mdash; every record they have is kept. After that
+      it goes to their reporting manager and to ${nm((USERS.find(u=>u.role==='owner')||{}).name||'the owner')} to approve.</p>
+  </section>`;
+}
+
+/* One settlement, opened: where it has got to, who it is with, and the only
+   buttons that belong to whoever is looking at it. */
+function vExitOne(x){
+  const c = x.c, me = state.user;
+  const owner = (USERS.find(u=>u.role==='owner')||{}).name || '';
+  const isOwner = roleOf(me) === 'owner';
+  const isMgr = x.mgr === me;
+  const isAcc = canUpload(me);
+  const one = x.mgr === owner;            // the manager IS the owner: one stage
+  const st = x.status, at = EXSTAGE[st] || 0;
+  const step = (n, label, sub, done, now) => `<div class="step${done?' done':''}${now?' now':''}">
+    <span class="no">${n}${done?' &middot; done':now?' &middot; here':''}</span><b>${label}</b><em>${sub||''}</em></div>`;
+  return `
+  <section class="panel">
+    <header><h3>${nm(x.who)} &mdash; final settlement</h3>
+      ${exitPill(st)}
+      <span class="hint">last day ${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)} &middot; AED ${money(x.net===null?c.net:x.net,2)}</span>
+      <button class="btn ghost" id="exBack" type="button" style="margin-left:12px">Back to settlements</button></header>
+    <div class="pad">
+      <div class="wfbar">
+        ${step(1,'Drafted', x.by?'by '+NM(x.by):'', at>=1, at===0)}
+        ${step(2,'Initiated', x.month?esc(MONTHNAME[+x.month.slice(5)-1]+' '+x.month.slice(0,4)):'', at>=2, at===1)}
+        ${one ? '' : step(3,'Manager approved', x.mgrOkBy?NM(x.mgrOkBy)+', '+esc(dayLabel(x.mgrOkAt)):'with '+NM(x.mgr||''), at>=2, at===1)}
+        ${step(one?3:4, one?'Approved':'Miraziz approved', x.ownerOkBy?NM(x.ownerOkBy)+', '+esc(dayLabel(x.ownerOkAt)):'with '+NM(owner), at>=3, at===2)}
+        ${step(one?4:5,'Payment decided', x.payMode?(x.payMode==='with_salaries'?'with the salaries':'on its own'):'', at>=4, at===3)}
+        ${step(one?5:6,'Paid', x.paidOn?esc(dayLabel(x.paidOn))+' '+x.paidOn.slice(0,4):'', at>=5, false)}
+      </div>
+      ${x.backWhy?`<div class="note" style="border-left-color:var(--bad);margin-bottom:16px"><b>Sent back${x.backBy?' by '+NM(x.backBy):''}.</b> ${esc(x.backWhy)}</div>`:''}
+      ${state.exAsk===x.id?`<div class="ciwarn" style="border-left-color:var(--bad)">
+        <b>What is wrong with it?</b>
+        <div class="ciwrow"><input id="exWhy" placeholder="so accounts knows what to fix" value="${esc(state.exWhy||'')}">
+          <button class="btn" id="exWhyGo" type="button"${(state.exWhy||'').trim()?'':' disabled'}>Send it back</button>
+          <button class="btn ghost" id="exWhyNo" type="button">Cancel</button></div></div>`:''}
+      <div class="btns" style="margin-top:16px">
+        ${(isMgr && st==='initiated') || (isOwner && ['initiated','mgr_ok'].includes(st))
+          ? `<button class="btn" data-exok="${esc(x.id)}" type="button">Approve it</button>
+             <button class="btn ghost" data-exno="${esc(x.id)}" type="button">Send it back</button>` : ''}
+        ${isAcc && st==='owner_ok' ? `<span style="font-size:13px;color:var(--ink2)">Approved. How is it paid?</span>
+          <button class="btn" data-expay="${esc(x.id)}" data-mode="with_salaries" type="button">With the salaries</button>
+          <button class="btn ghost" data-expay="${esc(x.id)}" data-mode="separate" type="button">On its own</button>` : ''}
+        ${isAcc && st==='decided' ? `<button class="btn" data-exdone="${esc(x.id)}" type="button">Mark it paid</button>
+          <span style="font-size:13px;color:var(--ink2)">${x.payMode==='with_salaries'?'going out with the salaries':'going out on its own'}</span>` : ''}
+        <button class="btn ghost" data-exsee="${esc(x.id)}" type="button">Open the settlement document</button>
+        ${isAcc && st!=='paid' ? `<button class="btn ghost" data-exundo="${esc(x.id)}" type="button">Undo &mdash; back to draft</button>` : ''}
+      </div>
+      ${isAcc && st==='paid' ? '<p class="cap" style="padding:14px 0 0">Paid and closed. Nothing further to do.</p>' : ''}
+    </div>
+  </section>
+
+  <div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>What was owed</h3><span class="hint">${x.frozen?'frozen when it was initiated':'still being worked out'}</span></header>
+      <div class="tw"><table><tbody>
+        <tr><td>Salary for ${esc(c.period)} &mdash; ${c.paidDays} paid day${c.paidDays===1?'':'s'}</td><td class="n r">${money(c.monthPay,2)}</td></tr>
+        <tr><td>End-of-service gratuity</td><td class="n r">${money(c.grat,2)}</td></tr>
+        <tr><td>Leave encashment &mdash; ${c.leaveDays} days</td><td class="n r">${money(c.leaveCash,2)}</td></tr>
+        ${c.ticket?`<tr><td>Unclaimed air tickets</td><td class="n r">${money(c.ticket,2)}</td></tr>`:''}
+        ${(c.extra||[]).map(l=>`<tr><td>${esc(l.label||'—')}</td><td class="n r"${l.deduct?' style="color:var(--bad)"':''}>${l.deduct?'(':''}${money(Math.abs(+l.amount||0),2)}${l.deduct?')':''}</td></tr>`).join('')}
+        ${c.adv?`<tr><td>Advance still outstanding</td><td class="n r" style="color:var(--bad)">(${money(c.adv,2)})</td></tr>`:''}
+        <tr class="tot"><td><b>Final settlement</b></td><td class="n r netcol"><b>AED ${money(x.net===null?c.net:x.net,2)}</b></td></tr>
+      </tbody></table></div>
+      <p class="cap">${x.frozen
+        ? 'These figures were written down when the exit was initiated. A salary revision or another month of leave accrual cannot move them now &mdash; which is the point, because this is what somebody signs for.'
+        : 'Worked out from what the portal holds today. Initiating writes them down.'}</p>
+    </section>
+
+    <section class="panel">
+      <header><h3>Before the last day</h3><span class="hint">tick these off</span></header>
+      <div class="pad"><dl class="kv wide">
+        <dt>Handover</dt><dd>Named successor for live files and clients, and their portal access updated.</dd>
+        <dt>Company property</dt><dd>Laptop, phone, SIM, access card and keys returned.</dd>
+        <dt>Portal access</dt><dd>${x.status==='draft'?'Ends by itself the day after the last working day, once the exit is initiated.':'Ends after '+esc(dayLabel(x.lastDay))+'.'}</dd>
+        <dt>Visa and labour card</dt><dd>Cancellation started with the PRO &mdash; the expiry dates are on the Documents page.</dd>
+        <dt>Air ticket</dt><dd>${c.ticket?`AED ${money(c.ticket,2)} of unclaimed entitlement is included above.`:'Nothing unclaimed.'}</dd>
+        <dt>The last month</dt><dd>${x.month?`Inside the settlement, and ${nm(x.who)} is off the ${esc(MONTHNAME[+x.month.slice(5)-1])} run.`:'Inside the settlement once this is initiated.'}</dd>
+      </dl></div>
+    </section>
+  </div>`;
 }
 
 /* ---------- employee profile ---------- */
@@ -2995,13 +3322,28 @@ function bdayISO(u){
   return `2000-${String(mm).padStart(2,'0')}-${String(+d).padStart(2,'0')}`;
 }
 const UPLOADS = () => HR().uploadTypes || [];
+/* The four references. Held so a gap in somebody's file is visible on one
+   screen; masked by default because they are government identifiers and this
+   table is looked at with somebody standing behind you. */
+const REFOF = (n, k) => ((HR().ref || {})[n] || {})[k] || '';
+/* Two characters, four dots, four characters — the same shape whatever the
+   document, so it fits a column and two rows can still be told apart. It is
+   deliberately not "everything but the last digit": a mask that keeps almost
+   all of a government number is not a mask, and an Emirates ID's readable
+   prefix is the year of birth. */
+function maskRef(v){
+  const s = String(v || '').trim();
+  if(s.length <= 6) return s.length <= 2 ? s : s.slice(0, 1) + '\u2022'.repeat(s.length - 1);
+  return s.slice(0, 2) + '\u2022\u2022\u2022\u2022' + s.slice(-4);
+}
+const DOCREF = {eid:'eid', passport:'passport', visa:'visa', labour:'labour'};
 const fileOf = (u,k) => ((HR().files||{})[u]||{})[k] || null;
 const kb = n => n>=1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)+' KB';
 const PICKS = {gender:['Female','Male'], marital:['Single','Married']};
 /* row groups the fields into lines; the numbers are what the page reads across */
 const PFIELDS = [
   {k:'callMe',      label:'Name you go by',         group:'you',   req:false, ph:'Leave blank to use your full name', row:1},
-  {k:'bday',        label:'Birthday (day and month)', group:'you', req:true,  bday:true, row:1},
+  {k:'bday',        label:'Date of birth',          group:'you',   req:false, bday:true, row:1, theirs:false},
   {k:'gender',      label:'Gender',                 group:'you',   req:true,  pick:'gender', row:2},
   {k:'marital',     label:'Marital status',         group:'you',   req:true,  pick:'marital', row:2},
   {k:'mobile',      label:'Personal mobile',        group:'you',   req:true,  ph:'+971 50 000 0000',
@@ -3040,19 +3382,17 @@ function vProfile(){
   const r = payrollRowFor(u) || {};
   const co = companyOf(u);
   const D = profDone(u), docs = docsOf(u) || {};
-  const fld = f => `<div class="field"><label for="pf_${f.k}">${esc(f.label)}${f.req?'':' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(optional)</span>'}</label>
+  const fld = f => `<div class="field"><label for="pf_${f.k}">${esc(f.label)}${
+      f.theirs === false ? ' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(accounts sets this)</span>'
+      : f.req ? '' : ' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(optional)</span>'}</label>
     ${f.bday
-      ? (() => { const on = bdayOf(u).split(' ');
-          const dd = on[0] || '', mo = on[1] || '';
-          const MON = Object.keys(MIDX);
-          return `<div class="bdrow">
-            <select id="pf_bdayD" data-bday="1"><option value="">Day</option>${
-              Array.from({length:31},(_,i)=>String(i+1).padStart(2,'0')).map(d=>
-                `<option value="${d}"${d===dd?' selected':''}>${+d}</option>`).join('')}</select>
-            <select id="pf_bdayM" data-bday="1"><option value="">Month</option>${
-              MON.map(m=>`<option value="${m}"${m===mo?' selected':''}>${m}</option>`).join('')}</select>
-          </div>
-          <span class="pfhint">Only the day and month are kept &mdash; never the year.</span>`; })()
+      ? `<div class="pfread">${bdayOf(u)
+            ? esc(bdayDM(u)) + (bdayYr(u) ? ' <span style="color:var(--ink3)">' + esc(bdayYr(u)) + '</span>' : '')
+            : '<span class="miss">not on file</span>'}</div>
+         <span class="pfhint">${bdayOf(u)
+            ? 'Accounts sets this from your passport. If it is wrong, tell them and it is a two-second fix.'
+            : 'Accounts has not filled this in yet. Until they do you cannot book your birthday half-day.'}
+           ${bdayYr(u) ? 'Your colleagues see the day and the month only \u2014 never the year.' : ''}</span>`
       : f.pick
       ? `<select id="pf_${f.k}" data-pfs="${f.k}"><option value="">Not said</option>${PICKS[f.pick].map(o=>`<option value="${esc(o)}"${p[f.k]===o?' selected':''}>${esc(o)}</option>`).join('')}</select>`
       : `<input id="pf_${f.k}" data-pf="${f.k}" value="${esc(p[f.k]||'')}" placeholder="${esc(f.ph||'')}">`}${
@@ -3106,11 +3446,18 @@ function vProfile(){
         ${ro('Reports to', mgrName(u) || '—')}
         ${ro('Work email', emailOf(u) || r.email)}
         ${phoneOf(u) ? ro('Work phone', phoneOf(u)) : ''}
-        ${eidOf(u) ? `<dt>Emirates ID</dt><dd style="font-family:inherit;font-weight:600">
-          <span id="eidVal" data-full="${esc(eidOf(u))}">${esc(maskEID(eidOf(u)))}</span>
-          <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show</button></dd>` : ''}
+        ${(() => {
+          const REFS = [['eid','Emirates ID'],['passport','Passport'],['visa','Residence visa'],['labour','Labour card']];
+          const have = REFS.filter(([k]) => REFOF(u, k));
+          if(!have.length) return '';
+          return have.map(([k, l], i) => `<dt>${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
+            <span class="refval" data-full="${esc(REFOF(u, k))}">${esc(maskRef(REFOF(u, k)))}</span>${i ? '' :
+            ` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>`}</dd>`).join('')
+            + (have.length < REFS.length ? `<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">${
+                esc(REFS.filter(([k]) => !REFOF(u, k)).map(x => x[1]).join(', '))}</dd>` : '');
+        })()}
       </dl>
-      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID</b> is held because payroll, insurance and MOHRE filings need it &mdash; only you and accounts can see it, it is never in an email, and it is masked until you press Show. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
+      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID, passport, residency visa and labour card numbers</b> are held because payroll, insurance and the MOHRE filings need them &mdash; only you and accounts can see them, on any screen, they are never in an email, and they are masked until you press Show. They are accounts&rsquo; to type, off the documents themselves; if one of them is wrong or missing here, tell accounts. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
     </section>
     <section class="panel">
       <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>
@@ -3147,7 +3494,7 @@ function vProfile(){
         : 'Your changes are saved'}</span>
       <button class="btn" id="pfSave" type="button"${state.pfDirty ? '' : ' disabled'}>Save changes</button>
     </div>
-    <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. <b>Only your Emirates ID number is held, by accounts, because payroll and insurance need it. Your passport and visa numbers are not typed or stored anywhere</b> &mdash; the copy is the record, and only the expiry date is used, to warn accounts before it runs out. Your documents are visible to you and to accounts, nobody else.</p>
+    <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. The expiry date you type is what drives the reminders, so take it off the document rather than from memory. <b>The number on each of these is held too</b>, by accounts, off the copy you upload &mdash; that changed in September 2026, and the four are listed under Employment above. Your documents and your numbers are visible to you and to accounts, nobody else.</p>
   </section>`;
 }
 
@@ -3235,6 +3582,28 @@ function alertsFor(u){
     add('loan-'+x.id, `${x.who} — advance of AED ${money(x.amount,0)}`,
       `${x.months} months at ${money(x.monthly,0)} · ${x.why}`, 'loans'));
 
+  /* Regularizations. Accounts decides them, so accounts is told one has
+     arrived — this is the line whose absence made a sent request look like a
+     request that went nowhere. */
+  if(adm) (REG().rows || []).filter(x => x.status === 'Pending').forEach(x =>
+    add('rg-'+x.id, `${NM(x.who)} — fix ${dayLabel(x.d)}`,
+      `${x.in || '—'} to ${x.out || '—'} · ${x.reason}`, 'regular', 'warn'));
+
+  /* And the person who asked is told the same two things they are told about
+     every other request they make: that it is with somebody, and what came
+     of it. */
+  (REG().mine || []).forEach(x => {
+    if(x.status === 'Pending')
+      add('rgmine-'+x.id, `Your ${dayLabel(x.d)} fix is with accounts`,
+        `${x.in || '—'} to ${x.out || '—'} · you will see the answer on My attendance`, 'attend', 'warn');
+    else if(x.status === 'Approved')
+      add('rgok-'+x.id, `${dayLabel(x.d)} has been corrected`,
+        `${x.in || '—'} to ${x.out || '—'} is on the record now${x.note ? ' · ' + x.note : ''}`, 'attend', 'good');
+    else if(x.status === 'Declined')
+      add('rgno-'+x.id, `Your ${dayLabel(x.d)} fix was turned down`,
+        x.note || 'No reason was given', 'attend', 'bad');
+  });
+
   if(adm){
     const bad = allDocRows().filter(r=>r.state==='expired').length;
     const soon = allDocRows().filter(r=>r.state==='soon').length;
@@ -3304,7 +3673,7 @@ function vHome(){
     const thisYr = `${ty}-${String(mm).padStart(2,'0')}-${String(+d).padStart(2,'0')}`;
     return thisYr >= today ? thisYr : `${ty+1}-${String(mm).padStart(2,'0')}-${String(+d).padStart(2,'0')}`; };
   const bdays = Object.keys(H.birthdays||{}).filter(n=>USERS.some(x=>x.name===n))
-    .map(n=>({n, dm:H.birthdays[n].d, on:nextOccur(H.birthdays[n].d)}))
+    .map(n=>({n, dm:BDM(H.birthdays[n].d), on:nextOccur(H.birthdays[n].d)}))
     .sort((x,y)=>x.on.localeCompare(y.on)).slice(0,4);
 
   // --- work anniversaries (from joining dates)
@@ -3339,9 +3708,19 @@ function vHome(){
   const todo = [];
   {
     const D = profDone(u);
-    if(D.total && D.pct < 100) todo.push([D.pct===0 ? 'Fill in your profile' : `Your profile is ${D.pct}% done — ${D.missing.length} thing${D.missing.length===1?'':'s'} left`, 'profile', null]);
+    // the profile chip lives in the banner at the top of this page now
   }
   if(!adm && payrollRowFor(u) && PAYST()==='closed') todo.push([`Your ${DATA.payroll.month} payslip is ready`, 'myslip', null]);
+  {
+    const rg = (REG().rows || []).filter(x => x.status === 'Pending');
+    if(adm && rg.length) todo.push([
+      rg.length === 1 ? `${NM(rg[0].who)} wants ${dayLabel(rg[0].d)} corrected`
+                      : `${rg.length} attendance fixes waiting on you`, 'regular', true]);
+    const my = (REG().mine || []).filter(x => x.status === 'Pending');
+    if(!adm && my.length) todo.push([
+      my.length === 1 ? `Your ${dayLabel(my[0].d)} fix is with accounts`
+                      : `${my.length} attendance fixes are with accounts`, 'attend', null]);
+  }
 
   const empty = t => `<p style="margin:0;color:var(--ink3);font-size:13.5px">${esc(t)}</p>`;
 
@@ -3385,7 +3764,22 @@ function vHome(){
 
   const me = PROF(u) || {};
   const initials = u.split(' ').map(x=>x[0]).slice(0,2).join('');
+  const PD = profDone(u);
+  const profBanner = (!PROF(u) || PD.pct >= 100) ? '' : (() => {
+    const n = PD.missing.length;
+    const first = PD.missing.slice(0, 3).map(esc).join(', ');
+    const rest  = n > 3 ? ` and ${n - 3} more` : '';
+    return `<div class="nudge${PD.pct < 60 ? ' loud' : ''}">
+      <span class="ndot"></span>
+      <div><b>Your file is ${PD.pct}% complete</b>
+        <span>Still needed: ${first}${rest}. It takes a couple of minutes, and it is what the
+          company has to show when somebody asks \u2014 a visa renewal, an insurance claim, or a
+          hospital at two in the morning.</span></div>
+      <button class="btn" data-go="profile" type="button">Finish it</button>
+    </div>`;
+  })();
   return `
+  ${profBanner}
   ${nudgeBanner(u)}
   ${(() => { const late = lateReports(u);
     if(!late.length) return '';
@@ -5713,8 +6107,12 @@ function vPayroll(){
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>Payroll register</h3>
       <span class="pill mute">${esc(P.month)}</span>
+      ${(() => { const b = EXITS().filter(x => x.month === (HERE ? HERE.key : P.monthKey)
+                    && x.status !== 'draft' && x.status !== 'paid').length;
+          return b ? `<span class="pill warn" style="margin-left:8px"><span class="dt"></span>${b} settlement${b===1?'':'s'} to pay</span>` : ''; })()}
       ${isPrep?`<button class="btn ghost" id="payInt" type="button" style="margin-left:auto;padding:4px 11px;font-size:12.5px">${state.payInternal?'Hide internal columns':'Internal columns'}</button>`:''}
       <span style="${isPrep?'':'margin-left:auto;'}color:var(--ink3);font-size:12.5px">${rows.length} of ${coRows.length} rows</span></header>
+    ${exitBox(HERE ? HERE.key : P.monthKey)}
     <div class="filterbar">
       ${psel('pfch', PF.ch, [['all','All payment channels']].concat(P.channels.filter(c=>c.id!=='eddummy').map(c=>[c.id,c.label])))}
       ${psel('pfvisa', PF.visa, [['all','All visas']].concat(VISAS.map(v=>[v,v])))}
@@ -6152,6 +6550,87 @@ function slipHTML(s, printable){
 }
 
 /* The final settlement. Same paper, same letterhead, a different document. */
+function exitOf(x){
+  /* One settlement, at whatever stage it has reached. A draft is worked out
+     live; anything past a draft is read back exactly as it was frozen. */
+  if(!x) return null;
+  const live = exitCalc(x.who, x.lastDay, {lines: x.lines, settled: x.settled});
+  return Object.assign({}, x, {c: x.frozen ? Object.assign({}, live, x.frozen) : live});
+}
+const EXITS = () => (HR().exits || []).filter(x => x.status !== 'withdrawn');
+/* Whose desk is it on? The manager while it is initiated, the owner from then
+   until it is approved. Accounts never approves its own settlement. */
+function exitsWaitingOn(u){
+  const owner = roleOf(u) === 'owner';
+  return EXITS().filter(x =>
+    (x.status === 'initiated' && (x.mgr === u || owner)) ||
+    (x.status === 'mgr_ok' && owner));
+}
+function vExitApprove(){
+  const mine = exitsWaitingOn(state.user);
+  if(state.exitOpen){
+    const x = EXITS().find(y => y.id === state.exitOpen);
+    if(x) return vExitOne(exitOf(x));
+  }
+  if(!mine.length) return `<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">Nothing waiting on you</h3>
+    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">A final settlement appears here when accounts has
+      initiated it and it is your turn to approve.</p></div></section>`;
+  return `
+  <section class="panel">
+    <header><h3>Settlements waiting on you</h3>
+      <span class="pill warn"><span class="dt"></span>${mine.length}</span>
+      <span class="hint">approve, or send it back with a reason</span></header>
+    <div class="tw"><table class="cotab">
+      ${colsOf([26, 16, 16, 18, 24])}
+      <thead><tr><th>Employee</th><th>Last day</th><th class="r">Settlement</th><th>Stage</th><th class="r"></th></tr></thead>
+      <tbody>${mine.map(x => `<tr>
+        <td>${nm(x.who)}</td>
+        <td class="n nw">${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)}</td>
+        <td class="n r netcol">AED ${money(x.net || 0, 2)}</td>
+        <td class="nw">${exitPill(x.status)}</td>
+        <td class="r nw"><button class="btn sm" data-exopen="${esc(x.id)}" type="button">Open it</button></td>
+      </tr>`).join('')}</tbody></table></div>
+    <p class="cap">This is what somebody is owed on the way out &mdash; their last month's pay, the end-of-service
+      gratuity, any leave not taken, and anything accounts has added or deducted. Open it to see the working before
+      you approve. Sending it back returns it to accounts as a draft with your reason on it.</p>
+  </section>`;
+}
+function exitBox(monthKey){
+  const on = EXITS().filter(x => x.month === monthKey && x.status !== 'draft');
+  if(!on.length) return '';
+  const owed = on.filter(x => x.status !== 'paid');
+  const sum = on.reduce((t, x) => t + (x.net || 0), 0);
+  return `<div class="exbox${owed.length ? '' : ' done'}">
+    <div class="exboxh">Final settlements &mdash; not part of the payroll, but leaving the account this month
+      <span>${owed.length
+        ? owed.length + ' waiting' + (owed.length === 1 ? '' : ' ') + ' \u00b7 nothing paid yet'
+        : 'all paid'} \u00b7 AED ${money(sum, 2)}</span></div>
+    <div class="tw"><table class="cotab">
+      ${colsOf([26, 15, 13, 20, 26])}
+      <thead><tr><th>Employee</th><th>Last day</th><th class="r">Amount</th><th>Stage</th><th class="r"></th></tr></thead>
+      <tbody>${on.map(x => `<tr>
+        <td>${nm(x.who)} <span class="pill mute">${esc((payrollRowFor(x.who)||{}).id || '')}</span></td>
+        <td class="n nw">${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)}</td>
+        <td class="n r netcol">${money(x.net || 0, 2)}</td>
+        <td class="nw">${exitPill(x.status)}</td>
+        <td class="r nw"><button class="btn ghost sm" data-exgoto="${esc(x.id)}" type="button">Open</button></td>
+      </tr>`).join('')}</tbody></table></div>
+    <p class="cap">These do not fold into the run's totals \u2014 the payroll above is unchanged by them, and a
+      month that is already closed is never restated. ${owed.length
+        ? '<b>The month cannot be closed while one of these is unpaid.</b>'
+        : 'All settled.'} The people on this list are already off the payroll above.</p>
+  </div>`;
+}
+const exitFor = who => EXITS().find(x => x.who === who && x.status !== 'paid') || null;
+const EXSTAGE = {draft:0, initiated:1, mgr_ok:2, owner_ok:3, decided:4, paid:5};
+const EXLABEL = {draft:'Draft', initiated:'With the manager', mgr_ok:'With Miraziz',
+                 owner_ok:'Waiting on you', decided:'To pay', paid:'Paid'};
+const exitPill = s => s === 'paid'
+  ? '<span class="pill good"><span class="dt"></span>Paid</span>'
+  : s === 'draft' ? '<span class="pill mute">Draft</span>'
+  : `<span class="pill warn"><span class="dt"></span>${esc(EXLABEL[s] || s)}</span>`;
+
 function settleOf(c){
   const r = c.row;
   const vco = visaCoOf(r.name);
@@ -6162,8 +6641,12 @@ function settleOf(c){
     c.leaveDays + (c.leaveDays === 1 ? ' day' : ' days') + ' of annual leave at daily basic']);
   if(c.grat) earn.push(['Gratuity', c.grat, 'Days of service: ' + c.days]);
   if(c.ticket) earn.push(['Air Ticket', c.ticket, 'unclaimed entitlement']);
+  (c.extra || []).filter(x => !x.deduct && +x.amount)
+    .forEach(x => earn.push([x.label || 'Other addition', +x.amount]));
   const ded = [];
   if(c.adv) ded.push(['Advance', c.adv, 'still outstanding on the last working day']);
+  (c.extra || []).filter(x => x.deduct && +x.amount)
+    .forEach(x => ded.push([x.label || 'Other deduction', +x.amount]));
   const r2 = v => Math.round(v*100)/100;
   const gross = r2(earn.reduce((s,x)=>s+x[1],0));
   const dedT  = r2(ded.reduce((s,x)=>s+x[1],0));
@@ -6255,6 +6738,18 @@ function payrollRowFor(user){
 }
 /* A salary revision letter lives with the other letters, but the payslip is where
    someone looks when their pay changes - so it is pointed to from here. */
+function exitNote(u){
+  const x = (HR().exits || []).find(y => y.who === u && !['draft','withdrawn'].includes(y.status));
+  if(!x) return '';
+  const e = exitOf(x);
+  return `<button class="revlink" data-exslip="${esc(x.id)}" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v5h5"/><path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z"/><path d="M9 13h6M9 17h4"/></svg>
+    <span><b>Your final settlement \u2014 ${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)}</b>
+      <i>${x.status === 'paid' ? 'Paid. Tap to open it, print it or save it as a PDF.'
+                               : 'Tap to open it, print it or save it as a PDF.'}</i></span>
+    <svg class="rvgo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+  </button>`;
+}
 function revNote(u){
   const l = (HR().letters||[]).filter(x=>x.who===u && x.type==='revision' && x.status==='Issued')
     .sort((a,b)=>String(b.eff||b.decided||'').localeCompare(String(a.eff||a.decided||'')))[0];
@@ -6271,10 +6766,14 @@ function vMySlip(){
   const P = DATA.payroll, released = PAYST()==='closed';
   const row0 = payrollRowFor(state.user);
   const row = (row0 && row0.net !== undefined) ? row0 : null;
-  if(!row) return `<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
-    <h3 style="font-size:20px;margin-bottom:8px">No payslip for you</h3>
-    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">You are not on this payroll run. If that looks wrong, speak to accounts.</p></div></section>`;
-  if(!released) return `<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+  if(!row) return `${exitNote(state.user)}
+    <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">No payslip for this month</h3>
+    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">${exitNote(state.user)
+      ? 'Your last month is inside your final settlement above rather than on a payslip.'
+      : 'You are not on this payroll run. If that looks wrong, speak to accounts.'}</p></div></section>`;
+  if(!released) return `${exitNote(state.user)}
+    <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
     <h3 style="font-size:20px;margin-bottom:8px">${esc(P.month)} is not released yet</h3>
     <p style="color:var(--ink2);max-width:56ch;margin:0 auto">Your payslip appears here as soon as the run is approved, the payment is made and accounts releases it. You will get a notification.</p></div></section>`;
   const s = slipOf(row);
@@ -6302,7 +6801,7 @@ function vMySlip(){
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-3px;margin-right:7px"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Download as PDF</button>
     </div>
     <p class="cap">The full A4 payslip on ${esc(s.ent.legal)} letterhead. Amounts in AED.</p>
-    ${revNote(state.user)}
+    ${exitNote(state.user)}${revNote(state.user)}
     <div class="slwrap printonly">${slipHTML(s)}</div>
   </section>
   <section class="panel">
@@ -6348,7 +6847,7 @@ function vMySlip(){
       </tbody></table></div>
     <p class="cap">Every released month stays here. The payslip opens on ${esc(s.ent.legal)} letterhead and can be printed or saved as a PDF from the window.</p>
   </section>
-  ${revNote(state.user)}`;
+  ${exitNote(state.user)}${revNote(state.user)}`;
 }
 function vSlips(){
   const P = DATA.payroll;
@@ -7236,6 +7735,8 @@ const TABS = [
   {id:'tools',       group:'other', label:'Calculator', title:'Calculator'},
   // payment requests are a CorpLex process; POA and Lex do not use them
   {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
+  {id:'exitapprove', group:'other', label:'Final settlements', title:'Settlements waiting on you',
+   gate:u=>exitsWaitingOn(u).length > 0, hide:true},
   {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
    gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},
   {id:'profile',     group:'hr',    label:'My profile',       title:'My profile', hide:true},
@@ -7274,9 +7775,8 @@ const TABS = [
   {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:canAdmin, con:true},
   // ---- Documents: the hero stays put as you move between these four
   {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:canAdmin, con:true},
-  {id:'docdates',   group:'con', sec:'docs',   label:'Fill in dates',  title:'Fill in document dates', gate:canAdmin, con:true},
-  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
-  {id:'directory',  group:'con', sec:'docs',   label:'Staff directory',title:'Staff directory', gate:canAdmin, con:true}
+  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:canAdmin, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true}
 ];
 const PERIODTABS = ['dashboard','commission','invoices','team','leaderboard','company'];
 const ALLOWED = () => TABS.filter(t=>!t.con && (!t.gate || t.gate(state.user)));
@@ -7681,9 +8181,8 @@ const PAGE = {
   // document pages all carry the same strip, and moving between them does not
   // make the count you were reading disappear.
   docsadmin:  ['docs',    ['Document expiry'], true],
-  docdates:   ['docs',    ['Fill in document dates'], true],
-  profiles:   ['docs',    ['Profile completeness'], true],
-  directory:  ['docs',    ['Staff directory'], true]
+  docdates:   ['docs',    ['Staff Documents', 'Dates of birth'], true],
+  profiles:   ['docs',    ['Profile completeness'], true]
 };
 const PAGESRC = {admin: () => vAdmin(), hradmin: () => vHRAdmin(), docs: () => vDocsAdmin()};
 
@@ -7785,7 +8284,7 @@ function render(){
     return;
   }
   v.innerHTML = (CON?conBar():'') + ({home:vHome, dashboard:vDashboard, commission:vCommission, invoices:vInvoices,
-                  leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payapprove:vPayApprove, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
+                  leaderboard:vLeaderboard, company:vCompany, tools:vTools, team:vTeam, payment:vPayment, payapprove:vPayApprove, exitapprove:vExitApprove, payroll:vPayroll, tickets:vTickets, myticket:vMyTicket, payslips:vSlips, myslip:vMySlip,
                   attend:vAttend, requests:(()=>(MOBILE()&&state.askOnly)?vAsk(state.askOnly):vRequests()), hradmin:vHRAdmin,
                   profile:vProfile, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,
                   leaverules:vLeaveRules, deskonly:vDeskOnly, ...PAGEVIEW,
@@ -7816,7 +8315,7 @@ function render(){
     window.__db.saveDocDateFor(n, k, el.value);
     render();
   });
-  document.querySelectorAll('[data-deid]').forEach(el=>el.onchange=()=>{
+  document.querySelectorAll('[data-deid-gone]').forEach(el=>el.onchange=()=>{
     const v = el.value.trim();
     const E = HR().eid || (HR().eid = {});
     if(v) E[el.dataset.deid] = v; else delete E[el.dataset.deid];
@@ -7860,6 +8359,8 @@ function render(){
   document.querySelectorAll('#askSeg button').forEach(b=>b.onclick=()=>{ state.askTab=b.dataset.ask; state.ltOpen=null; render(); });
   document.querySelectorAll('#deptSeg button').forEach(b=>b.onclick=()=>{ state.deptView=b.dataset.dv; render(); });
   document.querySelectorAll('#attMonthSeg button').forEach(b=>b.onclick=()=>{ state.attMonth=b.dataset.am; render(); });
+  document.querySelectorAll('#attSeg button').forEach(b=>b.onclick=()=>{
+    state.attTab=b.dataset.att; state.rgSent=false; render(); window.scrollTo({top:0}); });
   document.querySelectorAll('[data-ci]').forEach(b=>b.onclick=async ()=>{
     const d=HDATE(); let a=attOf(state.user,d);
     if(!a){ a={who:state.user,d,kind:b.dataset.ci==='Home'?'WFH':'Office',segs:[]}; HR().attendance.push(a); }
@@ -8042,15 +8543,10 @@ function render(){
       if(e2){ e2.focus(); try{e2.setSelectionRange(e2.value.length,e2.value.length);}catch(_){}}
     }, 320); };
   });
-  document.querySelectorAll('[data-bday]').forEach(el => el.onchange = ()=>{
-    const d = (document.getElementById('pf_bdayD')||{}).value || '';
-    const m = (document.getElementById('pf_bdayM')||{}).value || '';
-    const B = HR().birthdays || (HR().birthdays={});
-    const v = (d && m) ? d + ' ' + m : '';
-    if(v) B[state.user] = {d: v, sample:false}; else delete B[state.user];
-    const p=PROF(state.user); if(p) p.updated=HDATE();
-    state.pfDirty = Object.assign(state.pfDirty||{}, {birthday: v});
-    state.pfSaved = ''; render(); });
+  /* The birthday was typed here once. It is accounts' now, and the database
+     has always agreed: 'birthday' is not one of the four fields the guard on
+     employees lets a person change on their own row, so this handler was
+     writing into a trigger that put it straight back. */
   document.querySelectorAll('[data-dd]').forEach(b=>b.onclick=()=>{ state.mailWeek=b.dataset.dd; render(); });
   document.querySelectorAll('[data-mail]').forEach(b=>b.onclick=()=>{ state.mailPick=b.dataset.mail; render(); });
   document.querySelectorAll('[data-who]').forEach(b=>b.onclick=()=>{
@@ -8073,10 +8569,11 @@ function render(){
   const dgd = document.getElementById('dgDay');
   if(dgd) dgd.onchange = ()=>{ MAILCFG().weeklyDay = dgd.value; render(); };
   const eb = document.getElementById('eidShow');
-  if(eb) eb.onclick = ()=>{ const v = document.getElementById('eidVal');
-    const shown = v.dataset.shown === '1';
-    v.textContent = shown ? maskEID(v.dataset.full) : v.dataset.full;
-    v.dataset.shown = shown ? '' : '1'; eb.textContent = shown ? 'Show' : 'Hide'; };
+  if(eb) eb.onclick = ()=>{
+    const on = eb.dataset.on === '1';
+    document.querySelectorAll('.refval').forEach(v => {
+      v.textContent = on ? maskRef(v.dataset.full) : v.dataset.full; });
+    eb.dataset.on = on ? '' : '1'; eb.textContent = on ? 'Show numbers' : 'Hide them'; };
   const ea = document.getElementById('eidAll');
   if(ea) ea.onclick = ()=>{ const on = ea.dataset.on === '1';
     document.querySelectorAll('[data-eid]').forEach(el=>{ el.textContent = on ? maskEID(el.dataset.eid) : el.dataset.eid; });
@@ -8141,6 +8638,15 @@ function render(){
       from: g.eff, reason: g.reason || 'Salary revision'});
     if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:''}; }
     render(); };
+  { const q = document.getElementById('revQ');
+    if(q) q.oninput = () => { state.revQ = q.value; render();
+      const e2 = document.getElementById('revQ');
+      if(e2){ e2.focus(); e2.setSelectionRange(e2.value.length, e2.value.length); } }; }
+  document.querySelectorAll('[data-rvsee]').forEach(b=>b.onclick=()=>{
+    const l = (HR().letters||[]).find(x=>x.id===b.dataset.rvsee);
+    if(!l) return oops2('That letter is not there yet — reload the page.');
+    showSlip(letterHTML(l), legalOf(l.who), 'Draft \u2014 not sent');
+  });
   document.querySelectorAll('[data-rvsend]').forEach(b=>b.onclick=()=>{
     state.revAsk = b.dataset.rvsend; state.revSent=''; render(); });
   const rvn = document.getElementById('rvNo');
@@ -8210,7 +8716,11 @@ function render(){
     const n = edList(id).length;
     document.querySelectorAll('.edmsg').forEach(s=>{
       s.textContent = edPhrase(n); s.classList.toggle('on', !!n); });
-    document.querySelectorAll('[data-edsave]').forEach(b=>{
+    /* Scoped to the table being edited, not to every Save on the page: only
+       one table is ever open, but a bare [data-edsave] here reads as a second
+       handler on the same attribute, and the next person to look would have to
+       work out which of the two wins. */
+    document.querySelectorAll(`[data-edsave="${id}"]`).forEach(b=>{
       b.disabled = !n; b.textContent = 'Save' + (n ? ' ' + n : ''); });
   };
   document.querySelectorAll('[data-edk]').forEach(el=>{
@@ -8229,6 +8739,15 @@ function render(){
     el.classList.toggle('edchanged', on);
     const row0 = el.closest('tr'); if(row0) row0.classList.toggle('edrow', on);
   });
+  { const rb = document.getElementById('refShow');
+    if(rb) rb.onclick = () => { state.refShow = !state.refShow; render(); }; }
+  document.querySelectorAll('[data-docsee]').forEach(b=>b.onclick=()=>{
+    const [who, kind] = b.dataset.docsee.split('|');
+    const f = fileOf(who, kind); if(!f) return;
+    const t = DOCTYPES().find(x => x.k === kind) || {label: kind};
+    const exp = ((HR().docs||{})[who]||{})[kind];
+    showDoc(f, NM(who) + ' \u2014 ' + t.label,
+      exp ? 'expires ' + dayLabel(exp) + ' ' + String(exp).slice(0,4) : 'no expiry on file'); });
   document.querySelectorAll('[data-edrm]').forEach(b=>b.onclick=()=>{
     const id = b.dataset.edt, key = b.dataset.edrm;
     if(!EDITING(id)) return;
@@ -8252,8 +8771,102 @@ function render(){
   const exw=document.getElementById('exWho'); if(exw) exw.onchange=()=>{ state.exitWho=exw.value; render(); };
   const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; state.exitSettle=''; render(); };
   const exs=document.getElementById('exSettle'); if(exs) exs.onchange=()=>{ state.exitSettle=exs.value; render(); };
+  /* The free lines. Typing does not redraw — that would take the cursor with
+     it on every keystroke — so the draft is updated in place and the totals
+     catch up when the field is left. */
+  const exAdd=document.getElementById('exAdd'); if(exAdd) exAdd.onclick=()=>{
+    state.exitLines = (state.exitLines||[]).concat([{label:'', amount:'', deduct:false}]); render(); };
+  document.querySelectorAll('[data-exlbl]').forEach(el=>{
+    el.oninput = ()=>{ state.exitLines[+el.dataset.exlbl].label = el.value; };
+    el.onchange = ()=>{ state.exitLines[+el.dataset.exlbl].label = el.value; render(); }; });
+  document.querySelectorAll('[data-examt]').forEach(el=>{
+    el.oninput = ()=>{ state.exitLines[+el.dataset.examt].amount = el.value; };
+    el.onchange = ()=>{ state.exitLines[+el.dataset.examt].amount = el.value; render(); }; });
+  document.querySelectorAll('[data-exsign]').forEach(b=>b.onclick=()=>{
+    state.exitLines[+b.dataset.exsign].deduct = b.dataset.v === 'less'; render(); });
+  document.querySelectorAll('[data-exdrop]').forEach(b=>b.onclick=()=>{
+    state.exitLines.splice(+b.dataset.exdrop, 1); render(); });
+
+  const exSave=document.getElementById('exSave'); if(exSave) exSave.onclick=async ()=>{
+    const who = state.exitWho, lwd = state.exitLwd;
+    if(!who || !lwd) return;
+    state.exBusy = true; render();
+    const id = await window.__db.saveExit({
+      id: state.exitId, who, lastDay: lwd, settled: state.exitSettle || lwd,
+      lines: (state.exitLines||[]).filter(x => String(x.label).trim() || +x.amount)
+              .map(x => ({label: String(x.label).trim(), amount: +x.amount || 0, deduct: !!x.deduct}))});
+    state.exBusy = false;
+    if(id){ state.exitId = null; state.exitLines = []; state.exitWho = ''; state.exitLwd = ''; state.exitSettle = ''; }
+    render(); };
+  const exCancel=document.getElementById('exCancel'); if(exCancel) exCancel.onclick=()=>{
+    state.exitId=null; state.exitLines=[]; state.exitWho=''; state.exitLwd=''; state.exitSettle=''; render(); };
+
+  document.querySelectorAll('[data-exedit]').forEach(b=>b.onclick=()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exedit); if(!x) return;
+    state.exitId = x.id; state.exitWho = x.who; state.exitLwd = x.lastDay;
+    state.exitSettle = x.settled || x.lastDay;
+    state.exitLines = (x.lines||[]).map(l=>({label:l.label, amount:l.amount, deduct:l.deduct}));
+    state.exitOpen = null; render(); });
+  document.querySelectorAll('[data-exopen]').forEach(b=>b.onclick=()=>{
+    state.exitOpen = b.dataset.exopen; state.exAsk = null; state.exWhy = ''; render(); });
+  document.querySelectorAll('[data-exslip]').forEach(b=>b.onclick=()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exslip); if(!x) return;
+    const c = exitOf(x).c, s = settleOf(c);
+    showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' \u00b7 full and final settlement'); });
+  document.querySelectorAll('[data-exgoto]').forEach(b=>b.onclick=()=>{
+    state.mode='console'; state.tab='exits';
+    state.exitOpen = b.dataset.exgoto; state.exAsk = null; state.exWhy = ''; render(); });
+  const exBack=document.getElementById('exBack'); if(exBack) exBack.onclick=()=>{
+    state.exitOpen = null; render(); };
+
+  /* Initiating is the one button on this screen that changes somebody's
+     employment, so it says what it is about to do before it does it. */
+  document.querySelectorAll('[data-exgo]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exgo); if(!x) return;
+    const c = exitOf(x).c;
+    const mon = MONTHNAME[+x.lastDay.slice(5,7)-1] + ' ' + x.lastDay.slice(0,4);
+    if(!confirm('Initiate ' + NM(x.who) + "'s exit?\n\n"
+      + 'AED ' + money(c.net,2) + ' is written down and cannot be changed after this.\n'
+      + NM(x.who) + ' comes off the ' + mon + ' payroll and off the staff list.\n'
+      + 'It then goes to ' + NM(x.mgr || 'their manager') + ' to approve.\n\n'
+      + 'Undo puts all of it back.')) return;
+    b.disabled = true;
+    await window.__db.initiateExit(x.id, c);
+    render(); });
+
+  document.querySelectorAll('[data-exok]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; await window.__db.approveExit(b.dataset.exok); render(); });
+  document.querySelectorAll('[data-exno]').forEach(b=>b.onclick=()=>{
+    state.exAsk = b.dataset.exno; state.exWhy = ''; render(); });
+  { const w = document.getElementById('exWhy');
+    if(w){ w.oninput = ()=>{ state.exWhy = w.value;
+      const g = document.getElementById('exWhyGo'); if(g) g.disabled = !w.value.trim(); }; } }
+  const exWhyNo=document.getElementById('exWhyNo'); if(exWhyNo) exWhyNo.onclick=()=>{
+    state.exAsk=null; state.exWhy=''; render(); };
+  const exWhyGo=document.getElementById('exWhyGo'); if(exWhyGo) exWhyGo.onclick=async ()=>{
+    exWhyGo.disabled = true;
+    const ok = await window.__db.sendExitBack(state.exAsk, state.exWhy.trim());
+    if(ok){ state.exAsk=null; state.exWhy=''; state.exitOpen=null; }
+    render(); };
+  document.querySelectorAll('[data-exundo]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exundo); if(!x) return;
+    if(!confirm('Undo ' + NM(x.who) + "'s exit?\n\n"
+      + 'The figures are unfrozen, ' + NM(x.who) + ' goes back on the payroll and back on the\n'
+      + 'staff list, and the settlement returns to a draft you can change.')) return;
+    b.disabled = true;
+    const ok = await window.__db.sendExitBack(x.id, 'undone by accounts');
+    if(ok) state.exitOpen = null;
+    render(); });
+  document.querySelectorAll('[data-expay]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; await window.__db.decideExit(b.dataset.expay, b.dataset.mode); render(); });
+  document.querySelectorAll('[data-exdone]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; await window.__db.exitPaid(b.dataset.exdone); render(); });
+  document.querySelectorAll('[data-exsee]').forEach(b=>b.onclick=()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exsee); if(!x) return;
+    const c = exitOf(x).c, s = settleOf(c);
+    showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' · full and final settlement'); });
   const exd=document.getElementById('exDoc'); if(exd) exd.onclick=()=>{
-    const c = exitCalc(state.exitWho, state.exitLwd); if(!c) return;
+    const c = exitCalc(state.exitWho, state.exitLwd, {lines: state.exitLines}); if(!c) return;
     const s = settleOf(c);
     showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' \u00b7 full and final settlement');
   };
@@ -8711,16 +9324,24 @@ function render(){
 { const bn = document.getElementById('buildNo');
   if(bn) bn.textContent = 'build ' + ((window.CORPLEX_ONE || {}).build || '?'); }
 
-/* looking at a document without leaving the page */
-function showDoc(kind){
-  const f = ((HR().files || {})[state.user] || {})[kind];
+/* Looking at a document without leaving the page.
+   Two callers, so two ways in. A staff member on their own Documents page
+   passes the kind ('passport') and the viewer finds their own file; accounts,
+   on the Staff Documents grid, passes somebody else's file object outright
+   along with the heading it should carry. Nothing here reads state.user
+   except the first form, which is the only one that should. */
+function showDoc(what, title, sub){
+  const own = typeof what === 'string';
+  const f = own ? ((HR().files || {})[state.user] || {})[what] : what;
   if(!f || !f.url) return;
-  const label = (UPLOADS().find(t => t.k === kind) || {label: kind}).label;
+  const label = own ? (UPLOADS().find(t => t.k === what) || {label: what}).label
+                    : (title || 'Document');
   const pdf = /pdf/i.test(f.name || '');
   const box = document.getElementById('lookWrap');
   box.innerHTML = '<div class="lookbg" data-lookclose="1"></div>'
     + '<div class="look" role="dialog" aria-modal="true">'
     +   '<header><b>' + esc(label) + '</b><span>' + esc(f.name) + '</span>'
+    +     (sub ? '<span class="mute">' + esc(sub) + '</span>' : '')
     +     '<a class="btn ghost" href="' + f.url + '" download="' + esc(f.name) + '">Download</a>'
     +     '<button class="btn ghost" data-lookclose="1" type="button">Close</button></header>'
     +   '<div class="lookbody">'
@@ -8840,7 +9461,10 @@ function regularDays(u){
   return out.reverse();
 }
 
-function regularPanel(u){
+/* The two halves of it. They were one panel, with the list of what you had
+   asked for tucked inside the box you ask from, which is why a request looked
+   like it had gone nowhere: the only place it appeared was the form. */
+function regularForm(u){
   const R = REG(), missing = regularDays(u), mine = R.mine;
   if(!missing.length && !mine.length) return '';
   const f = state.rgForm || (state.rgForm = {d:'', in:'', out:'', reason:''});
@@ -8875,21 +9499,42 @@ function regularPanel(u){
           <input id="rgWhy" type="text" maxlength="160" value="${esc(f.reason)}"
             placeholder="Went straight to the client in Deira and forgot to tap in"></label>
       </div>
-      <button class="btn" id="rgGo" type="button"${ok?'':' disabled'}>Send to ${esc((adminName()||'accounts').split(' ')[0])}</button>
+      <button class="btn" id="rgGo" type="button"${ok?'':' disabled'}>Send request</button>
       ${none ? '<p class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Both of this month\u2019s are used.</b> A declined request costs nothing, so this is two that were approved. The allowance comes back on the 1st.</p>' : ''}
       ${state.rgSent ? '<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Sent.</b> Accounts has it, and you will see the answer here.</div>' : ''}
       ` : '<p style="margin:0;color:var(--ink2)">Nothing is missing. Every working day this month has a check-in and a check-out.</p>'}
     </div>
-    ${mine.length ? `<div class="tw"><table>
-      <thead><tr><th>Ref</th><th>Day</th><th class="n">In</th><th class="n">Out</th><th>Why</th><th>State</th><th></th></tr></thead>
+  </section>`;
+}
+
+/* Everything you have ever asked for, and what came of it. Its own box, the
+   full width of the screen, because this is the answer to "where did my
+   request go" and an answer should not be a column inside a form. */
+function regularList(u){
+  const mine = REG().mine;
+  return `<section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Your requests</h3>
+      <span class="hint">${mine.length
+        ? mine.filter(r => r.status === 'Pending').length + ' waiting \u00b7 ' + mine.length + ' in all'
+        : 'nothing asked for yet'}</span></header>
+    ${mine.length ? `<div class="tw"><table class="invtable">
+      <thead><tr><th>Ref</th><th>Day</th><th class="n">In</th><th class="n">Out</th><th>Why</th>
+        <th>State</th><th>Decided</th><th></th></tr></thead>
       <tbody>${mine.map(r => `<tr>
         <td class="n">${esc(r.id)}</td>
         <td class="nw">${esc(dayName(r.d))} ${esc(dayLabel(r.d))}</td>
         <td class="n">${esc(r.in)||'\u2014'}</td><td class="n">${esc(r.out)||'\u2014'}</td>
-        <td style="color:var(--ink2);font-size:12.5px">${esc(r.reason)}${r.note?' \u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td style="color:var(--ink2);font-size:12.5px"${full(r.reason + (r.note ? ' \u2014 ' + r.note : ''))}>${
+          esc(r.reason)}${r.note?' \u00b7 <i>'+esc(r.note)+'</i>':''}</td>
         <td><span class="dpill" style="--dc:${RGCOL(r.status)}">${esc(r.status)}</span></td>
+        <td class="n nw">${r.decided ? esc(dayLabel(r.decided)) : '\u2014'}</td>
         <td>${r.status==='Pending'?`<button class="btn ghost sm" data-rgdrop="${esc(r.uid)}" type="button">Withdraw</button>`:''}</td>
-      </tr>`).join('')}</tbody></table></div>` : ''}
+      </tr>`).join('')}</tbody></table></div>`
+      : `<div class="pad" style="padding:34px 24px;color:var(--ink3)">You have not asked to fix a day yet.
+          A day with no check-in, or one you forgot to check out of, can be corrected here \u2014 twice a month.</div>`}
+    <p class="cap">Two a month, counted by the database rather than by this screen. A declined request costs
+      nothing. Once one is approved the times go straight onto that day, so the hours and the working-days
+      figure that payroll reads move with it \u2014 there is nothing further for you to do.</p>
   </section>`;
 }
 // A function, not a const: this block is appended after the app has already
@@ -9201,6 +9846,7 @@ function vPayrollDraft(run){
       </tbody></table></div>
     <p class="cap">Days are 30 less unpaid leave, pro-rated for anyone who joined or left inside the month. Where check-in makes it a different number, that figure sits under the box &mdash; click it to take it, or leave it and pay the days above. A missed tap is not an absence, so attendance advises and never decides. A figure you type is yours: refreshing from the records will not overwrite it, and the gross and net are worked out in the database rather than here.${
       attNone.length ? ' <b>' + attNone.length + ' ' + (attNone.length===1?'person has':'people have') + ' no attendance recorded this month</b> &mdash; ' + esc(attNone.map(r=>nm(r.portalName)).join(', ')) + '.' : ''}</p>
+    ${exitBox(run.key)}
   </section>
 
   ${V ? `<section class="panel invpanel" style="height:auto;max-height:none">
@@ -9236,6 +9882,12 @@ function vPayrollDraft(run){
   </section>` : ''}`;
 }
 
+function oops2(msg){
+  const t = document.createElement('div');
+  t.className = 'toast bad'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+}
 function showSlip(html, title, sub){
   const box = document.getElementById('lookWrap');
   box.innerHTML = '<div class="lookbg" data-lookclose="1"></div>'
