@@ -5654,6 +5654,33 @@ function sumBy(list){
 /* Marks a cell as having more in it than fits. The hover card only appears
  * when the text is actually cut, so a short client name behaves like a
  * perfectly ordinary cell. */
+/* A part-typed year is not a date yet.
+ *
+ * A date input fires `change` as soon as its three segments make a valid
+ * date, and typing a year one digit at a time makes four of them: 0002, 0020,
+ * 0202, 2026. Every handler in the portal treated the first as the answer.
+ *
+ * So nothing may act on a date until its year has four digits. Blank still
+ * counts — clearing a date is a real thing to do. The listener sits on the
+ * document in the capture phase, so it runs before the input's own handler
+ * and stops the event dead; no save, no render, no lost focus, and the person
+ * carries on typing.
+ */
+const dateReady = v => v === '' || (/^\d{4}-\d{2}-\d{2}$/.test(v) && +v.slice(0, 4) >= 1000);
+function dateGuard(){
+  if(window.__dateGuard) return;
+  window.__dateGuard = true;
+  const isDate = el => el && el.tagName === 'INPUT' && el.type === 'date';
+  const hold = e => { if(isDate(e.target) && !dateReady(e.target.value)) e.stopImmediatePropagation(); };
+  document.addEventListener('input', hold, true);
+  document.addEventListener('change', hold, true);
+  /* Walked away from a half-typed one: put back what was there rather than
+     leaving 0002 on the screen pretending to be a date. */
+  document.addEventListener('blur', e => {
+    if(isDate(e.target) && !dateReady(e.target.value)) e.target.value = e.target.defaultValue || '';
+  }, true);
+}
+
 function cellHover(){
   if(window.__cellHover) return;
   window.__cellHover = true;
@@ -9205,6 +9232,7 @@ function render(){
     mk.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); }; }
   CHARTS = {};
   cellHover();
+  dateGuard();
   if(state.tab !== 'payment') state.pqSeen = false;
   {
     const app = document.getElementById('app'), tg = document.getElementById('railTog');
