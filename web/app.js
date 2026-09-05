@@ -4025,7 +4025,9 @@ function vProfile(){
       <div class="pad">${grp('you')}</div>
     </section>
     <section class="panel">
-      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span></header>
+      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span>
+        ${REFKINDS.some(t => REFOF(u, t.k))
+          ? `<button class="btn ghost sm" id="eidShow" type="button">Show numbers</button>` : ''}</header>
       <div class="pad"><dl class="kv">
         ${ro('Employee ID', r.id)}
         ${ro('Company', co.name)}
@@ -4040,9 +4042,8 @@ function vProfile(){
           const REFS = REFKINDS.map(t => [t.k, t.label]);
           const have = REFS.filter(([k]) => REFOF(u, k));
           if(!have.length) return '';
-          return have.map(([k, l], i) => `<dt>${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
-            <span class="refval" data-full="${esc(REFOF(u, k))}">${esc(maskRef(REFOF(u, k)))}</span>${i ? '' :
-            ` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>`}</dd>`).join('')
+          return have.map(([k, l]) => `<dt>${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
+            <span class="refval" data-full="${esc(REFOF(u, k))}">${esc(maskRef(REFOF(u, k)))}</span></dd>`).join('')
             + (have.length < REFS.length ? `<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">${
                 esc(REFS.filter(([k]) => !REFOF(u, k)).map(x => x[1]).join(', '))}</dd>` : '');
         })()}
