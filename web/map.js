@@ -388,9 +388,20 @@ export function buildData(db, meId){
         const live = mine.filter(r => !r.effective_from || String(r.effective_from) <= today);
         const later = mine.filter(r => r.effective_from && String(r.effective_from) > today);
         const r = live[live.length - 1];
+        /* The row before the one in force, so a screen can say what the last
+           revision moved and not merely what the figure is now. A person on
+           their first salary has none, and null is the honest answer. The ISO
+           date rides along beside the written one because "how long has this
+           stood" is arithmetic, and longDate output is not. */
+        const pv = live[live.length - 2];
         if(r) pick.push({company: c, label: (companies[c] || {}).name || c || 'the group',
           salary: +r.salary, basic: +r.basic, allow: +r.allowance,
-          from: r.effective_from ? longDate(r.effective_from) : '', src: r.source || ''});
+          from: r.effective_from ? longDate(r.effective_from) : '',
+          on: r.effective_from ? String(r.effective_from).slice(0,10) : '',
+          src: r.source || '',
+          prev: pv ? {salary: +pv.salary, basic: +pv.basic, allow: +pv.allowance,
+            from: pv.effective_from ? longDate(pv.effective_from) : '',
+            on: pv.effective_from ? String(pv.effective_from).slice(0,10) : ''} : null});
         later.forEach(x => ahead.push({company: c,
           label: (companies[c] || {}).name || c || 'the group',
           salary: +x.salary, basic: +x.basic, allow: +x.allowance,

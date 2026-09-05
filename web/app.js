@@ -1869,7 +1869,7 @@ function vPeople(){
       </div>
     </section>
 
-    <div class="grid g3 gtop">
+    <div class="grid g3">
       <section class="panel">
         <header><h3>How to reach them</h3><span class="hint">work only</span></header>
         <div class="pad"><dl class="kv wide">
@@ -1925,30 +1925,152 @@ function vPeople(){
       ].filter(x => String(x[1] || '').trim());
       const here = [
         ['Address in the UAE', p.uaeAddr],
-        ['Personal email',     p.pemail ? `<a href="mailto:${esc(p.pemail)}">${esc(p.pemail)}</a>` : ''],
+        ['Personal email',     p.pemail ? `<a href="mailto:${esc(p.pemail)}">${esc(p.pemail)}</a>` : '', true],
         own ? ['Personal mobile', p.mobile
-                ? `${esc(p.mobile)} <span class="pill mute">not shown to colleagues</span>` : '']
+                ? `${esc(p.mobile)} <span class="pill mute">not shown to colleagues</span>` : '', true]
             : null
       ].filter(Boolean).filter(x => String(x[1] || '').trim());
       const D = profDone(who);
-      const panel = (h, hint, list) => list.length ? `<section class="panel">
+      const panel = (h, hint, list) => `<section class="panel">
         <header><h3>${h}</h3>${hint ? `<span class="hint">${hint}</span>` : ''}</header>
-        <div class="pad"><dl class="kv wide">${list.map(x =>
-          `<dt>${esc(x[0])}</dt><dd>${/^</.test(String(x[1])) ? x[1] : esc(x[1])}</dd>`).join('')}
-        </dl></div></section>` : '';
+        <div class="pad">${list.length
+          ? `<dl class="kv wide">${list.map(x =>
+              `<dt>${esc(x[0])}</dt><dd>${x[2] ? x[1] : esc(x[1])}</dd>`).join('')}</dl>`
+          : `<p style="margin:0;color:var(--ink3)">Nothing on file yet</p>`}</div></section>`;
       const any = here.length || home.length || emg.length;
-      if(!any) return `<section class="panel"><div class="pad" style="padding:34px 24px;text-align:center;color:var(--ink3)">
-        ${esc(NM(who))} has not filled in a profile yet \u2014 ${D.total - D.done} of ${D.total} things still to go.</div></section>`;
-      return `<div class="grid g3 gtop">
+      return `<div class="grid g3">
         ${panel('Where they live', 'in the UAE', here)}
         ${panel('Back home', '', home)}
         ${panel('In an emergency', 'who we call', emg)}
+      </div>`
+      + (any ? '' : `<p class="cap" style="color:var(--ink3);font-size:13px;margin:0;border:0;padding:2px 0 0">
+          ${esc(NM(who))} has not filled in a profile yet \u2014 ${D.total - D.done} of ${D.total} things still to go.</p>`);
+    })()}
+    ${(() => {
+      /* Avin: 'it should be viewed only by Miraziz and me'. canAdmin is
+         accounts and the owner, which is exactly those two today and stays
+         right if a second accounts person is ever added. A colleague opening
+         the same card sees the six boxes above and no sign that these exist. */
+      if(!canAdmin(state.user)) return '';
+
+      const kv = rows => `<div class="pad"><dl class="kv wide">${rows
+        .map(r => `<dt>${esc(r[0])}</dt><dd>${r[1]}</dd>`).join('')}</dl></div>`;
+      const box = (h, hint, rows) => `<section class="panel">
+        <header><h3>${esc(h)}</h3>${hint ? `<span class="hint">${esc(hint)}</span>` : ''}</header>
+        ${kv(rows)}</section>`;
+      const dim = t => `<span style="color:var(--ink3)">${esc(t)}</span>`;
+      /* Whole months between two dates, which is how a raise is talked about
+         for the first two years and how long ago it was after that. */
+      const monthsSince = iso => {
+        if(!iso) return null;
+        const t = HDATE();
+        let m = (+t.slice(0,4) - +iso.slice(0,4)) * 12 + (+t.slice(5,7) - +iso.slice(5,7));
+        if(+t.slice(8,10) < +iso.slice(8,10)) m--;
+        return Math.max(0, m);
+      };
+      const spell = m => m === null ? '' : m < 1 ? 'this month'
+        : m < 12 ? m + ' month' + (m === 1 ? '' : 's')
+        : (m % 12 === 0 ? (m / 12) + ' year' + (m === 12 ? '' : 's')
+           : Math.floor(m / 12) + ' year' + (m >= 24 ? 's' : '') + ' ' + (m % 12) + ' month' + (m % 12 === 1 ? '' : 's'));
+
+      // ---------------------------------------------------------- what they are paid
+      const basis = BASISOF(who);
+      const S = salParts(who);
+      const pay = [];
+      if(basis === 'commission'){
+        pay.push(['On payroll as', 'Commission only ' + dim('\u2014 no salary on file')]);
+      } else if(basis === 'off'){
+        pay.push(['On payroll as', 'Not on payroll ' + dim('\u2014 on the staff list, off the run')]);
+      } else if(!S || !S.co || !S.co.length){
+        pay.push(['Current salary', dim('nothing on file')]);
+      } else {
+        const one = S.co.length === 1;
+        pay.push(['Current salary',
+          `<b style="font-size:15px">AED ${money(S.salary,2)}</b> a month`]);
+        S.co.forEach(c => pay.push([one ? 'Made up of' : esc(c.label),
+          `${money(c.basic,2)} basic &middot; ${money(c.allow,2)} allowance`
+          + (one ? '' : ` ${dim('\u2014 ' + money(c.salary,2))}`)]));
+        const lead = S.co[0] || {};
+        pay.push(['Running since', esc(lead.from || '') || dim('not dated')]);
+        /* The revision is the row before the one in force. Somebody still on
+           their first salary has none, and saying so is better than a dash
+           that could mean either. */
+        const pv = lead.prev;
+        if(pv){
+          const rise = Math.round((lead.salary - pv.salary) * 100) / 100;
+          pay.push(['Last revision',
+            `${money(pv.salary,2)} <span style="color:var(--ink3)">&rarr;</span> <b>${money(lead.salary,2)}</b>`]);
+          pay.push(['', dim((rise >= 0 ? 'a rise of ' : 'a cut of ') + money(Math.abs(rise),2)
+            + (pv.salary ? ' \u00b7 ' + Math.round(Math.abs(rise) / pv.salary * 100) + '%' : ''))]);
+        } else {
+          pay.push(['Last revision', dim('none on file \u2014 this is the first figure')]);
+        }
+        const m = monthsSince(lead.on);
+        if(m !== null) pay.push(['Time since',
+          esc(spell(m)) + (m >= 12 ? ' <span class="pill warn">due a review</span>' : '')]);
+        (S.ahead || []).forEach(a => pay.push(['Already agreed',
+          `<b>${money(a.salary,2)}</b> from ${esc(a.from)}`]));
+      }
+
+      // -------------------------------------------------------- leave and air tickets
+      const B = leaveBal(who);
+      const lv = [];
+      lv.push(['Annual leave balance', `<b style="font-size:15px">${(B.left||0).toFixed(1)} days</b>`]);
+      lv.push(['Made up of', dim(`${(B.carried||0).toFixed(1)} carried \u00b7 ${(B.accrued||0).toFixed(1)} earned \u00b7 ${(B.taken||0).toFixed(1)} taken`)]);
+      /* The three most recent that have actually started. A booking for next
+         month is on the card already, under Next booked off. */
+      const past = (HR().requests || [])
+        .filter(r => r.who === who && r.status === 'Approved' && r.from <= HDATE())
+        .sort((a, b) => a.from < b.from ? 1 : -1).slice(0, 3);
+      if(past.length) past.forEach((r, i) => lv.push([i ? '' : 'Last three taken',
+        `${esc(dayLabel(r.from))} \u2013 ${esc(dayLabel(r.to))} ${esc(String(r.to).slice(0,4))}`
+        + ` ${dim('\u00b7 ' + (r.days === null ? '' : r.days + ' day' + (r.days === 1 ? '' : 's') + ' \u00b7 ') + reqLabel(r.type).toLowerCase())}`]));
+      else lv.push(['Last three taken', dim('none taken yet')]);
+      const tk = (DATA.tickets.employees || []).find(e => e.portalName === who || e.name === who);
+      if(tk){
+        const h = (DATA.tickets.history || {})[tk.id] || (DATA.tickets.history || {})[who] || {rows: []};
+        const last = (h.rows || [])[(h.rows || []).length - 1];
+        lv.push(['Air tickets paid', (h.rows || []).length
+          ? `${h.rows.length} ${dim('\u00b7 last ' + last[1] + ', AED ' + money(last[2],2))}`
+          : dim('none yet')]);
+        lv.push(['Next air ticket due', tk.next
+          ? `${esc(tk.next)} ${tk.status ? `<span class="pill mute">${esc(tk.status.toLowerCase())}</span>` : ''}`
+          : dim(tk.status || 'not scheduled')]);
+      } else {
+        lv.push(['Air tickets', dim('not on the scheme')]);
+      }
+
+      // ---------------------------------------------------------------- visa
+      const D = (HR().docs || {})[who] || {};
+      const vco = visaCoOf(who);
+      const KINDS = [['visa','Residency visa'],['eid','Emirates ID'],
+                     ['passport','Passport'],['labour','Labour card']];
+      const doc = KINDS.map(([k, label]) => {
+        const v = D[k];
+        if(!v) return [label, dim('\u2014 not on file')];
+        const d = dTo(v);
+        const pill = d === null ? '' : d < 0 ? ' <span class="pill bad">expired</span>'
+          : d <= 60 ? ` <span class="pill warn">${d} day${d === 1 ? '' : 's'}</span>`
+          : d <= 183 ? ` <span class="pill warn">${Math.round(d / 30)} months</span>` : '';
+        const col = d === null ? '' : d < 0 ? 'var(--bad)' : d <= 60 ? 'var(--warn)' : '';
+        return [label, `<b${col ? ` style="color:${col}"` : ''}>${esc(dayLabel(v))} ${esc(String(v).slice(0,4))}</b>${pill}`];
+      });
+      doc.push(['Sponsored by', esc(vco.name)]);
+
+      return `<div class="grid g3">
+        ${box('What they are paid', 'accounts and the owner', pay)}
+        ${box('Leave and air tickets', '', lv)}
+        ${box('Visa and documents', 'expiry only', doc)}
       </div>`;
     })()}
-    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Everyone in the group can see this page. Documents,
-      document numbers, pay and the year of somebody's birth are not on it and never are \u2014 those are accounts' and the
-      person's own. Personal mobiles are not on it either: colleagues get the work number.
-      ${SEESALL(who) ? '' : `If something here is wrong about you, it is yours to fix on <b>My profile</b>.`}</p>`;
+    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">${canAdmin(state.user)
+      ? `Everyone in the group can see the boxes above. <b>The three below the line are yours and the owner&rsquo;s
+         alone</b> &mdash; pay, leave and document expiry are not on a colleague&rsquo;s view of this page and never
+         are, and neither are document numbers, personal mobiles, or the year of somebody&rsquo;s birth.`
+      : `Everyone in the group can see this page. Documents, document numbers, pay and the year of somebody&rsquo;s
+         birth are not on it and never are &mdash; those are accounts&rsquo; and the person&rsquo;s own. Personal
+         mobiles are not on it either: colleagues get the work number.
+         ${SEESALL(who) ? '' : `If something here is wrong about you, it is yours to fix on <b>My profile</b>.`}`}</p>`;
   }
 
   // ---- the directory ----
