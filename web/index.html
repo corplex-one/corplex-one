@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609051940">
+<link rel="manifest" href="manifest.webmanifest?v=202609052025">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -29,6 +29,8 @@
   --brand:#2A1B33; --brand2:#41294F; --brandInk:#F2ECF5; --brandDim:#B09CBB;
   --accent:#F45F04; --accent2:#B84500; --accentInk:#FFFFFF; --accentSoft:rgba(244,95,4,.14);
   --c1:#1668A5; --c2:#E06100; --c3:#7A5AA8;
+  --kLeave:#1668A5; --kWfh:#4C79CF; --kAdv:#A8720C; --kLtr:#7A5AA8;
+  --kAtt:#0F7A8E; --kPay:#B0243C; --kSet:#8A5A12;
   --good:#1F7A4D; --warn:#A8720C; --bad:#B0243C;
   --goodBg:#E6F1EB; --warnBg:#F8F0DE; --badBg:#F9E8EC;
   --shadow:0 1px 2px rgba(30,21,35,.05), 0 8px 24px -16px rgba(30,21,35,.24);
@@ -43,6 +45,8 @@
     --brand:#1E1424; --brand2:#31203C; --brandInk:#F2ECF5; --brandDim:#A995B4;
     --accent:#F4741F; --accent2:#FF9350; --accentInk:#20100A; --accentSoft:rgba(244,116,31,.18);
     --c1:#3A8CC9; --c2:#DC5A08; --c3:#9578CE;
+    --kLeave:#4A9BD8; --kWfh:#7FA6EC; --kAdv:#D19A2E; --kLtr:#9578CE;
+    --kAtt:#45B0C4; --kPay:#E0697F; --kSet:#C79A4E;
     --good:#4FB07A; --warn:#D19A2E; --bad:#E0697F;
     --goodBg:#152820; --warnBg:#2A2317; --badBg:#2C1A1E;
     --shadow:0 1px 2px rgba(0,0,0,.34), 0 8px 24px -16px rgba(0,0,0,.7);
@@ -55,6 +59,8 @@
   --brand:#1E1424; --brand2:#31203C; --brandInk:#F2ECF5; --brandDim:#A995B4;
   --accent:#F4741F; --accent2:#FF9350; --accentInk:#20100A; --accentSoft:rgba(244,116,31,.18);
   --c1:#3A8CC9; --c2:#DC5A08; --c3:#9578CE;
+  --kLeave:#4A9BD8; --kWfh:#7FA6EC; --kAdv:#D19A2E; --kLtr:#9578CE;
+  --kAtt:#45B0C4; --kPay:#E0697F; --kSet:#C79A4E;
   --good:#4FB07A; --warn:#D19A2E; --bad:#E0697F;
   --goodBg:#152820; --warnBg:#2A2317; --badBg:#2C1A1E;
   --shadow:0 1px 2px rgba(0,0,0,.34), 0 8px 24px -16px rgba(0,0,0,.7);
@@ -628,6 +634,23 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
 .apxr{margin:0 0 11px;font-size:13.5px;color:var(--ink2)}
 .apxb{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .apxb .btn{padding:11px 10px;font-size:14px}
+
+/* ---------- approvals ---------- */
+.apk{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;
+  white-space:nowrap;color:var(--t);background:color-mix(in srgb,var(--t) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--t) 30%,transparent)}
+.apfilter{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px 12px;border-bottom:1px solid var(--line)}
+.apf{border:1px solid var(--line);background:none;border-radius:999px;padding:4px 13px;
+  font:inherit;font-size:13px;color:var(--ink2);cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px}
+.apf:hover{border-color:var(--ink3);color:var(--ink)}
+.apf i{font-style:normal;font-size:11.5px;font-weight:700;color:var(--ink3)}
+.apf[aria-current="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.apf[aria-current="true"] i{color:var(--panel);opacity:.72}
+.rail button.nav .navcnt{margin-left:auto;font-style:normal;font-size:11px;font-weight:700;
+  min-width:18px;text-align:center;padding:1px 6px;border-radius:999px;
+  background:var(--accent);color:var(--accentInk)}
+.rail.tuck button.nav .navcnt{display:none}
 
 /* ---------- payslip ---------- */
 .slwrap{padding:22px 18px 26px;background:var(--sunk);display:flex;justify-content:center;overflow-x:auto}
@@ -1963,8 +1986,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609051940';</script>
-<script src="config.js?v=202609051940"></script>
-<script type="module" src="boot.js?v=202609051940"></script>
+<script>window.__BUILD = '202609052025';</script>
+<script src="config.js?v=202609052025"></script>
+<script type="module" src="boot.js?v=202609052025"></script>
 </body>
 </html>

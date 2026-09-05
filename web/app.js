@@ -8270,6 +8270,10 @@ const TABS = [
    gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},
   {id:'profile',     group:'hr',    label:'My profile',       title:'My profile', hide:true},
   {id:'attend',      group:'hr',    label:'My attendance',    title:'My attendance', gate:tracksAtt},
+  /* Called, not passed: isApprover is declared further down the file, and a
+     bare reference here is read while TABS is being built. */
+  {id:'approvals',   group:'hr',    label:'Approvals',        title:'Approvals',
+   gate:u => isApprover(u)},
   {id:'people',      group:'hr',    label:'People',           title:'People'},
   /* The owner does not book leave. He does approve it, so the page comes
      back the moment something is waiting on him rather than stranding his
@@ -8368,6 +8372,7 @@ const NAVICON = {
   attend:      'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',
   people:      'M8 11a3.2 3.2 0 1 0 0-6.4A3.2 3.2 0 0 0 8 11ZM2 20a6 6 0 0 1 12 0M16.5 11.5a2.6 2.6 0 1 0 0-5.2M22 20a4.6 4.6 0 0 0-3.4-4.4',
   requests:    'M7 3v3M17 3v3M3.5 8.5h17M4 6h16v15H4zM8.5 14.5l2.2 2.2 4.5-4.6',
+  approvals:   'M3 13h5l1.6 3h4.8l1.6-3h5M3 13 6.2 4.5h11.6L21 13v6.5H3z',
   loans:       'M3 8h18v11H3zM3 12h18M6.5 5.5 17 3.2M7 15.5h3',
   myslip:      'M6 3h12v18l-3-2-3 2-3-2-3 2zM9.5 8h5M9.5 12h5M9.5 16h3',
   myticket:    'M3 10.5a2 2 0 0 0 0 3V18h18v-4.5a2 2 0 0 1 0-3V6H3zM9 6v12'
@@ -8388,7 +8393,9 @@ function renderNav(){
     + sec('Others', grp('other'))
     + sec('HR & Payroll', grp('hr'));
   // the title is what a collapsed rail has instead of the word
-  function btn(t){ return `<button class="nav" data-tab="${t.id}" aria-current="${state.tab===t.id}" type="button" title="${esc(t.label)}">${navIcon(t.id)}<span>${esc(t.label)}</span></button>`; }
+  function btn(t){
+    const n = t.id === 'approvals' ? approvalsFor(state.user).length : 0;
+    return `<button class="nav" data-tab="${t.id}" aria-current="${state.tab===t.id}" type="button" title="${esc(t.label)}">${navIcon(t.id)}<span>${esc(t.label)}</span>${n ? `<i class="navcnt">${n}</i>` : ''}</button>`; }
   nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{ if(b.dataset.tab!=='payment') state.pqConfirm='';
     state.mode='staff'; state.tab=b.dataset.tab; render(); });
 }
@@ -8421,6 +8428,201 @@ const ico = k => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const SHORTLABEL = {requests:'Leave', myslip:'Payslip', myticket:'Air ticket', loans:'Advances',
   letters:'Letters', attend:'Attendance', tools:'Calculator', payment:'Payments', profile:'Profile'};
 const tabName = t => SHORTLABEL[t.id] || t.label;
+
+/* ---------- one page for everything waiting on you ----------
+ * The queues do not move: leave still belongs to Leave & WFH, an advance to
+ * Advances, a letter to Letters, a missed tap to Regularization. What was
+ * missing was somewhere to answer the only question an approver has — is
+ * anything sitting with me? — without opening six screens to find out.
+ *
+ * Payment requests are not here. One is read with its invoice open beside
+ * it, and that is a screen of its own.
+ */
+const AP_KIND = {
+  leave:   {label:'Leave',          tint:'--kLeave', tab:'requests'},
+  wfh:     {label:'Work from home', tint:'--kWfh',   tab:'requests'},
+  advance: {label:'Advance',        tint:'--kAdv',   tab:'loans'},
+  letter:  {label:'Letter',         tint:'--kLtr',   tab:'loans'},
+  attend:  {label:'Attendance',     tint:'--kAtt',   tab:'regular'},
+  payroll: {label:'Payroll',        tint:'--kPay',   tab:'payroll'},
+  settle:  {label:'Settlement',     tint:'--kSet',   tab:'exitapprove'}
+};
+const apDays = ds => { const b = new Date(String(ds || '') + 'T00:00:00');
+  if(isNaN(+b)) return 0;
+  return Math.max(0, Math.round((new Date(HDATE() + 'T00:00:00') - b) / 86400000)); };
+const apChip = k => `<span class="apk" style="--t:var(${AP_KIND[k].tint})">${esc(AP_KIND[k].label)}</span>`;
+const apAge = ds => { const d = apDays(ds);
+  return `<span style="color:var(--${d >= 7 ? 'bad' : d >= 3 ? 'warn' : 'ink2'})">${
+    d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days'}</span>`; };
+
+function approvalsFor(u){
+  const H = HR(), out = [];
+
+  (H.requests || []).filter(r => r.mgr === u && r.status === 'Pending').forEach(r =>
+    out.push({k: r.type === 'WFH' ? 'wfh' : 'leave', who:r.who,
+      what: reqLabel(r.type) + ' \u00b7 ' + r.days + ' day' + (r.days === 1 ? '' : 's'),
+      detail: dayText(r) + (r.reason ? ' \u2014 ' + r.reason : ''),
+      on: r.sent || r.from, amt: null,
+      ok: 'data-approve-req="' + esc(r.id) + '"', no: 'data-decline-req="' + esc(r.id) + '"'}));
+
+  (H.loans || []).filter(x => x.status === 'Pending' && x.approver === u).forEach(x =>
+    out.push({k:'advance', who:x.who, what:'Salary advance',
+      detail: x.months + ' months at AED ' + money(x.monthly, 0) + ' \u2014 ' + x.why,
+      on:x.asked, amt:x.amount,
+      ok: 'data-ln-ok="' + esc(x.id) + '"', no: 'data-ln-no="' + esc(x.id) + '"'}));
+
+  if(canUpload(u)) (H.letters || []).filter(x => x.status === 'Pending' && x.type !== 'revision').forEach(x =>
+    out.push({k:'letter', who:x.who, what: LTYPE(x.type).label,
+      detail: (x.to ? x.to + ' \u00b7 ' : '') + x.why, on:x.asked, amt:null,
+      ok: 'data-lt-ok="' + esc(x.id) + '"', no: 'data-lt-no="' + esc(x.id) + '"'}));
+
+  /* The two-a-month cap travels with the decision rather than staying behind
+     on the screen it used to live on. Approving a third is the one thing this
+     page must not quietly let through. */
+  if(canAdmin(u)){ const R = REG();
+    (R.rows || []).filter(x => x.status === 'Pending').forEach(x => {
+      const left = Math.max(0, R.max - ((R.used || {})[x.who + '|' + x.d.slice(0,7)] || 0));
+      out.push({k:'attend', who:x.who, what:'Fix ' + dayLabel(x.d),
+        detail: (x.in || '\u2014') + ' to ' + (x.out || '\u2014') + ' \u2014 ' + x.reason
+              + (left ? '' : ' \u00b7 both fixes used this month'),
+        on: x.sent || x.d, amt:null,
+        ok: 'data-rgok="' + esc(x.uid) + '"' + (left ? '' : ' disabled title="both are used"'),
+        no: 'data-rgno="' + esc(x.uid) + '"'});
+    }); }
+
+  if(roleOf(u) === 'owner' && DATA.payroll && PAYST() === 'submitted')
+    out.push({k:'payroll', who:ADMIN, what: DATA.payroll.month + ' payroll run',
+      detail: DATA.payroll.rows.length + ' people \u00b7 submitted for your approval',
+      on: DATA.payroll.submitted || '', amt: DATA.payroll.rows.reduce((s, r) => s + r.net, 0),
+      go:'payroll'});
+
+  exitsWaitingOn(u).forEach(x =>
+    out.push({k:'settle', who:x.who, what:'Final settlement',
+      detail: 'Last working day ' + dayLabel(x.lastDay)
+            + (x.status === 'mgr_ok' ? ' \u00b7 the manager has confirmed it' : ''),
+      on: x.sent || '', amt: (exitOf(x).c || {}).net || null, go:'exitapprove'}));
+
+  return out.sort((a, b) => apDays(b.on) - apDays(a.on));
+}
+
+/* The other direction of the same question: what this person has asked for
+   that is sitting with somebody else. */
+function apMine(u){
+  const H = HR(), out = [];
+  (H.requests || []).filter(r => r.who === u && r.status === 'Pending').forEach(r =>
+    out.push({k: r.type === 'WFH' ? 'wfh' : 'leave',
+      what: reqLabel(r.type) + ' \u00b7 ' + r.days + ' day' + (r.days === 1 ? '' : 's'),
+      detail: dayText(r), with: r.mgr || mgrName(u), on: r.sent || r.from}));
+  (H.loans || []).filter(x => x.who === myLoanName(u) && x.status === 'Pending').forEach(x =>
+    out.push({k:'advance', what:'Advance of AED ' + money(x.amount, 0),
+      detail:x.why, with:x.approver, on:x.asked}));
+  (H.letters || []).filter(x => x.who === u && x.status === 'Pending' && x.type !== 'revision').forEach(x =>
+    out.push({k:'letter', what: LTYPE(x.type).label, detail:x.why, with:ADMIN, on:x.asked}));
+  ((REG().mine) || []).filter(x => x.status === 'Pending').forEach(x =>
+    out.push({k:'attend', what:'Fix ' + dayLabel(x.d),
+      detail:(x.in || '\u2014') + ' to ' + (x.out || '\u2014'), with:ADMIN, on:x.sent || x.d}));
+  return out.sort((a, b) => apDays(b.on) - apDays(a.on));
+}
+
+/* Who gets the page: anybody a decision can reach. Accounts and the owner
+   always, a line manager because somebody reports to them. It stays in the
+   rail when the queue is empty — a page you only see when there is work is a
+   page nobody learns to look at. */
+const isApprover = u => canAdmin(u)
+  || Object.values(HR().managers || {}).includes(u);
+
+function vApprovals(){
+  const u = state.user;
+  const all = approvalsFor(u), mine = apMine(u);
+  const f = AP_KIND[state.apFilter] ? state.apFilter : 'all';
+  const list = f === 'all' ? all : all.filter(x => x.k === f);
+  const owed = all.filter(x => x.amt).reduce((s, x) => s + x.amt, 0);
+  const oldest = all[0];
+  const kinds = Object.keys(AP_KIND).filter(k => all.some(x => x.k === k));
+  const acts = x => x.go
+    ? `<button class="btn ghost sm" data-go="${esc(x.go)}" type="button">Open</button>`
+    : `<button class="btn sm" ${x.ok} type="button">Approve</button>
+       <button class="btn ghost sm" ${x.no} type="button">Decline</button>`;
+
+  const strip = `<div class="strip">
+    <div class="stat"><span class="k">Waiting on you</span>
+      <span class="v" style="color:var(--${all.length ? 'warn' : 'good'})">${all.length}</span>
+      <span class="n">${kinds.length ? esc(kinds.map(k => AP_KIND[k].label.toLowerCase()).join(', ')) : 'nothing to decide'}</span></div>
+    <div class="stat"><span class="k">Longest wait</span>
+      ${oldest ? `<span class="v" style="font-size:22px">${apDays(oldest.on)}<span class="cur" style="margin-left:6px">days</span></span>
+      <span class="n">${nm(oldest.who)} \u00b7 ${esc(AP_KIND[oldest.k].label.toLowerCase())}</span>`
+      : `<span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">\u2014</span>
+      <span class="n">the queue is empty</span>`}</div>
+    <div class="stat"><span class="k">Money in the queue</span>
+      ${owed ? `<span class="v"><span class="cur">AED</span>${money(owed, 0)}</span>
+      <span class="n">${all.filter(x => x.amt).length} of the ${all.length} carry a figure</span>`
+      : `<span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Nothing to pay</span>
+      <span class="n">none of these carry a figure</span>`}</div>
+    <div class="stat"><span class="k">Raised by you</span>
+      <span class="v" style="font-size:22px">${mine.length}</span>
+      <span class="n">${mine.length ? 'with ' + esc([...new Set(mine.map(x => NM(x.with).split(' ')[0]))].join(', '))
+        : 'nothing of yours is out'}</span></div>
+  </div>`;
+
+  const chips = kinds.length > 1 ? `<div class="apfilter">
+    <button class="apf" aria-current="${f === 'all'}" data-apf="all" type="button">Everything <i>${all.length}</i></button>
+    ${kinds.map(k => `<button class="apf" aria-current="${f === k}" data-apf="${k}" type="button">${esc(AP_KIND[k].label)} <i>${all.filter(x => x.k === k).length}</i></button>`).join('')}
+  </div>` : '';
+
+  const queue = all.length ? `<section class="panel">
+    <header><h3>Waiting on you</h3><span class="pill warn"><span class="dt"></span>${list.length}</span>
+      <span class="hint">longest wait first \u2014 they are told by email either way</span></header>
+    ${chips}
+    ${MOBILE() ? `<div class="apxlist">${list.map(x => `
+      <div class="apx">
+        <div class="apxh">${avatar(x.who)}<div><b>${nm(x.who)}</b><span>${esc(x.what)}</span></div></div>
+        <div class="apxd">${apChip(x.k)}${x.amt ? ' <span style="margin-left:6px">AED ' + money(x.amt, 2) + '</span>' : ''}
+          <span style="margin-left:6px;font-weight:400">${apAge(x.on)}</span></div>
+        <p class="apxr">${esc(x.detail)}</p>
+        <div class="apxb">${acts(x)}</div>
+      </div>`).join('')}</div>` : `
+    <div class="tw"><table>
+      <thead><tr><th style="width:4%"></th><th style="width:14%">Who</th><th style="width:11%">Kind</th>
+        <th style="width:17%">What</th><th style="width:22%">Details</th>
+        <th class="r" style="width:9%">Amount</th><th class="r" style="width:8%">Waiting</th>
+        <th class="r" style="width:15%"></th></tr></thead>
+      <tbody>${list.map(x => `<tr>
+        <td>${avatar(x.who)}</td>
+        <td class="nw"><b>${nm(x.who)}</b></td>
+        <td class="nw">${apChip(x.k)}</td>
+        <td class="nw">${esc(x.what)}</td>
+        <td style="color:var(--ink2);font-size:13px">${esc(x.detail)}</td>
+        <td class="n r">${x.amt ? money(x.amt, 2) : '\u2014'}</td>
+        <td class="n r nw">${apAge(x.on)}</td>
+        <td class="r nw">${acts(x)}</td></tr>`).join('')}
+      </tbody></table></div>`}
+    <p class="cap">Leave, working from home, advances, letters and attendance fixes are decided here without leaving the page &mdash; it is the same decision as on their own screens, not a copy of it. A payroll run and a final settlement open their own screen instead, because there are figures to read before you sign either off. Payment requests are not on this page: one is read with its invoice open beside it, on <b>Payments</b>.</p>
+  </section>` : `<section class="panel"><div class="pad" style="text-align:center;padding:56px 24px">
+    <h3 style="font-size:21px;margin-bottom:8px">Nothing is waiting on you</h3>
+    <p style="color:var(--ink2);max-width:56ch;margin:0 auto">Leave, working from home, salary advances, letters, attendance fixes, the payroll run and final settlements all land here the moment somebody sends one your way. Payment requests have their own screen.</p>
+  </div></section>`;
+
+  const out = mine.length ? `<section class="panel">
+    <header><h3>Raised by you</h3><span class="hint">with somebody else \u2014 nothing for you to do</span></header>
+    ${MOBILE() ? `<div class="apxlist">${mine.map(x => `
+      <div class="apx">
+        <div class="apxd">${apChip(x.k)} <span style="margin-left:6px">${esc(x.what)}</span></div>
+        <p class="apxr" style="margin-bottom:0">${esc(x.detail)} \u00b7 with ${nm(x.with)} \u00b7 ${apAge(x.on)}</p>
+      </div>`).join('')}</div>` : `
+    <div class="tw"><table>
+      <thead><tr><th style="width:13%">Kind</th><th style="width:26%">What</th><th style="width:30%">Details</th>
+        <th style="width:19%">With</th><th class="r" style="width:12%">Waiting</th></tr></thead>
+      <tbody>${mine.map(x => `<tr>
+        <td class="nw">${apChip(x.k)}</td>
+        <td class="nw">${esc(x.what)}</td>
+        <td style="color:var(--ink2);font-size:13px">${esc(x.detail)}</td>
+        <td class="nw">${nm(x.with)}</td>
+        <td class="n r nw">${apAge(x.on)}</td></tr>`).join('')}
+      </tbody></table></div>`}
+  </section>` : '';
+
+  return strip + queue + out;
+}
 
 // how many decisions are sitting with this person
 function waitingOn(u){
@@ -8759,6 +8961,7 @@ Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });
 /* Not a cut-out of a bigger screen: its own view, so it joins the map the
    router reads rather than the list of things carved out of a page. */
 PAGEVIEW.onpay = () => vOnPayroll();
+PAGEVIEW.approvals = () => vApprovals();
 
 function readHash(){
   const h = (location.hash || '').replace(/^#/, '');
@@ -8787,6 +8990,13 @@ function render(){
   if(state.mode==='console'){
     const t = TABS.find(x => x.id === state.tab);
     if(t && t.con && t.gate && !t.gate(state.user)) state.tab = (CONTABS()[0] || {id:'addstaff'}).id;
+  } else {
+    /* And the same on this side of the door. Approvals is the first staff
+       screen not everybody has, so the rail is no longer the only thing
+       deciding who sees what — a hash typed or bookmarked has to be checked
+       as well. */
+    const t = TABS.find(x => x.id === state.tab);
+    if(t && !t.con && t.gate && !t.gate(state.user)) state.tab = 'home';
   }
   // The company-wide figures for the year being looked at, put where every
   // sales screen already reads them from.
@@ -9100,6 +9310,7 @@ function render(){
   document.querySelectorAll('[data-decline-req]').forEach(b=>b.onclick=()=>{
     const r=HR().requests.find(x=>x.id===b.dataset.declineReq);
     if(r){ r.status='Declined'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'declined'); } render(); });
+  document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
   document.querySelectorAll('#docSeg button').forEach(b=>b.onclick=()=>{ state.docFilter=b.dataset.df; render(); });
   const touchProf = () => { const p=PROF(state.user); if(p) p.updated = HDATE(); };
   document.querySelectorAll('[data-pf]').forEach(el=>{
