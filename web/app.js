@@ -7068,10 +7068,27 @@ function vMySlip(){
                         ? ' \u00b7 ' + (P.label[row.company] || row.company) : '')})));
 
   /* The newest month overall. If it is not released, that is worth one line —
-     it is not worth the whole page, which is what it used to take. */
+     it is not worth the whole page, which is what it used to take.
+
+     Whether it is worth even that used to be decided by looking for my line
+     on the draft run, which is a question that can only ever answer no. The
+     rule on payroll_lines is: your own line, AND only once the run is closed.
+     That is the whole meaning of releasing a month, and it means the draft's
+     rows are empty for everybody except accounts — so the notice never
+     appeared for the one person it was written for, and appeared for accounts
+     instead. It went unnoticed because the check happened to pick somebody
+     who was not on the draft either way.
+
+     What a person CAN see is that a newer month exists, that it is not out
+     yet, and that they were paid in the last one. That is the honest form of
+     the same sentence. Accounts, who can see the draft's lines, still get the
+     precise version. */
   const newest = (P.runs || []).slice().sort(byNewest)[0];
-  const waiting = newest && newest.status !== 'closed'
-    && (newest.rows || []).some(x => x.portalName === state.user && !x.dummy);
+  const draftRows = newest ? (newest.rows || []).filter(x => !x.dummy) : [];
+  const waiting = !!newest && newest.status !== 'closed' && !exitNote(state.user)
+    && (draftRows.length
+        ? draftRows.some(x => x.portalName === state.user)
+        : mine.length > 0);
   const soon = waiting ? `<div class="nudge">
       <span class="ndot"></span>
       <div><b>${esc(newest.label)} is not released yet</b>
