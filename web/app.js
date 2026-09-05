@@ -3556,6 +3556,9 @@ function vExits(){
   const line = (l,v,neg) => `<tr><td>${l}</td><td class="n r"${neg?' style="color:var(--bad)"':''}>${neg?'(':''}${money(Math.abs(v),2)}${neg?')':''}</td></tr>`;
   const already = sel ? exitFor(sel) : null;
 
+  /* Working one out is accounts' job, and the owner asked not to be given the
+     form. He gets the list, which is what he came for. */
+  if(!canUpload(state.user)) return vExitList(list);
   return `
   <section class="panel">
     <header><h3>${state.exitId ? 'Change this settlement' : 'Work out a settlement'}</h3>
@@ -3631,29 +3634,55 @@ function vExits(){
     </section>
   </div>`:''}
 
+  ${vExitList(list)}`;
+}
+
+function vExitList(all){
+  const acc = canUpload(state.user);
+  /* A draft is accounts working something out. It has been sent to nobody, and
+     showing a half-finished figure to the owner as though it were a decision
+     waiting on him is how a number gets quoted before it is real. */
+  const list = acc ? all : all.filter(x => x.status !== 'draft');
+  const hidden = all.length - list.length;
+  return `
   <section class="panel">
     <header><h3>Settlements</h3>
-      <span class="hint">${list.length ? list.filter(x=>x.status!=='paid').length + ' open' : 'none yet'}</span></header>
+      <span class="hint">${list.length ? list.filter(x=>x.status!=='paid').length + ' open'
+        : hidden ? 'none initiated yet' : 'none yet'}</span></header>
     ${list.length ? `<div class="tw"><table class="cotab">
       ${colsOf([21, 13, 12, 15, 15, 24])}
       <thead><tr><th>Employee</th><th>Last day</th><th>Month</th><th class="r">Settlement</th><th>Stage</th><th class="r"></th></tr></thead>
       <tbody>${list.map(x=>{
         const cc = exitOf(x).c;
+        const amt = x.net === null ? (cc ? cc.net : null) : x.net;
         return `<tr>
         <td>${nm(x.who)}</td>
         <td class="n nw">${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)}</td>
         <td class="nw" style="color:var(--ink2)">${x.month ? esc(MONTHNAME[+x.month.slice(5)-1] + ' ' + x.month.slice(0,4)) : '\u2014'}</td>
-        <td class="n r netcol">${money(x.net === null ? cc.net : x.net, 2)}</td>
+        <td class="n r netcol">${amt === null || amt === undefined ? '\u2014' : money(amt, 2)}</td>
         <td class="nw">${exitPill(x.status)}</td>
-        <td class="r nw">${x.status === 'draft'
+        <td class="r nw">${!acc ? `<button class="btn ghost sm" data-exopen="${esc(x.id)}" type="button">Open</button>`
+          : x.status === 'draft'
+          /* Discard lives here now. It was only ever on the settlement's own
+             screen, and a draft has no way of reaching that screen — so the
+             one state you would most want to throw away was the one state
+             with nothing to throw it away with. */
           ? `<button class="btn ghost sm" data-exedit="${esc(x.id)}" type="button">Edit</button>
-             <button class="btn sm" data-exgo="${esc(x.id)}" type="button">Initiate exit process</button>`
+             <button class="btn sm" data-exgo="${esc(x.id)}" type="button">Initiate exit process</button>
+             <button class="btn ghost sm bad" data-exkill="${esc(x.id)}" type="button" title="Throw this draft away">Discard</button>`
           : `<button class="btn ghost sm" data-exopen="${esc(x.id)}" type="button">Open</button>`}</td></tr>`;}).join('')}
-      </tbody></table></div>` : '<div class="pad"><p style="margin:0;color:var(--ink3)">Nothing saved yet. Work one out above and save it as a draft.</p></div>'}
-    <p class="cap">A draft is yours to change as often as you need to, right up to the day.
+      </tbody></table></div>` : `<div class="pad"><p style="margin:0;color:var(--ink3)">${acc
+      ? 'Nothing saved yet. Work one out above and save it as a draft.'
+      : 'Nobody is leaving. A settlement appears here once accounts has initiated one.'}</p></div>`}
+    <p class="cap">${acc
+      ? `A draft is yours to change as often as you need to, right up to the day, and <b>Discard</b> throws one
+      away &mdash; nothing was sent to anybody, so nothing is undone.
       <b>Initiate</b> writes the figures down, posts the settlement to the month of the last working day, and takes
       the person off that month's payroll and off the staff list &mdash; every record they have is kept. After that
-      it goes to their reporting manager and to ${nm((USERS.find(u=>u.role==='owner')||{}).name||'the owner')} to approve.</p>
+      it goes to their reporting manager and to ${nm((USERS.find(u=>u.role==='owner')||{}).name||'the owner')} to approve.`
+      : `Every settlement accounts has initiated, and where each one has got to. Open one to read what was owed and
+      to approve it when it reaches you.${hidden ? ` ${hidden} ${hidden === 1 ? 'settlement is' : 'settlements are'} still
+      being worked out and ${hidden === 1 ? 'is' : 'are'} not shown &mdash; a draft has been sent to nobody.` : ''}`}</p>
   </section>`;
 }
 
@@ -6407,7 +6436,9 @@ function staleNote(key){
 function runSeg(){
   const runs = (DATA.payroll.runs || []);
   if(!runs.length) return '';
-  const here = state.payRun || (runs[0] && runs[0].key);
+  /* The same answer the screen itself used, or the selector highlights a
+     month the page is not showing. */
+  const here = state.payRun || startRunKey(state.user, runs);
   const nk = nextRunKey();
   return `<div class="seg" id="runSeg" style="margin-left:18px">
     ${runs.slice().sort((a,b)=>a.key<b.key?-1:1).map(r=>
@@ -6424,24 +6455,41 @@ function runSeg(){
    button that pointed at it set a key no run has. Removed rather than left
    for somebody to find and believe. */
 
+/* Where a screen starts when nobody has picked a month yet. Accounts starts
+   on the month they are working on, which is the draft. The owner has nothing
+   to do with a draft — it is not his screen, and there is nothing to approve
+   until it is submitted — so he starts on the newest month that has left
+   accounts' hands. */
+const startRunKey = (u, runs) => !runs.length ? ''
+  : (roleOf(u) === 'owner'
+      ? (runs.find(r => r.status !== 'draft') || runs[0])
+      : (runs.find(r => r.status === 'draft') || runs[0])).key;
+
 // The newest run's status, read from the database every time rather than
 // from a copy kept on the page. See the note in mkweb.mjs.
 const PAYST = () => (DATA.payroll && DATA.payroll.status) || 'draft';
 
 function vPayroll(){
   const runs = DATA.payroll.runs || [];
-  if(runs.length){
-    if(!state.payRun || !runs.some(r=>r.key===state.payRun))
-      state.payRun = (runs.find(r=>r.status==='draft') || runs[0]).key;
-    const here = runs.find(r=>r.key===state.payRun);
-    if(here && here.status === 'draft' && canAdmin(state.user)) return vPayrollDraft(here);
-  }
+  if(runs.length && (!state.payRun || !runs.some(r => r.key === state.payRun)))
+    state.payRun = startRunKey(state.user, runs);
+  /* The month this screen is about. The selector decides it — every run
+     carries its own rows, so there is nothing left that only the newest one
+     can show. */
+  const HERE = runs.find(r => r.key === state.payRun) || runs[0] || null;
+  /* The draft screen is accounts' workspace: the box you type a figure into,
+     the button that rebuilds the month. Anybody else who lands on a draft
+     reads it on the ordinary screen instead of being handed the tools. */
+  if(HERE && HERE.status === 'draft' && canUpload(state.user)) return vPayrollDraft(HERE);
+
   const P = DATA.payroll, co = state.payCompany, me = state.user;
   const isPrep = canUpload(me), isApprover = roleOf(me)==='owner';
-  const staff = P.rows.filter(r=>!r.dummy);
+  const ROWS = HERE ? HERE.rows : P.rows;
+  const MONTH = HERE ? HERE.label : P.month;
+  const staff = ROWS.filter(r=>!r.dummy);
   const coRows = co==='all' ? staff : staff.filter(r=>r.company===co);
   let rows = coRows.slice();
-  const chRows = id => P.rows.filter(r=>channelOf(r)===id);
+  const chRows = id => ROWS.filter(r=>channelOf(r)===id);
   const applyPayFilters = () => {
     const f = state.payFilter;
     if(f.ch!=='all') rows = rows.filter(r=>channelOf(r)===f.ch);
@@ -6469,12 +6517,6 @@ function vPayroll(){
   const S = k => rows.reduce((s,r)=>s+(r[k]||0),0);
   const SC = k => coRows.reduce((s,r)=>s+(r[k]||0),0);
   const L = c => P.label[c] || c;
-  // The run whose figures are on this screen. Not the one the selector says:
-  // the mapper only works out gross, deductions and net for the newest run, so
-  // this panel always describes that one, and the status it shows has to be
-  // that run's or the buttons would act on a different month from the totals.
-  const HERE = (DATA.payroll.runs || []).find(r => r.key === DATA.payroll.monthKey)
-             || (DATA.payroll.runs || [])[0] || null;
   const st = HERE ? HERE.status : PAYST();
   const RUNNOTE = HERE ? (HERE.note || '') : '';
   const stPill = {draft:'<span class="pill mute">Draft</span>',
@@ -6512,17 +6554,17 @@ function vPayroll(){
 
   return `
   <div class="strip">
-    <div class="stat"><span class="k">${esc(P.month)} &middot; ${esc(co==='all'?'all companies':L(co))}</span>
+    <div class="stat"><span class="k">${esc(MONTH)} &middot; ${esc(co==='all'?'all companies':L(co))}</span>
       <span class="v"><span class="cur">AED</span>${money(SC('net'),2)}</span><span class="n">net payable</span></div>
     <div class="stat"><span class="k">Gross</span><span class="v"><span class="cur">AED</span>${money(SC('gross'),2)}</span>
       <span class="n">${coRows.length} people on the run</span></div>
     <div class="stat"><span class="k">Deductions</span><span class="v" style="color:var(--warn)"><span class="cur">AED</span>${money(SC('ded'),2)}</span>
       <span class="n">advances, mobile and other</span></div>
     <div class="stat"><span class="k">Status</span><span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">${stPill}</span>
-      <span class="n">prepared by ${esc(P.preparedBy)}</span></div>
+      <span class="n">prepared by ${esc((HERE && HERE.preparedBy) || P.preparedBy)}</span></div>
   </div>
 
-  ${staleNote(P.monthKey)}
+  ${staleNote(HERE ? HERE.key : P.monthKey)}
   <section class="panel">
     <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
       ${runSeg()}
@@ -6563,7 +6605,7 @@ function vPayroll(){
 
   <section class="panel invpanel" style="height:auto;max-height:none">
     <header><h3>Payroll register</h3>
-      <span class="pill mute">${esc(P.month)}</span>
+      <span class="pill mute">${esc(MONTH)}</span>
       ${(() => { const b = EXITS().filter(x => x.month === (HERE ? HERE.key : P.monthKey)
                     && x.status !== 'draft' && x.status !== 'paid').length;
           return b ? `<span class="pill warn" style="margin-left:8px"><span class="dt"></span>${b} settlement${b===1?'':'s'} to pay</span>` : ''; })()}
@@ -6649,7 +6691,7 @@ function vPayroll(){
   </section>
 
   <section class="panel">
-    <header><h3>How the money goes out</h3><span class="hint">${esc(P.month)} &middot; net amounts</span></header>
+    <header><h3>How the money goes out</h3><span class="hint">${esc(MONTH)} &middot; net amounts</span></header>
     <div class="tw"><table>
       <thead><tr><th>Channel</th><th>Type</th><th class="r">People</th><th class="r">Net salary</th><th class="r">VAT</th><th class="r">To transfer</th><th>Who</th></tr></thead>
       <tbody>
@@ -7373,7 +7415,9 @@ function vMySlip(){
 function vSlips(){
   const P = DATA.payroll;
   const runs = P.runs || [];
-  const here = runs.find(r => r.key === state.payRun) || runs[0] || null;
+  const here = runs.find(r => r.key === state.payRun)
+             || runs.find(r => r.key === startRunKey(state.user, runs))
+             || runs[0] || null;
   const released = here ? here.status === 'closed' : PAYST() === 'closed';
   const staff = (here ? here.rows : P.rows).filter(r=>!r.dummy);
   const co = state.payCompany;
@@ -8302,7 +8346,7 @@ const TABS = [
   {id:'probation',  group:'con', sec:'pay',    label:'Probation',      title:'Probation', gate:canAdmin, con:true},
   {id:'tickets',    group:'con', sec:'pay',    label:'Air ticket',     title:'Air ticket tracker', gate:canAdmin, con:true},
   {id:'gratuity',   group:'con', sec:'pay',    label:'Gratuity',       title:'Gratuity provision', gate:canAdmin, con:true},
-  {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canUpload, con:true},
+  {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canAdmin, con:true},
   // ---- People: the day, and the rules the day is measured against
   {id:'hradmin',    group:'con', sec:'people', label:'Attendance',     title:'Attendance', gate:canAdmin, con:true},
   {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:isAccounts, con:true},
@@ -10061,7 +10105,7 @@ function render(){
 
     // Every one of these can be refused by the database. None of them assumes
     // it worked: the panel re-reads the run afterwards either way.
-    const RUNKEY = () => DATA.payroll.monthKey;
+    const RUNKEY = () => state.payRun || DATA.payroll.monthKey;
     const act = (id, fn) => { const b = document.getElementById(id); if(!b) return;
       b.onclick = async () => { b.disabled = true; await fn(RUNKEY()); render(); }; };
     act('payInit',     k => window.__db.payRun(k));
@@ -10072,7 +10116,7 @@ function render(){
        problem is written down. */
     { const g = document.getElementById('payGenTop');
       if(g) g.onclick = async () => { g.disabled = true;
-        await window.__db.generateRun(DATA.payroll.monthKey); render(); }; }
+        await window.__db.generateRun(RUNKEY()); render(); }; }
     /* This set state.payRun to 'sep'. No run is keyed 'sep' — they are keyed
        '2026-09' — so the payroll screen fell through its own guard and put you
        back on the month you were already looking at. Nothing happened, twice,
