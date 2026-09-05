@@ -3840,17 +3840,68 @@ const REFKINDS = [
   {k:'eid',      label:'Emirates ID',    ph:'784-0000-0000000-0'},
   {k:'labour',   label:'Labour card',    ph:'the MOHRE number'}
 ];
-const refPh = k => (REFKINDS.find(t => t.k === k) || {}).ph || '';
+/* Group sizes and the separator between them. The Emirates ID is always
+   784-YYYY-NNNNNNN-N; the residence visa is three, the year, one and six. */
+const REFMASK = {
+  eid:  {sep:'-', groups:[3, 4, 7, 1]},
+  visa: {sep:'/', groups:[3, 4, 1, 6]}
+};
+const refDigits = k => (REFMASK[k] ? REFMASK[k].groups.reduce((a, b) => a + b, 0) : 0);
+/* Digits in, shape out. Anything that is not a digit is dropped, so pasting a
+   number that already carries its separators works, and so does typing one
+   that does not. */
+function refFormat(k, raw){
+  const m = REFMASK[k]; if(!m) return String(raw || '');
+  const d = String(raw || '').replace(/\D/g, '').slice(0, refDigits(k));
+  const out = []; let at = 0;
+  for(const n of m.groups){
+    if(at >= d.length) break;
+    out.push(d.slice(at, at + n)); at += n;
+  }
+  return out.join(m.sep);
+}
+const refWhole = (k, v) => !REFMASK[k] || String(v || '').replace(/\D/g, '').length === refDigits(k);
+/* The pattern itself, as the placeholder, rather than a description of it. */
+const refPh = k => REFMASK[k]
+  ? REFMASK[k].groups.map(n => (k === 'eid' && n === 3 ? '784' : '0'.repeat(n))).join(REFMASK[k].sep)
+  : (REFKINDS.find(t => t.k === k) || {}).ph || '';
+/* A number half typed. Named, because the Save button has to say which. */
+const refPart = () => Object.entries(state.pfDirty || {})
+  .filter(([k, v]) => REFMASK[k] && String(v).trim() !== '' && !refWhole(k, v))
+  .map(([k]) => (REFKINDS.find(t => t.k === k) || {}).label || k);
 /* A number accounts holds is theirs to correct — they typed it off the
    document itself, and it goes onto the MOHRE filings. A blank one is a box.
    The database enforces that, not this. The masked value carries .refval, so
    the one Show numbers button in Employment above uncovers these too. */
+/* What the save bar says, and whether it can be pressed. A number that is
+   only half typed is named, with the shape it is missing. */
+function pfSaveBar(){
+  const half = refPart();
+  const n = Object.keys(state.pfDirty || {}).length;
+  const shape = half.length
+    ? refPh((REFKINDS.find(t => t.label === half[0]) || {}).k || 'eid') : '';
+  const say = half.length
+    ? esc(half.join(' and ')) + (half.length === 1 ? ' is' : ' are') + ' not finished \u2014 ' + esc(shape)
+    : n ? n + ' change' + (n === 1 ? '' : 's') + ' not saved yet'
+        : 'Your changes are saved';
+  return '<div class="pfsave' + (n ? ' on' : state.pfSaved ? ' just' : '') + '">'
+    + '<span' + (half.length ? ' style="color:var(--bad)"' : '') + '>' + say + '</span>'
+    + '<button class="btn" id="pfSave" type="button"'
+    + (n && !half.length ? '' : ' disabled') + '>Save changes</button></div>';
+}
+
 function refCell(u, k){
   const v = REFOF(u, k);
   if(v) return `<span class="refval" data-full="${esc(v)}">${esc(maskRef(v))}</span>`;
   if(u !== state.user) return '<span style="color:var(--ink3)">—</span>';
-  return `<input class="refin" data-pf="${esc(k)}" value="${esc((state.pfDirty || {})[k] || '')}"
-    placeholder="${esc(refPh(k))}" aria-label="Number on the ${esc((REFKINDS.find(t => t.k === k) || {}).label || k)}">`;
+  const typed = (state.pfDirty || {})[k] || '';
+  const part = REFMASK[k] && String(typed).trim() !== '' && !refWhole(k, typed);
+  const label = (REFKINDS.find(t => t.k === k) || {}).label || k;
+  return '<input class="refin' + (REFMASK[k] ? ' masked' : '') + (part ? ' part' : '') + '"'
+    + ' data-pf="' + esc(k) + '" value="' + esc(typed) + '"'
+    + ' placeholder="' + esc(refPh(k)) + '"'
+    + ' inputmode="' + (REFMASK[k] ? 'numeric' : 'text') + '"'
+    + ' aria-label="Number on the ' + esc(label) + '">';
 }
 /* Two characters, four dots, four characters — the same shape whatever the
    document, so it fits a column and two rows can still be told apart. It is
@@ -4028,12 +4079,7 @@ function vProfile(){
           <td>${exp?DOCPILL(state2):'<span class="pill mute">Nothing yet</span>'}</td></tr>`;
       }).join('')}
       </tbody></table></div>
-    <div class="pfsave${state.pfDirty ? ' on' : state.pfSaved ? ' just' : ''}">
-      <span>${state.pfDirty
-        ? Object.keys(state.pfDirty).length + ' change' + (Object.keys(state.pfDirty).length===1?'':'s') + ' not saved yet'
-        : 'Your changes are saved'}</span>
-      <button class="btn" id="pfSave" type="button"${state.pfDirty ? '' : ' disabled'}>Save changes</button>
-    </div>
+    ${pfSaveBar()}
     <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. The expiry date you type is what drives the reminders, so take it off the document rather than from memory. <b>Type the number off each document</b> in the column beside it. Once a number is on file it becomes accounts&rsquo; to correct, because they check it against the copy you upload; the four are listed under Employment above as well. Your documents and your numbers are visible to you and to accounts, nobody else.</p>
   </section>`;
 }
@@ -9545,6 +9591,15 @@ function render(){
     const r=HR().requests.find(x=>x.id===b.dataset.declineReq);
     if(r){ r.status='Declined'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'declined'); } render(); });
   document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
+  document.querySelectorAll('.refin.masked').forEach(el => {
+    const k = el.dataset.pf;
+    el.addEventListener('input', () => {
+      const shaped = refFormat(k, el.value);
+      if(shaped === el.value) return;
+      el.value = shaped;
+      try{ el.setSelectionRange(shaped.length, shaped.length); }catch(_){}
+    });
+  });
   { const rf = document.getElementById('rateFind');
     if(rf){ let tm; rf.oninput = () => { clearTimeout(tm); tm = setTimeout(() => {
       state.rateFind = rf.value; render();

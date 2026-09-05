@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609052239">
+<link rel="manifest" href="manifest.webmanifest?v=202609052258">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -656,6 +656,9 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px;
   font-variant-numeric:tabular-nums;letter-spacing:.01em}
 .refin:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.refin.masked{max-width:190px;letter-spacing:.04em}
+.refin.part{border-color:var(--bad)}
+.refin.part:focus{outline-color:var(--bad);border-color:var(--bad)}
 
 /* ---------- country rates ---------- */
 .ratefind{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line)}
@@ -2011,8 +2014,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609052239';</script>
-<script src="config.js?v=202609052239"></script>
-<script type="module" src="boot.js?v=202609052239"></script>
+<script>window.__BUILD = '202609052258';</script>
+<script src="config.js?v=202609052258"></script>
+<script type="module" src="boot.js?v=202609052258"></script>
 </body>
 </html>
