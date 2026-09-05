@@ -439,8 +439,88 @@ export function buildData(db, meId){
     email: (byId.get(l.employee_id) || {}).work_email || '',
     note: l.note || '', dummy: l.non_staff, vat: !!l.vat
   });
+  /* A month that no longer agrees with the records.
+   *
+   *   'if there is a revision letter processed, the payroll should indicate
+   *    there is a change in salary so that i refresh it and the salary is
+   *    changed. Once its changed, the indication should go off - its for that
+   *    particular month only'
+   *
+   * A payroll line's salary is written when the month is generated, and a
+   * revision letter deliberately does not reach back into it — that is what
+   * stops a letter moving a month somebody has already approved. The cost of
+   * that is a month which is quietly out of date and looks fine.
+   *
+   * So rather than a flag somebody has to remember to set and clear, this is
+   * worked out every time the page loads: what does the line pay, and what do
+   * the records say it should. If they differ, the month is stale. Refreshing
+   * rewrites the line from the same records, the two agree, and the mark goes
+   * out by itself — which is the only kind of indicator that can be trusted,
+   * because there is no second state to fall out of step.
+   *
+   * The comparison is against the PRORATED figure the generator writes, so a
+   * joiner half way through a month is not reported as a discrepancy. */
+  const partsBy = {};
+  (db.salary_parts || []).forEach(p => {
+    (partsBy[p.employee_id] || (partsBy[p.employee_id] = [])).push(p);
+  });
+  const salaryAt = (empId, company, monthKey) => {
+    const mine = (partsBy[empId] || [])
+      .filter(x => (x.company || '') === (company || ''))
+      .filter(x => !x.effective_from || String(x.effective_from).slice(0, 7) <= monthKey)
+      .sort((a, b) => String(a.effective_from).localeCompare(String(b.effective_from)));
+    return mine.length ? +mine[mine.length - 1].salary : null;
+  };
+  const staleOf = (r) => {
+    // A closed month is a record, not a draft: it is never restated.
+    if(r.status === 'closed') return [];
+    const out = [];
+    (db.payroll_lines || []).filter(l => l.run_id === r.id && !l.excluded).forEach(l => {
+      const e = byId.get(l.employee_id); if(!e) return;
+      if(!['salaried', 'director'].includes(e.payroll_basis || 'salaried')) return;
+      /* The generator labels a line with the salary row's company, or — where
+         the row names no company — with the person's own. So look for the
+         line's company first, and fall back to the unnamed row. */
+      const want = salaryAt(l.employee_id, l.company, r.month_key)
+                ?? salaryAt(l.employee_id, '', r.month_key);
+      if(want === null) return;
+      const days = +l.days || 30;
+      const should = Math.round(want * days / 30 * 100) / 100;
+      const has = Math.round(+l.salary * 100) / 100;
+      if(Math.abs(should - has) >= 0.01)
+        out.push({name: name(l.employee_id) || l.name, company: co(l.company),
+                  companyKey: l.company || '', was: has, now: should,
+                  lineId: l.id, up: should > has});
+    });
+    /* And the other half of "out of date": a line the month has not got at
+     * all. Somebody moved onto payroll, or given a salary from a second
+     * company, gains a line the next time the month is built — and until then
+     * the month is quietly short one person rather than wrong about one
+     * figure. Both are the same thing to whoever has to press Refresh. */
+    const have = new Set((db.payroll_lines || [])
+      .filter(l => l.run_id === r.id).map(l => l.employee_id + '|' + (l.company || '')));
+    (db.employees || []).forEach(e => {
+      if(!['salaried', 'director'].includes(e.payroll_basis || 'salaried')) return;
+      if(e.last_day && String(e.last_day).slice(0, 7) < r.month_key) return;
+      if(e.doj && String(e.doj).slice(0, 7) > r.month_key) return;
+      const cos = [...new Set((partsBy[e.id] || [])
+        .filter(x => !x.effective_from || String(x.effective_from).slice(0, 7) <= r.month_key)
+        .map(x => x.company || ''))];
+      cos.forEach(c => {
+        const key = e.id + '|' + (c || e.company || '');
+        if(have.has(key) || have.has(e.id + '|' + c)) return;
+        const want = salaryAt(e.id, c, r.month_key);
+        if(want === null) return;
+        out.push({name: name(e.id) || e.full_name, company: co(c || e.company),
+                  companyKey: c, was: null, now: want, lineId: '', up: true, missing: true});
+      });
+    });
+    return out;
+  };
+
   payroll.runs = runs.map(r => ({
     key: r.month_key, label: r.label, status: r.status, runId: r.id,
+    stale: staleOf(r),
     payDate: r.pay_date ? longDate(r.pay_date) : '',
     preparedBy: name(r.prepared_by), approver: name(r.approver),
     // Why a month came back belongs to the month. The screen used to hold it

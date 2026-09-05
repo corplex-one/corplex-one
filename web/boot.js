@@ -677,6 +677,21 @@ window.__db = {
     }catch(e){ oops(e, 'Recording the salary'); await reload(); return null; }
   },
 
+  /* Taking a figure off somebody who is not paid from it. The database
+   * refuses this for anybody who IS paid from their salary rows, so there is
+   * nothing to check here. The revision letter that set the figure is left
+   * alone on purpose: it went out, and the person has a copy. */
+  async clearSalary(who, company){
+    const id = this.empId(who);
+    if(!id){ oops(new Error(who + ' is not in the staff list'), 'That figure'); return null; }
+    try{
+      const {error} = await sb.rpc('clear_salary', {p_emp: id, p_company: company || ''});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Taking that figure off'); await reload(); return null; }
+  },
+
   async addEmployee(p){
     try{
       const {data, error} = await sb.rpc('add_employee', {

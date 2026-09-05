@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609050958">
+<link rel="manifest" href="manifest.webmanifest?v=202609051059">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1481,6 +1481,9 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
     margin-top:6px;flex:none}
   .nudge.loud .ndot{background:var(--bad)}
   .nudge b{display:block;font-size:14.5px}
+  /* Only the headline is a block. A bold inside the sentence under it — a
+     figure, the name of a button — is part of that sentence. */
+  .nudge span b{display:inline;font-size:inherit}
   .nudge span:not(.ndot){display:block;color:var(--ink2);font-size:13.5px;margin-top:2px}
   /* A banner may carry one action. It sits at the right, centred against the
      two lines of text, and drops under them when there is no room. */
@@ -1929,8 +1932,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609050958';</script>
-<script src="config.js?v=202609050958"></script>
-<script type="module" src="boot.js?v=202609050958"></script>
+<script>window.__BUILD = '202609051059';</script>
+<script src="config.js?v=202609051059"></script>
+<script type="module" src="boot.js?v=202609051059"></script>
 </body>
 </html>

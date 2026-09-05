@@ -2334,6 +2334,7 @@ function exitCalc(name, lwd, o){
   const r = payrollRowFor(name); if(!r || !lwd) return null;
   const B = leaveBal(name), j = parseDoj(r.doj);
   const P = salParts(name);
+  // P.salary is the total across every company paying them; see the note above.
   const salary = P.salary, basic = P.basic;
   const dayBasic = basic/30;
   const start = j ? j.iso : '';
@@ -2587,7 +2588,14 @@ const gMonths = () => { const set = new Set();
   GRAT().rows.forEach(r=>Object.keys(r.basic).forEach(k=>set.add(k.slice(0,7))));
   return [...set].sort(); };
 
-const BASIS = {salaried: 'A fixed salary', commission: 'Commission only', off: 'Not on payroll'};
+/* Four kinds, and the order is the order they are offered in. 'director' is
+   paid from the salary rows exactly as a wage is — the generator's only
+   special case is commission — but it is not wages, and calling it that on a
+   screen is how it ends up on a salary certificate. */
+const BASIS = {salaried: 'A fixed salary', director: "A director's remuneration",
+               commission: 'Commission only', off: 'Not on payroll'};
+// the two that are paid from what is on file
+const FROMFILE = b => b === 'salaried' || b === 'director';
 const BASISOF = n => { const e = USERS.find(x => x.name === n) || {};
   return e.payBasis || (HR().payBasis || {})[n] || 'salaried'; };
 
@@ -2611,8 +2619,9 @@ function vOnPayroll(){
     <div class="stat"><span class="k">On payroll</span><span class="v">${roll.filter(n => BASISOF(n) !== 'off').length}</span>
       <span class="n">of ${roll.length} on the staff list</span></div>
     <div class="stat"><span class="k">Not on payroll</span>
-      <span class="v" style="color:var(--${off.length ? 'warn' : 'ink'})">${off.length}</span>
-      <span class="n">${off.length ? esc(off.map(NM).join(', ')) : 'everybody is paid through the portal'}</span></div>
+      <span class="v">${off.length}</span>
+      <span class="n">${off.length ? esc(off.map(NM).join(', ')) + ' \u2014 on the staff list, paid outside it'
+        : 'everybody on the staff list is paid through the portal'}</span></div>
     <div class="stat"><span class="k">Paid by two companies</span>
       <span class="v">${roll.filter(n => (salParts(n).co || []).length > 1).length}</span>
       <span class="n">a line each, every month</span></div>
@@ -2628,28 +2637,47 @@ function vOnPayroll(){
     ${edConfirm('basis')}${edSaved('basis')}
     ${byCompany(rows, {
       who: r => r.n, cls: 'invtable',
-      cols: colsOf([24, 20, 13, 13, 13, 17]),
+      /* Grouped by whoever pays the line, not by the company the person
+         belongs to \u2014 which is why Miraziz's POA half was sitting under
+         CorpLex. Somebody with no salary on file has no paying company, so
+         they stay under their own. */
+      code: r => { const k = r.c && r.c.company;
+        return (k && DATA.companies[k]) ? DATA.companies[k].code : companyOf(r.n).code; },
+      cols: colsOf([22, 17, 12, 12, 12, 14, 11]),
       head: `<thead><tr><th>Employee</th><th>Paid</th><th class="r">Basic</th>
-        <th class="r">Allowance</th><th class="r">Total</th><th>From</th></tr></thead>`,
+        <th class="r">Allowance</th><th class="r">Total</th><th>From</th><th></th></tr></thead>`,
       row: r => { const v = r.c, b = BASISOF(r.n), first = !r.c || r.p.co[0] === r.c;
-        return `<tr>
-        <td class="nw">${first ? nm(r.n) : ''}${r.c && r.p.multi ? ` <span class="pill mute">${esc(r.c.label)}</span>` : ''}</td>
+        /* A figure on file for somebody who is not paid from it. It is not an
+           error the portal can resolve on its own \u2014 only accounts knows
+           whether the person moved to commission or the figure is simply
+           stale \u2014 so it is marked and offered, not cleaned up. */
+        const orphan = v && !FROMFILE(b);
+        return `<tr${orphan ? ' style="background:color-mix(in srgb, var(--warn) 7%, transparent)"' : ''}>
+        <td class="nw">${nm(r.n)}${r.c && r.p.multi ? ` <span class="pill mute">${esc(r.c.label)}</span>` : ''}</td>
         <td>${first ? edCell('basis', r.n,
           x => `<select class="ff"${edAttr('basis', r.n)}>${Object.entries(BASIS).map(([k, l]) =>
                  `<option value="${k}"${x === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
-          x => `<span class="edread"${x === 'off' ? ' style="color:var(--ink3)"' : ''}>${esc(BASIS[x] || x)}</span>`) : ''}</td>
+          x => `<span class="edread"${x === 'off' ? ' style="color:var(--ink3)"' : ''}>${esc(BASIS[x] || x)}</span>`)
+          : `<span style="color:var(--ink3)">${esc(BASIS[b] || b)}</span>`}</td>
         <td class="n r">${v ? money(v.basic, 2) : '<span class="miss">\u2014</span>'}</td>
         <td class="n r">${v ? money(v.allow, 2) : '<span class="miss">\u2014</span>'}</td>
         <td class="n r netcol">${v ? money(v.salary, 2) : '<span class="miss">\u2014</span>'}</td>
         <td style="color:var(--ink2);font-size:12.5px"${full(v ? (v.from ? 'From ' + v.from : v.src) : '')}>${
           v ? (v.from ? esc(v.from) : esc(v.src || '\u2014')) : (b === 'commission'
-            ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td></tr>`; },
+            ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td>
+        <td class="r nw">${orphan
+          ? `<button class="btn ghost sm" data-salclr="${esc(r.n)}|${esc((r.c||{}).company || '')}" type="button"
+              title="${esc(NM(r.n))} is ${esc((BASIS[b]||b).toLowerCase())}, so nothing pays this figure">Take it off</button>`
+          : ''}</td></tr>`; },
       empty: 'Nobody on the staff list yet.'
     })}
-    <p class="cap">Setting somebody to <b>a fixed salary</b> needs a figure on file first &mdash; a salaried person
-      with nothing recorded would generate a line of nought. <b>Commission only</b> means no fixed pay: the line is
-      built from that month's commission. <b>Not on payroll</b> leaves them off the run entirely, and the database
-      refuses it while a month that pays them is still open.</p>
+    <p class="cap"><b>A fixed salary</b> and <b>a director&rsquo;s remuneration</b> are both paid from what is on
+      file, a line per company, so both need a figure recorded first &mdash; otherwise the month generates a line of
+      nought. They are kept apart because a director&rsquo;s remuneration is not wages: it does not belong on a
+      salary certificate and no gratuity accrues on it. <b>Commission only</b> means no fixed pay at all; the line is
+      built from that month&rsquo;s commission, and a figure still sitting on file for such a person is
+      <b style="color:var(--warn)">shaded</b>, because nothing pays it. <b>Not on payroll</b> leaves them off the run
+      entirely, and the database refuses it while a month that pays them is still open.</p>
   </section>
 
   <section class="panel">
@@ -3340,7 +3368,8 @@ function vExits(){
       <div class="tw"><table>
         <tbody>
           ${line('Salary for ' + c.period + ' \u2014 ' + c.paidDays + ' paid day' + (c.paidDays===1?'':'s'), c.monthPay)}
-          ${line('End-of-service gratuity', c.grat)}
+          ${line('End-of-service gratuity' + (noGratuity(c.row.portalName || c.row.name)
+            ? ' \u2014 none accrues' : ''), c.grat)}
           ${line('Leave encashment — '+c.leaveDays+' days at daily basic', c.leaveCash)}
           ${c.ticket?line('Unclaimed air tickets', c.ticket):''}
           ${lines.map((x,i)=>`<tr><td>${x.label?esc(x.label):'<i style="color:var(--ink3)">describe this line</i>'}
@@ -3489,7 +3518,9 @@ function vExitOne(x){
       <header><h3>What was owed</h3><span class="hint">${x.frozen?'frozen when it was initiated':'still being worked out'}</span></header>
       <div class="tw"><table><tbody>
         <tr><td>Salary for ${esc(c.period)} &mdash; ${c.paidDays} paid day${c.paidDays===1?'':'s'}</td><td class="n r">${money(c.monthPay,2)}</td></tr>
-        <tr><td>End-of-service gratuity</td><td class="n r">${money(c.grat,2)}</td></tr>
+        <tr><td>End-of-service gratuity${noGratuity(x.who)
+          ? ' <span class="pill mute" title="No end-of-service provision is held for them">none accrues</span>' : ''}</td>
+          <td class="n r">${money(c.grat,2)}</td></tr>
         <tr><td>Leave encashment &mdash; ${c.leaveDays} days</td><td class="n r">${money(c.leaveCash,2)}</td></tr>
         ${c.ticket?`<tr><td>Unclaimed air tickets</td><td class="n r">${money(c.ticket,2)}</td></tr>`:''}
         ${(c.extra||[]).map(l=>`<tr><td>${esc(l.label||'—')}</td><td class="n r"${l.deduct?' style="color:var(--bad)"':''}>${l.deduct?'(':''}${money(Math.abs(+l.amount||0),2)}${l.deduct?')':''}</td></tr>`).join('')}
@@ -6108,6 +6139,29 @@ function nextRunWhy(){
   if(open.length) return `${MKEY(open[0].key)} is still ${open[0].status}. Close it and the next month can be started.`;
   return '';
 }
+/* What a month pays, against what the records now say it should. A revision
+   letter issued after the month was generated is the usual cause; a salary
+   recorded for somebody who had none is the other. */
+const staleOf = key => ((DATA.payroll.runs || []).find(r => r.key === key) || {}).stale || [];
+function staleNote(key){
+  const run = (DATA.payroll.runs || []).find(r => r.key === key);
+  if(!run || run.status === 'closed') return '';
+  const st = run.stale || [];
+  if(!st.length) return '';
+  const one = st.length === 1;
+  return `<div class="nudge loud">
+    <span class="ndot"></span>
+    <div><b>${esc(MKEY(key))} no longer matches the records \u2014 ${st.length} ${one ? 'line' : 'lines'}</b>
+      <span>${st.slice(0, 3).map(x => `${esc(NM(x.name))}${x.company ? ' (' + esc(x.company) + ')' : ''}
+        ${x.missing ? 'is not on this month, and should be on <b>' + money(x.now, 2) + '</b>'
+                     : 'pays ' + money(x.was, 2) + ' and should pay <b>' + money(x.now, 2) + '</b>'}`)
+        .join('; ')}${st.length > 3 ? `; and ${st.length - 3} more` : ''}.
+        A revision letter has gone out, or somebody's pay has been set, since this month was built.
+        <b>Refresh from the records</b> rewrites ${one ? 'it' : 'them'} and this notice goes away by itself.</span></div>
+    ${canUpload(state.user) && run.status === 'draft'
+      ? '<button class="btn" id="payGenTop" type="button">Refresh from the records</button>' : ''}
+  </div>`;
+}
 function runSeg(){
   const runs = (DATA.payroll.runs || []);
   if(!runs.length) return '';
@@ -6226,6 +6280,7 @@ function vPayroll(){
       <span class="n">prepared by ${esc(P.preparedBy)}</span></div>
   </div>
 
+  ${staleNote(P.monthKey)}
   <section class="panel">
     <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
       ${runSeg()}
@@ -8808,6 +8863,18 @@ function render(){
       company: revCo()});
     if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:'', co:''}; }
     render(); };
+  document.querySelectorAll('[data-salclr]').forEach(b => b.onclick = async () => {
+    const i = b.dataset.salclr.lastIndexOf('|');
+    const who = b.dataset.salclr.slice(0, i), co = b.dataset.salclr.slice(i + 1);
+    const p = (salParts(who).co || []).find(c => c.company === co) || {};
+    if(!confirm('Take ' + money(p.salary || 0, 2) + ' off ' + NM(who) + "'s file"
+      + (p.label ? ' at ' + p.label : '') + '?\n\n'
+      + NM(who) + ' is ' + (BASIS[BASISOF(who)] || '').toLowerCase() + ', so nothing pays this figure.\n'
+      + 'Any revision letter that set it stays exactly where it is \u2014 the letter went out\n'
+      + 'and they have a copy of it.')) return;
+    b.disabled = true;
+    await window.__db.clearSalary(who, co);
+    render(); });
   { const F = () => state.opForm || (state.opForm = {who:'', co:'', basic:'', allow:'', from:''});
     [['opWho','who'],['opCo','co'],['opFrom','from']].forEach(([id, k]) => {
       const el = document.getElementById(id);
@@ -9422,6 +9489,11 @@ function render(){
     act('payWithdraw', k => window.__db.unsubmitRun(k));
     act('payClose',    k => window.__db.closeRun(k));
     on('paySlips',()=>{state.tab='payslips';render();});
+    /* The same act as the button in the panel header, offered where the
+       problem is written down. */
+    { const g = document.getElementById('payGenTop');
+      if(g) g.onclick = async () => { g.disabled = true;
+        await window.__db.generateRun(DATA.payroll.monthKey); render(); }; }
     /* This set state.payRun to 'sep'. No run is keyed 'sep' — they are keyed
        '2026-09' — so the payroll screen fell through its own guard and put you
        back on the month you were already looking at. Nothing happened, twice,
@@ -10015,6 +10087,7 @@ function vPayrollDraft(run){
         : 'the days being paid match the records'}</span></div>
   </div>
 
+  ${staleNote(run.key)}
   <section class="panel">
     <header><h3>${esc(run.label)}</h3>
       <span class="pill warn"><span class="dt"></span>Draft</span>
