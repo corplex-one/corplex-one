@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609042341">
+<link rel="manifest" href="manifest.webmanifest?v=202609050841">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1197,6 +1197,42 @@ select:disabled,select option:disabled{color:var(--ink3)}
 .pfread{min-height:38px;display:flex;align-items:center;gap:6px;font-size:15px;color:var(--ink)}
 /* "Nothing on file" wherever a value is expected and absent. */
 .miss{color:var(--ink3);font-style:italic}
+
+/* ---------- the settlement rail ----------
+   Six segments across the top of an exit, saying where it has got to. It had
+   no stylesheet at all, so a span, a b and an em ran together into
+   "1 · doneDraftedby Avin Mascarenhas". Each segment is a small stack now:
+   the number and the state on one line, what the step is under it, and who or
+   when under that. */
+.exrail .step{flex:1 1 150px;min-width:0;display:grid;
+  grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto auto;
+  column-gap:8px;row-gap:1px;align-content:start;
+  padding:10px 13px;border:1px solid var(--line);background:var(--panel2)}
+.exrail .step:first-child{border-radius:9px 0 0 9px}
+.exrail .step:last-child{border-radius:0 9px 9px 0}
+.exrail .step + .step{border-left:0}
+.exrail .step i{grid-row:1;grid-column:1;width:22px;height:22px;border-radius:99px;
+  background:var(--sunk);color:var(--ink3);display:grid;place-items:center;
+  font-style:normal;font-size:11.5px;font-family:'IBM Plex Sans',system-ui,sans-serif}
+.exrail .step .sw{grid-row:1;grid-column:2;align-self:center;font-size:10.5px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.exrail .step b{grid-row:2;grid-column:2;font-weight:500;font-size:13.5px;color:var(--ink2);
+  line-height:1.25;overflow-wrap:break-word}
+.exrail .step em{grid-row:3;grid-column:2;font-style:normal;font-size:11.5px;color:var(--ink3);
+  line-height:1.3;overflow-wrap:break-word}
+.exrail .step.done{background:var(--panel)}
+.exrail .step.done i{background:var(--good);color:#fff}
+.exrail .step.done b{color:var(--ink)}
+.exrail .step.now{background:var(--accentSoft);border-color:var(--accent)}
+.exrail .step.now i{background:var(--accent);color:var(--accentInk)}
+.exrail .step.now .sw{color:var(--accent);font-weight:600}
+.exrail .step.now b{color:var(--ink)}
+@media(max-width:1100px){ .exrail{gap:8px}
+  .exrail .step{flex:1 1 210px;border-radius:9px!important;border-left:1px solid var(--line)!important} }
+
+/* The one button on a screen that undoes rather than advances. */
+.btn.ghost.bad{color:var(--bad);border-color:color-mix(in srgb, var(--bad) 32%, var(--line))}
+.btn.ghost.bad:hover{background:color-mix(in srgb, var(--bad) 9%, transparent);border-color:var(--bad)}
 /* Inside the grid the same span stands for one blank cell among many, so it is
    a quiet dash rather than eight italic sentences a row. */
 .dgrid .miss{font-style:normal;opacity:.5}
@@ -1893,8 +1929,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609042341';</script>
-<script src="config.js?v=202609042341"></script>
-<script type="module" src="boot.js?v=202609042341"></script>
+<script>window.__BUILD = '202609050841';</script>
+<script src="config.js?v=202609050841"></script>
+<script type="module" src="boot.js?v=202609050841"></script>
 </body>
 </html>

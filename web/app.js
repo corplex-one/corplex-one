@@ -3244,8 +3244,45 @@ function vExitOne(x){
   const isAcc = canUpload(me);
   const one = x.mgr === owner;            // the manager IS the owner: one stage
   const st = x.status, at = EXSTAGE[st] || 0;
-  const step = (n, label, sub, done, now) => `<div class="step${done?' done':''}${now?' now':''}">
-    <span class="no">${n}${done?' &middot; done':now?' &middot; here':''}</span><b>${label}</b><em>${sub||''}</em></div>`;
+  /* The rail. It was six calls with their own hand-worked done/now flags, and
+     two of them said "here" at the same time — at 'initiated' both step 2 and
+     step 3 claimed to be where it was. It is a list now, each step carrying
+     the status it IS, so done and here are read off one number and cannot
+     disagree with each other:
+
+       done  the settlement has reached this step's own status
+       here  the first step it has not \u2014 what is being waited on
+
+     'Miraziz approved' was also typed in rather than read off the owner, and
+     the whole thing had no stylesheet, which is why it came out as
+     '1 · doneDraftedby Avin Mascarenhas'. */
+  const OWN1 = (NM(owner) || 'The owner').split(' ')[0];
+  const STEPS = [
+    ['draft', 'Drafted', x.by ? 'by ' + NM(x.by) : 'not sent yet'],
+    ['initiated', 'Initiated', x.month
+        ? MONTHNAME[+x.month.slice(5)-1] + ' ' + x.month.slice(0,4) + ' payroll'
+        : 'waiting on accounts'],
+    ...(one ? [] : [['mgr_ok', 'Manager approved', x.mgrOkBy
+        ? NM(x.mgrOkBy) + ', ' + dayLabel(x.mgrOkAt)
+        : 'with ' + (NM(x.mgr) || NM(mgrName(x.who)) || 'the manager')]]),
+    ['owner_ok', one ? 'Approved' : OWN1 + ' approved', x.ownerOkBy
+        ? NM(x.ownerOkBy) + ', ' + dayLabel(x.ownerOkAt)
+        : 'with ' + (NM(owner) || 'the owner')],
+    ['decided', 'Payment decided', x.payMode
+        ? (x.payMode === 'with_salaries' ? 'with the salaries' : 'on its own')
+        : 'accounts chooses how'],
+    ['paid', 'Paid', x.paidOn ? dayLabel(x.paidOn) + ' ' + x.paidOn.slice(0,4) : 'not yet']
+  ];
+  /* A step is done when the settlement has reached the status that step ends
+     at; 'here' is the first one it has not. The last step has no status after
+     it, so it is done only when everything is paid. */
+  const reached = k => at >= EXSTAGE[k];
+  const hereAt = STEPS.findIndex(([k]) => !reached(k));
+  const step = ([k, label, sub], i) => `<div class="step${reached(k)?' done':''}${
+      i === hereAt ? ' now' : ''}">
+    <i>${i + 1}</i>
+    <span class="sw">${reached(k) ? 'done' : i === hereAt ? 'here' : ''}</span>
+    <b>${esc(label)}</b><em>${esc(sub || '')}</em></div>`;
   return `
   <section class="panel">
     <header><h3>${nm(x.who)} &mdash; final settlement</h3>
@@ -3253,14 +3290,7 @@ function vExitOne(x){
       <span class="hint">last day ${esc(dayLabel(x.lastDay))} ${x.lastDay.slice(0,4)} &middot; AED ${money(x.net===null?c.net:x.net,2)}</span>
       <button class="btn ghost" id="exBack" type="button" style="margin-left:12px">Back to settlements</button></header>
     <div class="pad">
-      <div class="wfbar">
-        ${step(1,'Drafted', x.by?'by '+NM(x.by):'', at>=1, at===0)}
-        ${step(2,'Initiated', x.month?esc(MONTHNAME[+x.month.slice(5)-1]+' '+x.month.slice(0,4)):'', at>=2, at===1)}
-        ${one ? '' : step(3,'Manager approved', x.mgrOkBy?NM(x.mgrOkBy)+', '+esc(dayLabel(x.mgrOkAt)):'with '+NM(x.mgr||''), at>=2, at===1)}
-        ${step(one?3:4, one?'Approved':'Miraziz approved', x.ownerOkBy?NM(x.ownerOkBy)+', '+esc(dayLabel(x.ownerOkAt)):'with '+NM(owner), at>=3, at===2)}
-        ${step(one?4:5,'Payment decided', x.payMode?(x.payMode==='with_salaries'?'with the salaries':'on its own'):'', at>=4, at===3)}
-        ${step(one?5:6,'Paid', x.paidOn?esc(dayLabel(x.paidOn))+' '+x.paidOn.slice(0,4):'', at>=5, false)}
-      </div>
+      <div class="wfbar exrail">${STEPS.map(step).join('')}</div>
       ${x.backWhy?`<div class="note" style="border-left-color:var(--bad);margin-bottom:16px"><b>Sent back${x.backBy?' by '+NM(x.backBy):''}.</b> ${esc(x.backWhy)}</div>`:''}
       ${state.exAsk===x.id?`<div class="ciwarn" style="border-left-color:var(--bad)">
         <b>What is wrong with it?</b>
@@ -3270,15 +3300,26 @@ function vExitOne(x){
       <div class="btns" style="margin-top:16px">
         ${(isMgr && st==='initiated') || (isOwner && ['initiated','mgr_ok'].includes(st))
           ? `<button class="btn" data-exok="${esc(x.id)}" type="button">Approve it</button>
-             <button class="btn ghost" data-exno="${esc(x.id)}" type="button">Send it back</button>` : ''}
+             <button class="btn ghost" data-exno="${esc(x.id)}" type="button">Send it back</button>
+             ${isOwner && !isMgr && st === 'initiated' && !one
+               ? `<span style="font-size:13px;color:var(--ink2)">Still with ${NM(x.mgr) || NM(mgrName(x.who)) || 'the manager'}.
+                   Approving now counts as both.</span>` : ''}` : ''}
         ${isAcc && st==='owner_ok' ? `<span style="font-size:13px;color:var(--ink2)">Approved. How is it paid?</span>
           <button class="btn" data-expay="${esc(x.id)}" data-mode="with_salaries" type="button">With the salaries</button>
           <button class="btn ghost" data-expay="${esc(x.id)}" data-mode="separate" type="button">On its own</button>` : ''}
         ${isAcc && st==='decided' ? `<button class="btn" data-exdone="${esc(x.id)}" type="button">Mark it paid</button>
           <span style="font-size:13px;color:var(--ink2)">${x.payMode==='with_salaries'?'going out with the salaries':'going out on its own'}</span>` : ''}
         <button class="btn ghost" data-exsee="${esc(x.id)}" type="button">Open the settlement document</button>
-        ${isAcc && st!=='paid' ? `<button class="btn ghost" data-exundo="${esc(x.id)}" type="button">Undo &mdash; back to draft</button>` : ''}
+        ${isAcc && !['paid','draft'].includes(st)
+          ? `<button class="btn ghost" data-exundo="${esc(x.id)}" type="button">Undo &mdash; back to draft</button>` : ''}
+        ${isAcc && st !== 'paid'
+          ? `<button class="btn ghost bad" data-exkill="${esc(x.id)}" type="button">${
+              st === 'draft' ? 'Discard this draft' : 'Withdraw &mdash; they are staying'}</button>` : ''}
       </div>
+      ${isAcc && st === 'draft' ? `<p class="cap" style="padding:14px 0 0">Nothing has been sent to anybody yet
+        and ${nm(x.who)} is on the payroll as normal. <b>Discard this draft</b> clears it \u2014 which is what to
+        press after working a settlement out for somebody who then stays, or for somebody who only wanted to
+        see the number.</p>` : ''}
       ${isAcc && st==='paid' ? '<p class="cap" style="padding:14px 0 0">Paid and closed. Nothing further to do.</p>' : ''}
     </div>
   </section>
@@ -8848,6 +8889,28 @@ function render(){
     const ok = await window.__db.sendExitBack(state.exAsk, state.exWhy.trim());
     if(ok){ state.exAsk=null; state.exWhy=''; state.exitOpen=null; }
     render(); };
+  /* Discarding a draft, or withdrawing a settlement because the person is
+     staying after all. Both are the same call: the row goes to 'withdrawn',
+     which takes it off the Exits list, puts the person back on the staff list
+     and back on the month's payroll, and leaves them free to have a new
+     settlement drafted later. Nothing is deleted \u2014 a withdrawn settlement
+     is still in the table if anybody ever asks what happened. */
+  document.querySelectorAll('[data-exkill]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exkill); if(!x) return;
+    const draft = x.status === 'draft';
+    if(!confirm(draft
+      ? 'Discard the draft settlement for ' + NM(x.who) + '?\n\n'
+        + 'Nothing was sent to anybody, so nothing is undone. The draft is cleared\n'
+        + 'and you can work another one out any time.'
+      : 'Withdraw ' + NM(x.who) + "'s final settlement?\n\n"
+        + 'Use this when they are staying after all. ' + NM(x.who) + ' goes back on the\n'
+        + 'staff list and back on the payroll, the approvals are cancelled, and the\n'
+        + 'settlement comes off the list. It is not the way to correct one \u2014 for that\n'
+        + 'use Undo, which puts it back to a draft you can change.')) return;
+    b.disabled = true;
+    const ok = await window.__db.withdrawExit(x.id);
+    if(ok) state.exitOpen = null;
+    render(); });
   document.querySelectorAll('[data-exundo]').forEach(b=>b.onclick=async ()=>{
     const x = (HR().exits||[]).find(y=>y.id===b.dataset.exundo); if(!x) return;
     if(!confirm('Undo ' + NM(x.who) + "'s exit?\n\n"
@@ -9548,6 +9611,11 @@ function adminName(){
 
 /* --- the console: every request, and who is at their limit --- */
 function vRegular(){
+  /* Both tables on this page carry the same first six columns — ref, who,
+     day, in, out, why — and they sit one above the other. Reading down the
+     page means reading down a column, so they are laid out from one set of
+     widths rather than each finding its own. */
+  const REGCOLS = colsOf([8, 18, 12, 8, 8, 25, 11, 10]);
   const R = REG();
   const rows = R.rows, pend = rows.filter(r => r.status === 'Pending');
   const month = HDATE().slice(0,7);
@@ -9576,6 +9644,7 @@ function vRegular(){
   ${pend.length ? `<section class="panel">
     <header><h3>Waiting for a decision</h3><span class="hint">only you can decide these</span></header>
     <div class="tw"><table>
+      ${REGCOLS}
       <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
         <th>Why</th><th class="n r">Left</th><th></th></tr></thead>
       <tbody>${pend.map(r => {
@@ -9610,7 +9679,7 @@ function vRegular(){
     <header><h3>Every request</h3><span class="hint">${rows.length} in all</span></header>
     ${byCompany(rows, {
       who: r => NM(r.who), cls: 'invtable',
-      cols: colsOf([8, 18, 12, 8, 8, 25, 11, 10]),
+      cols: REGCOLS,
       head: `<thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
         <th>Why</th><th>State</th><th>Decided</th></tr></thead>`,
       row: r => `<tr>
