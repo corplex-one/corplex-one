@@ -6244,11 +6244,19 @@ function vTeam(){
     const e = aggOf(u.name,p) || {netTot:0,notColl:0,forf:0,newInv:0,exInv:0,pmInv:0,newCost:0,exCost:0,pmCost:0,comm:0,paid:0,bal:0,totElig:0};
     const rows = invRows(u.name,p);
     const mo = mgrOf(u.name,p);
+    /* Totals from the view, for somebody whose invoice rows are not ours to
+       read. A count of nought from no rows and a count of nought from no
+       invoices are different facts, and only the first should fall back. */
+    const ag = (((DATA.invAgg || {})[u.name] || {})[state.year] || {});
+    const agg = p === 'FY'
+      ? Object.values(ag).reduce((s, x) => ({count: s.count + x.count, out: s.out + x.out}), {count: 0, out: 0})
+      : (ag[p] || null);
+    const useAgg = !rows.length && agg;
     return {name:u.name, role:u.role, e, mo,
-      count:rows.length,
+      count: useAgg ? agg.count : rows.length,
       inv:e.newInv+e.exInv+e.pmInv,
       cost:e.newCost+e.exCost+e.pmCost,
-      out:rows.reduce((s,r)=>s+(r[IC.bal]||0),0)};
+      out: useAgg ? agg.out : rows.reduce((s,r)=>s+(r[IC.bal]||0),0)};
   }).filter(x=>x.role!=='former' || x.e.netTot>0 || x.count>0).sort((a,b)=>b.e.netTot-a.e.netTot);
 
   const DD = deptData(viewer);
@@ -8235,7 +8243,10 @@ const TABS = [
   {id:'invoices',    group:'mine',  label:'My invoices',      title:'Invoices', gate:inSales},
   // These three are made of other people's rows, so they still ask whether the
   // department's figures arrived at all.
-  {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&seesDeptSales(u)},
+  // Not a title: whether the department's figures arrived, and whether there
+  // is anybody in them besides you.
+  {id:'team',        group:'wider', label:'Team performance', title:'Team performance',
+   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},
   {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
    gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},
   {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},

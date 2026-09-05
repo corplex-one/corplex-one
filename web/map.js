@@ -779,6 +779,40 @@ function buildSales(db, byId, name, companies){
     if(!out.years.includes(y)) out.years.push(y);
   });
 
+  /* The people beside you.
+   *
+   * sales_commission holds net sales and commission in the same row, and its
+   * rule is your own rows or the sales-viewers list — so a consultant gets
+   * exactly one person's figures and the team screens had nobody to rank.
+   * sales_team_figures is a view over the same rows carrying the eight
+   * figures those screens draw and no commission at all, scoped in the
+   * database to your own company and your own department.
+   *
+   * It only ever FILLS GAPS. Accounts and the owner read the table itself and
+   * get more than this; a name already in the engine keeps what it has.
+   */
+  out.invAgg = {};
+  (db.sales_team || []).forEach(r => {
+    const n = r.full_name; if(!n) return;
+    const y = String(r.year), q = r.quarter;
+    const per = out.engine[n] || (out.engine[n] = {});
+    const yr  = per[y] || (per[y] = {});
+    if(!yr[q]) yr[q] = {
+      netTot: +r.net_tot || 0, totElig: +r.tot_elig || 0,
+      notColl: +r.not_coll || 0, forf: +r.forf || 0,
+      // The three invoiced and cost buckets are only ever added together on
+      // these screens, so the view returns the sum and it goes in the first.
+      newInv: +r.invoiced || 0, exInv: 0, pmInv: 0,
+      newCost: +r.costs || 0, exCost: 0, pmCost: 0,
+      peer: true
+    };
+    if(!out.years.includes(y)) out.years.push(y);
+    /* The invoice count and what is still outstanding, as totals. The rows
+       themselves stay unreadable — no client, no invoice number. */
+    const ia = out.invAgg[n] || (out.invAgg[n] = {});
+    (ia[y] || (ia[y] = {}))[q] = {count: +r.invoices || 0, out: +r.outstanding || 0};
+  });
+
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   (db.sales_invoices || []).forEach(r => {
     const who = name(r.filed_under) || name(r.consultant); if(!who) return;

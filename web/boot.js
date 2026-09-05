@@ -75,6 +75,10 @@ const TABLES = {
   ticket_history:   ['ticket_history'],
   sales_invoices:   ['sales_invoices'],
   sales_commission: ['sales_commission'],
+  /* A view, not a table: the eight figures the team screens draw, for the
+     people in your own department, with no commission column in it to hide.
+     Accounts and the owner read sales_commission itself and never need this. */
+  sales_team:       ['sales_team_figures'],
   sales_company:    ['sales_company'],
   sales_bands:      ['sales_bands'],
   sales_uploads:    ['sales_uploads'],
