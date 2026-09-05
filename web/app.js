@@ -8113,7 +8113,7 @@ const TABS = [
   {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canUpload, con:true},
   // ---- People: the day, and the rules the day is measured against
   {id:'hradmin',    group:'con', sec:'people', label:'Attendance',     title:'Attendance', gate:canAdmin, con:true},
-  {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:canAdmin, con:true},
+  {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:isAccounts, con:true},
   {id:'regular',    group:'con', sec:'people', label:'Regularization', title:'Regularization', gate:canAdmin, con:true},
   {id:'shifts',     group:'con', sec:'people', label:'Shifts',         title:'Shifts and reporting lines', gate:canAdmin, con:true},
   {id:'holidays',   group:'con', sec:'people', label:'Holidays',       title:'Public holidays', gate:canAdmin, con:true},
@@ -8122,18 +8122,18 @@ const TABS = [
   {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},
   // ---- Sales: was buried at the bottom of Rules & staff
   {id:'salesup',    group:'con', sec:'sales',  label:'Weekly upload',  title:'Weekly sales upload', gate:canUpload, con:true},
-  {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:canAdmin, con:true},
-  {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:canAdmin, con:true},
-  {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:canAdmin, con:true},
-  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:canAdmin, con:true},
+  {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:isAccounts, con:true},
+  {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:isAccounts, con:true},
+  {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:isAccounts, con:true},
+  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:isAccounts, con:true},
   // ---- Staff
   {id:'addstaff',   group:'con', sec:'staff',  label:'Add somebody',   title:'Add somebody to the staff list', gate:canUpload, con:true},
   {id:'probation',  group:'con', sec:'staff',  label:'Probation',      title:'Probation', gate:canAdmin, con:true},
-  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:canAdmin, con:true},
+  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:isAccounts, con:true},
   // ---- Documents: the hero stays put as you move between these four
-  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:canAdmin, con:true},
-  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:canAdmin, con:true},
-  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
+  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:isAccounts, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:isAccounts, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:isAccounts, con:true},
   {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true}
 ];
 const PERIODTABS = ['dashboard','commission','invoices','team','leaderboard','company'];
