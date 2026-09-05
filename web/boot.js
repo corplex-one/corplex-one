@@ -649,6 +649,34 @@ window.__db = {
     }catch(e){ oops(e, 'Correcting the joining'); await reload(); }
   },
 
+  /* Who is on payroll, and how. The database refuses 'salaried' for somebody
+   * with nothing on file and refuses 'off' while a month that pays them is
+   * still open, so there is nothing to check here — only to ask. */
+  async setPayrollBasis(map){
+    const jobs = [];
+    for(const [who, v] of Object.entries(map)){
+      const id = this.empId(who);
+      if(!id){ oops(new Error(who + ' is not in the staff list'), 'Who is on payroll'); return null; }
+      jobs.push(() => sb.rpc('set_payroll_basis', {p_emp: id, p_basis: v, p_paid_by: null})
+        .then(r => ({error: r.error})));
+    }
+    return this.saveAll('Who is on payroll', jobs);
+  },
+
+  /* An OPENING salary, for somebody who has none. The database refuses to
+   * overwrite one that exists — that is a revision letter's job. */
+  async recordSalary(r){
+    try{
+      const {data, error} = await sb.rpc('record_salary', {
+        p_emp: r.emp, p_company: r.company || '',
+        p_basic: Number(r.basic) || 0, p_allowance: Number(r.allow) || 0,
+        p_from: r.from});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Recording the salary'); await reload(); return null; }
+  },
+
   async addEmployee(p){
     try{
       const {data, error} = await sb.rpc('add_employee', {

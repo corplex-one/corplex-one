@@ -101,7 +101,8 @@ const state = {
   payCompany: 'all',
   deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null,
   exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',
-  revQ: '', refShow: false, dirWho: null, attTab: 'me', reqForm: null, reqSent: false, onOfficeNet: true,
+  revQ: '', refShow: false, dirWho: null, attTab: 'me',
+  opForm: null, opDone: '', reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
   lnForm: null, lnSent: false, exitWho: '', exitLwd: '', exitSettle: '', mailPick: 'weekly', mailWeek: null,
@@ -892,6 +893,13 @@ const EDTABLES = {
      A key is 'Rana Amine|passport|no' or 'Rana Amine|passport|exp'. Dropping
      the last segment gives 'Rana Amine|passport', which is the key both
      writers already take, so the split at the end is the whole of it. */
+  basis: {
+    title: 'Who is on payroll',
+    now:  k => BASISOF(k),
+    name: k => NM(k) + ' \u2014 paid',
+    fmt:  v => BASIS[v] || v,
+    save: d => window.__db.setPayrollBasis(d)
+  },
   bdate: {
     title: 'Dates of birth',
     now:  k => bdayToISO(bdayOf(k)),
@@ -2268,15 +2276,33 @@ const inWord = n => n<0 ? Math.abs(n)+' day'+(Math.abs(n)===1?'':'s')+' ago' : n
    in the month, which is pro-rated — never the master salary. Basic comes from the
    person's own salary revision letter where we have one, and falls back to the 60/40
    house split, flagged as assumed, where we do not. */
+/* What is on file for somebody. The three headline figures are the total
+   across every company that pays them; `co` is the breakdown, one entry per
+   company, and `ahead` is anything already agreed but not yet in force. For
+   the great majority `co` has one entry and nothing else changes. */
 function salParts(name){
   const p = (DATA.master.parts||{})[name];
-  if(p) return {salary:p.salary, basic:p.basic, allow:p.allow, assumed:false, from:p.from||'', src:p.src||''};
+  if(p) return {salary:p.salary, basic:p.basic, allow:p.allow, assumed:false,
+                from:p.from||'', src:p.src||'',
+                co: p.co||[], ahead: p.ahead||[], multi: !!p.multi};
   const r = payrollRowFor(name) || {};
   const days = r.days || 30;
   const salary = Math.round((r.salary||0) * 30 / days * 100)/100;
   const basic = Math.round(salary * DATA.master.basicPct * 100)/100;
-  return {salary, basic, allow: Math.round((salary-basic)*100)/100, assumed:true, from:'', src:''};
+  return {salary, basic, allow: Math.round((salary-basic)*100)/100, assumed:true,
+          from:'', src:'', co:[], ahead:[], multi:false};
 }
+/* The company a revision is for. One company and it is decided; more than one
+   and the form has to ask, because a revision against the wrong one writes a
+   salary row that belongs to nobody. */
+const salCos = n => (salParts(n).co || []);
+function revCo(){
+  const g = state.revForm || {}, cos = salCos(g.who);
+  if(!cos.length) return '';
+  return cos.some(c => c.company === g.co) ? g.co : cos[0].company;
+}
+const revCoPart = () => (salCos((state.revForm||{}).who)
+  .find(c => c.company === revCo()) || salParts((state.revForm||{}).who));
 const salPartsRow = r => salParts(r.name);
 
 const MONFULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -2561,6 +2587,118 @@ const gMonths = () => { const set = new Set();
   GRAT().rows.forEach(r=>Object.keys(r.basic).forEach(k=>set.add(k.slice(0,7))));
   return [...set].sort(); };
 
+const BASIS = {salaried: 'A fixed salary', commission: 'Commission only', off: 'Not on payroll'};
+const BASISOF = n => { const e = USERS.find(x => x.name === n) || {};
+  return e.payBasis || (HR().payBasis || {})[n] || 'salaried'; };
+
+/* The four columns Avin reads down: who, whether they are paid, how much is
+   on file, and where that figure came from. Somebody paid by two companies
+   gets a line each, for the same reason the salary-on-file table does. */
+function vOnPayroll(){
+  const roll = USERS.map(x => x.name).slice().sort((a, b) => a.localeCompare(b));
+  const rowsOf = n => { const p = salParts(n), cos = p.co || [];
+    return cos.length ? cos.map(c => ({n, p, c})) : [{n, p, c: null}]; };
+  const rows = roll.flatMap(rowsOf);
+  const off  = roll.filter(n => BASISOF(n) === 'off');
+  const noSal = roll.filter(n => BASISOF(n) !== 'off' && !(salParts(n).co || []).length
+                                 && !salParts(n).assumed);
+  const f = state.opForm || (state.opForm = {who: '', co: '', basic: '', allow: '', from: ''});
+  const canRecord = f.who && f.from && (+f.basic > 0 || +f.allow > 0)
+    && !(salParts(f.who).co || []).some(c => c.company === (f.co || ''));
+
+  return `
+  <div class="strip">
+    <div class="stat"><span class="k">On payroll</span><span class="v">${roll.filter(n => BASISOF(n) !== 'off').length}</span>
+      <span class="n">of ${roll.length} on the staff list</span></div>
+    <div class="stat"><span class="k">Not on payroll</span>
+      <span class="v" style="color:var(--${off.length ? 'warn' : 'ink'})">${off.length}</span>
+      <span class="n">${off.length ? esc(off.map(NM).join(', ')) : 'everybody is paid through the portal'}</span></div>
+    <div class="stat"><span class="k">Paid by two companies</span>
+      <span class="v">${roll.filter(n => (salParts(n).co || []).length > 1).length}</span>
+      <span class="n">a line each, every month</span></div>
+    <div class="stat"><span class="k">Nothing on file</span>
+      <span class="v" style="color:var(--${noSal.length ? 'warn' : 'good'})">${noSal.length}</span>
+      <span class="n">${noSal.length ? 'paid, but no figure recorded' : 'every paid person has a figure'}</span></div>
+  </div>
+
+  <section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Who is on payroll</h3>
+      <span class="hint">the generator builds a line for everybody here, and for nobody else</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">${edBar('basis')}</span></header>
+    ${edConfirm('basis')}${edSaved('basis')}
+    ${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([24, 20, 13, 13, 13, 17]),
+      head: `<thead><tr><th>Employee</th><th>Paid</th><th class="r">Basic</th>
+        <th class="r">Allowance</th><th class="r">Total</th><th>From</th></tr></thead>`,
+      row: r => { const v = r.c, b = BASISOF(r.n), first = !r.c || r.p.co[0] === r.c;
+        return `<tr>
+        <td class="nw">${first ? nm(r.n) : ''}${r.c && r.p.multi ? ` <span class="pill mute">${esc(r.c.label)}</span>` : ''}</td>
+        <td>${first ? edCell('basis', r.n,
+          x => `<select class="ff"${edAttr('basis', r.n)}>${Object.entries(BASIS).map(([k, l]) =>
+                 `<option value="${k}"${x === k ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>`,
+          x => `<span class="edread"${x === 'off' ? ' style="color:var(--ink3)"' : ''}>${esc(BASIS[x] || x)}</span>`) : ''}</td>
+        <td class="n r">${v ? money(v.basic, 2) : '<span class="miss">\u2014</span>'}</td>
+        <td class="n r">${v ? money(v.allow, 2) : '<span class="miss">\u2014</span>'}</td>
+        <td class="n r netcol">${v ? money(v.salary, 2) : '<span class="miss">\u2014</span>'}</td>
+        <td style="color:var(--ink2);font-size:12.5px"${full(v ? (v.from ? 'From ' + v.from : v.src) : '')}>${
+          v ? (v.from ? esc(v.from) : esc(v.src || '\u2014')) : (b === 'commission'
+            ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td></tr>`; },
+      empty: 'Nobody on the staff list yet.'
+    })}
+    <p class="cap">Setting somebody to <b>a fixed salary</b> needs a figure on file first &mdash; a salaried person
+      with nothing recorded would generate a line of nought. <b>Commission only</b> means no fixed pay: the line is
+      built from that month's commission. <b>Not on payroll</b> leaves them off the run entirely, and the database
+      refuses it while a month that pays them is still open.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>Record an opening salary</h3>
+      <span class="hint">for somebody who has none &mdash; a salary that exists moves by letter</span></header>
+    <div class="pad grid g2" style="gap:22px;align-items:start">
+      <div>
+        <div class="field"><label for="opWho">Employee</label>
+          <select id="opWho"><option value="">Choose someone</option>${roll.map(n =>
+            `<option value="${esc(n)}"${f.who === n ? ' selected' : ''}>${esc(n)}${
+              (salParts(n).co || []).length ? ' \u2014 ' + money(salParts(n).salary, 0) + ' on file' : ''}</option>`).join('')}</select></div>
+        <div class="field"><label for="opCo">Paid by</label>
+          <select id="opCo"><option value=""${!f.co ? ' selected' : ''}>The group, not a named company</option>${
+            (DATA.companies ? Object.values(DATA.companies) : []).map(c =>
+              `<option value="${esc(c.key)}"${f.co === c.key ? ' selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+          <span class="pfhint">One entry per company. Somebody paid by two gets two, and two payroll lines every month.</span></div>
+        <div class="grid g2" style="gap:12px">
+          <div class="field"><label for="opBasic">Basic (AED)</label><input id="opBasic" inputmode="decimal" placeholder="0.00" value="${esc(f.basic)}"></div>
+          <div class="field"><label for="opAllow">Other allowance</label><input id="opAllow" inputmode="decimal" placeholder="0.00" value="${esc(f.allow)}"></div>
+        </div>
+        <div class="field"><label for="opFrom">On file from</label><input id="opFrom" type="date" value="${esc(f.from)}"></div>
+        <button class="btn wide" id="opGo" type="button"${canRecord ? '' : ' disabled'}>Record it</button>
+        ${state.opDone ? `<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Recorded.</b> ${esc(state.opDone)}</div>` : ''}
+      </div>
+      <div>
+        ${f.who ? (() => { const p = salParts(f.who), hit = (p.co || []).find(c => c.company === (f.co || ''));
+          if(hit) return `<div class="note" style="border-left-color:var(--warn)">
+            <b>${esc(nm2(f.who))} already has ${money(hit.salary, 2)} on file${
+              hit.label ? ' from ' + esc(hit.label) : ''}.</b>
+            A salary that exists is moved by a revision letter, not typed over &mdash; so that there is always a
+            document behind a figure somebody is paid. The database refuses this whatever this screen offers.
+            <div style="margin-top:10px"><button class="btn ghost" data-go="revisions" data-mode="console" type="button">Go to Revisions</button></div></div>`;
+          const t = Math.round(((+f.basic || 0) + (+f.allow || 0)) * 100) / 100;
+          return `<dl class="kv">
+            <dt>Total</dt><dd class="big">${t ? money(t, 2) : '\u2014'}</dd>
+            <dt>Basic share</dt><dd>${t ? pct((+f.basic || 0) / t, 1) : '\u2014'}</dd>
+            <div class="sep"></div>
+            <dt>Paid by</dt><dd>${esc(f.co ? ((DATA.companies[f.co] || {}).name || f.co) : 'the group')}</dd>
+            <dt>From</dt><dd>${f.from ? esc(effLabel(f.from)) : '\u2014'}</dd>
+          </dl>
+          <p class="cap" style="padding:14px 0 0">This records what somebody is already paid; it is not a rise and
+            it writes no letter. The gratuity provision reads the basic from this date, so use the date the salary
+            actually started rather than today.</p>`; })()
+        : '<p style="margin:0;color:var(--ink3);font-size:13.5px">Choose someone to see what is on file.</p>'}
+      </div>
+    </div>
+  </section>`;
+}
+
 function vGratuity(){
   const months = gMonths();
   const ym = months.includes(state.gratMonth) ? state.gratMonth : (months[months.length-1] || '2026-08');
@@ -2726,12 +2864,16 @@ function vDeskOnly(){
 }
 
 function vRevisions(){
-  const g = state.revForm || (state.revForm = {who:'', eff:'', basic:'', allow:''});
+  const g = state.revForm || (state.revForm = {who:'', eff:'', basic:'', allow:'', co:''});
     const roll = USERS.map(x=>x.name).filter(n=>payrollRowFor(n));
     const cur = g.who ? salParts(g.who) : null;
+    /* The figures the revision is measured against: the chosen company's, not
+       the total. A 25,000 rise on a man paid 25,000 by each of two companies
+       is a 100% rise on the half being moved, not 50% on the pair. */
+    const one = g.who ? revCoPart() : null;
     const nb = +g.basic || 0, na = +g.allow || 0, nt = Math.round((nb+na)*100)/100;
     const ok = g.who && g.eff && nb > 0;
-    const rise = (cur && nt) ? Math.round((nt - cur.salary)*100)/100 : 0;
+    const rise = (one && nt) ? Math.round((nt - one.salary)*100)/100 : 0;
   return `
     <section class="panel">
     <header><h3>Issue a salary revision</h3><span class="hint">accounts only &mdash; the employee cannot ask for this</span></header>
@@ -2739,6 +2881,13 @@ function vRevisions(){
       <div>
         <div class="field"><label for="rvWho">Employee</label>
           <select id="rvWho"><option value="">Choose someone</option>${roll.map(n=>`<option value="${esc(n)}"${g.who===n?' selected':''}>${esc(n)}</option>`).join('')}</select></div>
+        ${(() => { const cos = salCos(g.who);
+          if(cos.length < 2) return '';
+          return `<div class="field"><label for="rvCo">Which company</label>
+            <select id="rvCo">${cos.map(c => `<option value="${esc(c.company)}"${
+              c.company === revCo() ? ' selected' : ''}>${esc(c.label)} &mdash; ${money(c.salary,2)} on file</option>`).join('')}</select>
+            <span class="pfhint">${esc(nm2(g.who))} is paid by ${cos.length} companies. A revision moves
+              one of them; the other is untouched.</span></div>`; })()}
         <div class="field"><label for="rvEff">With effect from</label><input id="rvEff" type="date" value="${esc(g.eff)}"></div>
         <div class="grid g2" style="gap:12px">
           <div class="field"><label for="rvBasic">New basic (AED)</label><input id="rvBasic" inputmode="decimal" placeholder="0.00" value="${esc(g.basic)}"></div>
@@ -2761,12 +2910,15 @@ function vRevisions(){
       </div>
       <div>
         ${g.who?`<dl class="kv">
-          <dt>On file now</dt><dd>${money(cur.salary,2)}</dd>
-          <dt>&mdash; basic</dt><dd>${money(cur.basic,2)}${cur.assumed?' <span class="pill warn" style="margin-left:6px">assumed</span>':''}</dd>
-          <dt>&mdash; other allowance</dt><dd>${money(cur.allow,2)}</dd>
+          ${cur.multi ? `<dt>This revision moves</dt><dd><b>${esc((salCos(g.who).find(c=>c.company===revCo())||{}).label || '')}</b></dd>` : ''}
+          <dt>On file now</dt><dd>${money(one.salary,2)}</dd>
+          <dt>&mdash; basic</dt><dd>${money(one.basic,2)}${cur.assumed?' <span class="pill warn" style="margin-left:6px">assumed</span>':''}</dd>
+          <dt>&mdash; other allowance</dt><dd>${money(one.allow,2)}</dd>
+          ${cur.multi ? `<div class="sep"></div><dt>Left alone</dt><dd style="color:var(--ink2)">${
+            salCos(g.who).filter(c=>c.company!==revCo()).map(c=>esc(c.label)+' \u00b7 '+money(c.salary,2)).join('<br>')}</dd>` : ''}
           <div class="sep"></div>
           <dt>New total</dt><dd class="big">${nt?money(nt,2):'—'}</dd>
-          ${nt?`<dt>Change</dt><dd style="color:var(--${rise>0?'good':rise<0?'bad':'ink2'})">${rise>0?'+':''}${money(rise,2)}${cur.salary?' · '+pct(rise/cur.salary,1):''}</dd>`:''}
+          ${nt?`<dt>Change</dt><dd style="color:var(--${rise>0?'good':rise<0?'bad':'ink2'})">${rise>0?'+':''}${money(rise,2)}${one.salary?' · '+pct(rise/one.salary,1):''}</dd>`:''}
         </dl>
         ${cur.assumed?`<p class="note" style="margin-top:14px;border-left-color:var(--warn)">There is no revision letter on file for ${esc(g.who.split(' ')[0])}, so the basic above is the <b>60/40 house split</b>, not a contractual figure. Issuing this replaces the guess with the real number.</p>`:`<p class="cap" style="padding:14px 0 0">From ${esc(cur.src||'a letter on file')}.</p>`}`
         :`<p style="margin:0;color:var(--ink3);font-size:13.5px">Choose someone to see what is on file now.</p>`}
@@ -2837,18 +2989,26 @@ function vRevisions(){
     <header><h3>Salary on file</h3>
       <span class="hint">what payslips, the salary certificate and the gratuity provision read from</span></header>
     ${byCompany(USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
-        .sort((a,b)=>a.localeCompare(b)).map(n=>({n, p:salParts(n)})), {
+        .sort((a,b)=>a.localeCompare(b))
+        /* One line per company that pays them. Somebody paid by two shows
+           twice, which is the point: a single row of 50,000 would be a figure
+           that appears on no payslip and in no bank file. */
+        .flatMap(n => { const p = salParts(n);
+          return (p.co && p.co.length > 1) ? p.co.map(c => ({n, p, c}))
+                                           : [{n, p, c: (p.co||[])[0] || null}]; }), {
       who: r => r.n,
       cols: colsOf([22, 13, 15, 13, 12, 25]),
-      note: rs => `${money(rs.reduce((a,r)=>a+r.p.salary,0),2)} on file`,
+      note: rs => `${money(rs.reduce((a,r)=>a + (r.c ? r.c.salary : r.p.salary), 0),2)} on file`,
       head: `<thead><tr><th>Employee</th><th class="r">Basic</th><th class="r">Other allowance</th>
         <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>`,
-      row: r => `<tr>
-        <td>${nm(r.n)}</td>
-        <td class="n r">${money(r.p.basic,2)}</td><td class="n r">${money(r.p.allow,2)}</td>
-        <td class="n r netcol">${money(r.p.salary,2)}</td>
-        <td class="n r" style="color:var(--ink2)">${r.p.salary?pct(r.p.basic/r.p.salary,1):'\u2014'}</td>
-        <td style="color:var(--ink2)"${full(r.p.from?'From '+r.p.from:(r.p.src||''))}>${r.p.from?esc('From '+r.p.from):esc(r.p.src||'\u2014')}${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}</td></tr>`,
+      row: r => { const v = r.c || r.p; return `<tr>
+        <td>${nm(r.n)}${r.p.multi && r.c ? ` <span class="pill mute">${esc(r.c.label)}</span>` : ''}</td>
+        <td class="n r">${money(v.basic,2)}</td><td class="n r">${money(v.allow,2)}</td>
+        <td class="n r netcol">${money(v.salary,2)}</td>
+        <td class="n r" style="color:var(--ink2)">${v.salary?pct(v.basic/v.salary,1):'\u2014'}</td>
+        <td style="color:var(--ink2)"${full(v.from?'From '+v.from:(v.src||''))}>${v.from?esc('From '+v.from):esc(v.src||'\u2014')}${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}${
+          (r.p.ahead||[]).filter(a => !r.c || a.company === r.c.company).map(a =>
+            ` <span class="pill warn" title="already agreed, not yet in force">from ${esc(a.from)} \u00b7 ${money(a.salary,2)}</span>`).join('')}</td></tr>`; },
       empty: 'Nothing on file.'
     })}
     <p class="cap">Issuing a revision replaces the basic and allowance the whole portal works from &mdash; payslips split the month on the new ratio, the salary certificate quotes the new figures, and the gratuity provision recalculates. The letter itself lands on the employee's own Letters page and is emailed to them. The real splits run from 57% to 66% of salary, so anything still marked <b>assumed</b> is a guess that should be replaced with the figure on the person's contract.</p>
@@ -7753,6 +7913,7 @@ const TABS = [
   {id:'payroll',    group:'con', sec:'pay',    label:'Payroll',        title:'Payroll', gate:canAdmin, con:true},
   {id:'payslips',   group:'con', sec:'pay',    label:'Payslips',       title:'Payslips', gate:canAdmin, con:true},
   {id:'revisions',  group:'con', sec:'pay',    label:'Revisions',      title:'Salary revisions', gate:canUpload, con:true},
+  {id:'onpay',      group:'con', sec:'pay',    label:'On payroll',     title:'Who is on payroll', gate:canUpload, con:true},
   {id:'tickets',    group:'con', sec:'pay',    label:'Air ticket',     title:'Air ticket tracker', gate:canAdmin, con:true},
   {id:'gratuity',   group:'con', sec:'pay',    label:'Gratuity',       title:'Gratuity provision', gate:canAdmin, con:true},
   {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canUpload, con:true},
@@ -8209,6 +8370,9 @@ function pageOf(id){
 }
 const PAGEVIEW = {};
 Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });
+/* Not a cut-out of a bigger screen: its own view, so it joins the map the
+   router reads rather than the list of things carved out of a page. */
+PAGEVIEW.onpay = () => vOnPayroll();
 
 function readHash(){
   const h = (location.hash || '').replace(/^#/, '');
@@ -8637,9 +8801,37 @@ function render(){
     rvb.disabled = true;
     const r = await window.__db.issueRevision({
       emp: (HR().ids||{})[who], basic: +g.basic||0, allow: +g.allow||0,
-      from: g.eff, reason: g.reason || 'Salary revision'});
-    if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:''}; }
+      from: g.eff, reason: g.reason || 'Salary revision',
+      /* Without this a revision for somebody paid by two companies matched
+         neither of their salary rows and wrote a third against a blank
+         company, which the payroll generator would then have paid as well. */
+      company: revCo()});
+    if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:'', co:''}; }
     render(); };
+  { const F = () => state.opForm || (state.opForm = {who:'', co:'', basic:'', allow:'', from:''});
+    [['opWho','who'],['opCo','co'],['opFrom','from']].forEach(([id, k]) => {
+      const el = document.getElementById(id);
+      if(el) el.onchange = () => { F()[k] = el.value; state.opDone = ''; render(); }; });
+    [['opBasic','basic'],['opAllow','allow']].forEach(([id, k]) => {
+      const el = document.getElementById(id);
+      if(el){ let tm; el.oninput = () => { clearTimeout(tm); tm = setTimeout(() => {
+        F()[k] = el.value; state.opDone = ''; render();
+        const e2 = document.getElementById(id);
+        if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+      }, 320); }; } });
+    const go = document.getElementById('opGo');
+    if(go) go.onclick = async () => { const g = F();
+      go.disabled = true;
+      const r = await window.__db.recordSalary({
+        emp: (HR().ids||{})[g.who], company: g.co || '',
+        basic: +g.basic || 0, allow: +g.allow || 0, from: g.from});
+      if(r){ state.opDone = NM(g.who) + ' \u2014 ' + money((+g.basic||0)+(+g.allow||0), 2)
+               + (g.co ? ' from ' + ((DATA.companies[g.co]||{}).name || g.co) : '')
+               + ', on file from ' + effLabel(g.from) + '.';
+             state.opForm = {who:'', co:'', basic:'', allow:'', from:''}; }
+      render(); }; }
+  { const c = document.getElementById('rvCo');
+    if(c) c.onchange = () => { state.revForm.co = c.value; render(); }; }
   { const q = document.getElementById('revQ');
     if(q) q.oninput = () => { state.revQ = q.value; render();
       const e2 = document.getElementById('revQ');
@@ -9848,7 +10040,7 @@ function vPayrollDraft(run){
     <div class="tw"><table class="invtable paytable">
       ${PAYGROUP()}
       <thead><tr><th class="s1">Employee</th><th>Co.</th>${PAYCOLS.map(c=>
-        `<th class="r${c.rule?' rule':''}">${esc(c.label)}${c.auto?'<i class="autoc">auto</i>':''}</th>`).join('')}
+        `<th class="r${c.rule?' rule':''}">${esc(c.label)}${c.auto?' <i class="autoc">auto</i>':''}</th>`).join('')}
         <th class="r rule">Gross</th><th class="r">Net</th></tr></thead>
       <tbody>${(() => {
         const line = r => `<tr>

@@ -68,6 +68,7 @@ export function buildData(db, meId){
     officeNet: S.office_network || 'not set',
     leavePolicy: S.leave_policy || {},
     titles:{}, managers:{}, orgCo:{}, orgDept:{}, emails:{}, birthdays:{},
+    payBasis:{}, paidBy:{},
     assign:{}, legalName:{}, profile:{}, balances:{}, left:{},
     noLeave:[], remote:[], noAttendance:[], quietBirthday:[],
     requests:[], attendance:[], announcements:[], holidays:[], shifts:[],
@@ -114,6 +115,11 @@ export function buildData(db, meId){
       confirmed: e.confirmed_on ? String(e.confirmed_on).slice(0,10) : ''
     };
     if(e.birthday) hr.birthdays[n] = {d: e.birthday, sample:false};
+    /* Whether the payroll generator builds a line for them, and how. It only
+       arrives for people allowed to see pay at all, which is why the screen
+       that reads it falls back to 'salaried' rather than to nothing. */
+    hr.payBasis[n] = e.payroll_basis || 'salaried';
+    if(e.paid_by) hr.paidBy[n] = e.paid_by;
     if(e.last_day) hr.left[n] = e.last_day;
     if(e.no_leave)      hr.noLeave.push(n);
     if(e.works_remote)  hr.remote.push(n);
@@ -344,12 +350,63 @@ export function buildData(db, meId){
   const co = k => (companies[k] || {}).code || '';
   const master = {parts:{}, people:{}, basicPct: S.basic_pct ?? 0.6, payDate: ''};
 
-  (db.salary_parts || []).forEach(p => {
-    const n = name(p.employee_id); if(!n) return;
-    master.parts[n] = {salary:+p.salary, basic:+p.basic, allow:+p.allowance,
-                       from: p.effective_from ? longDate(p.effective_from) : '',
-                       src: p.source || ''};
-  });
+  /* Salary, per person and per company.
+   *
+   * This was one line — master.parts[name] = {...} — and it had two faults
+   * that only showed up once the data got interesting.
+   *
+   * ONE. A person can be paid by more than one company. Miraziz draws 25,000
+   * from CorpLex and 25,000 from POA, and the database has always held that
+   * correctly: salary_parts is keyed (employee, effective_from, company), and
+   * the payroll generator builds him a line for each. But this loop keyed by
+   * name alone, so the second company overwrote the first and every screen
+   * that says "salary" showed one of the two. Avin: 'Miraziz needs to receive
+   * salary from POA and Corplex - 25k each. This is missing.'
+   *
+   * TWO. A revision adds a row rather than replacing one, so a person has as
+   * many rows per company as they have had raises. With no ordering, whichever
+   * arrived last in the array won — not the one in force. A salary screen
+   * could show last year's figure or this year's depending on row order.
+   *
+   * So: latest effective row per company, ignoring anything not yet in force,
+   * and the top-level figure is the sum across companies. Rows dated ahead are
+   * kept separately, because "on file now" and "already agreed from March" are
+   * two different questions and a screen should be able to ask either. */
+  {
+    const today = hr.today;
+    const byPerson = {};
+    (db.salary_parts || []).forEach(p => {
+      const n = name(p.employee_id); if(!n) return;
+      (byPerson[n] || (byPerson[n] = [])).push(p);
+    });
+    Object.entries(byPerson).forEach(([n, rows]) => {
+      const cos = [...new Set(rows.map(r => r.company || ''))].sort();
+      const pick = [], ahead = [];
+      cos.forEach(c => {
+        const mine = rows.filter(r => (r.company || '') === c)
+          .sort((a, b) => String(a.effective_from).localeCompare(String(b.effective_from)));
+        const live = mine.filter(r => !r.effective_from || String(r.effective_from) <= today);
+        const later = mine.filter(r => r.effective_from && String(r.effective_from) > today);
+        const r = live[live.length - 1];
+        if(r) pick.push({company: c, label: (companies[c] || {}).name || c || 'the group',
+          salary: +r.salary, basic: +r.basic, allow: +r.allowance,
+          from: r.effective_from ? longDate(r.effective_from) : '', src: r.source || ''});
+        later.forEach(x => ahead.push({company: c,
+          label: (companies[c] || {}).name || c || 'the group',
+          salary: +x.salary, basic: +x.basic, allow: +x.allowance,
+          from: x.effective_from ? longDate(x.effective_from) : '',
+          on: x.effective_from || '', src: x.source || ''}));
+      });
+      if(!pick.length && !ahead.length) return;
+      const sum = k => Math.round(pick.reduce((t, x) => t + (+x[k] || 0), 0) * 100) / 100;
+      const first = pick[0] || {};
+      master.parts[n] = {
+        salary: sum('salary'), basic: sum('basic'), allow: sum('allow'),
+        from: first.from || '', src: first.src || '',
+        co: pick, ahead, multi: pick.length > 1
+      };
+    });
+  }
   (db.payroll_identity || []).forEach(p => {
     const e = byId.get(p.employee_id); if(!e || !e.staff_no) return;
     master.people[e.staff_no] = {mol: p.mol_number || '', acct4: p.account_last4 || ''};
