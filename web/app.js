@@ -3833,39 +3833,24 @@ const UPLOADS = () => HR().uploadTypes || [];
    screen; masked by default because they are government identifiers and this
    table is looked at with somebody standing behind you. */
 const REFOF = (n, k) => ((HR().ref || {})[n] || {})[k] || '';
-/* Emirates ID, passport and residence visa are wanted from everybody; the
-   labour card is not, and the upload list has said so all along. One list,
-   so the two screens cannot disagree about what is needed. */
+/* The four, in the order the documents table lists them. */
 const REFKINDS = [
+  {k:'passport', label:'Passport',       ph:'as printed'},
+  {k:'visa',     label:'Residence visa', ph:'on the visa'},
   {k:'eid',      label:'Emirates ID',    ph:'784-0000-0000000-0'},
-  {k:'passport', label:'Passport',       ph:'as printed on the page'},
-  {k:'visa',     label:'Residence visa', ph:'the number on the visa'},
   {k:'labour',   label:'Labour card',    ph:'the MOHRE number'}
 ];
-const refNeeded = k => ((HR().uploadTypes || []).find(t => t.k === k) || {}).need !== false;
-/* What a person is shown for each of the four. A number accounts holds is
-   read-only and masked; a blank one is a box. */
-function refRows(u){
-  const mine = u === state.user;
-  let shown = 0;
-  const rows = REFKINDS.map(t => {
-    const v = REFOF(u, t.k);
-    if(v){ shown++;
-      return `<dt>${esc(t.label)}</dt><dd style="font-family:inherit;font-weight:600">
-        <span class="refval" data-full="${esc(v)}">${esc(maskRef(v))}</span>${shown === 1 ?
-        ` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>` : ''}</dd>`;
-    }
-    if(!mine) return '';
-    return `<dt>${esc(t.label)}${refNeeded(t.k) ? '' : ' <span class="pill mute">optional</span>'}</dt>
-      <dd style="font-family:inherit"><input class="refin" data-pf="${esc(t.k)}"
-        value="${esc((state.pfDirty || {})[t.k] || '')}" placeholder="${esc(t.ph)}"
-        aria-label="${esc(t.label)} number"></dd>`;
-  }).join('');
-  const missing = REFKINDS.filter(t => !REFOF(u, t.k));
-  if(!mine && !shown) return '';
-  return rows + (!mine && missing.length
-    ? `<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">${
-        esc(missing.map(x => x.label).join(', '))}</dd>` : '');
+const refPh = k => (REFKINDS.find(t => t.k === k) || {}).ph || '';
+/* A number accounts holds is theirs to correct — they typed it off the
+   document itself, and it goes onto the MOHRE filings. A blank one is a box.
+   The database enforces that, not this. The masked value carries .refval, so
+   the one Show numbers button in Employment above uncovers these too. */
+function refCell(u, k){
+  const v = REFOF(u, k);
+  if(v) return `<span class="refval" data-full="${esc(v)}">${esc(maskRef(v))}</span>`;
+  if(u !== state.user) return '<span style="color:var(--ink3)">—</span>';
+  return `<input class="refin" data-pf="${esc(k)}" value="${esc((state.pfDirty || {})[k] || '')}"
+    placeholder="${esc(refPh(k))}" aria-label="Number on the ${esc((REFKINDS.find(t => t.k === k) || {}).label || k)}">`;
 }
 /* Two characters, four dots, four characters — the same shape whatever the
    document, so it fits a column and two rows can still be told apart. It is
@@ -3989,7 +3974,7 @@ function vProfile(){
       <div class="pad">${grp('you')}</div>
     </section>
     <section class="panel">
-      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; a document number with a box is yours to fill in</span></header>
+      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span></header>
       <div class="pad"><dl class="kv">
         ${ro('Employee ID', r.id)}
         ${ro('Company', co.name)}
@@ -4000,9 +3985,18 @@ function vProfile(){
         ${ro('Reports to', mgrName(u) || '—')}
         ${ro('Work email', emailOf(u) || r.email)}
         ${phoneOf(u) ? ro('Work phone', phoneOf(u)) : ''}
-        ${refRows(u)}
+        ${(() => {
+          const REFS = REFKINDS.map(t => [t.k, t.label]);
+          const have = REFS.filter(([k]) => REFOF(u, k));
+          if(!have.length) return '';
+          return have.map(([k, l], i) => `<dt>${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
+            <span class="refval" data-full="${esc(REFOF(u, k))}">${esc(maskRef(REFOF(u, k)))}</span>${i ? '' :
+            ` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>`}</dd>`).join('')
+            + (have.length < REFS.length ? `<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">${
+                esc(REFS.filter(([k]) => !REFOF(u, k)).map(x => x[1]).join(', '))}</dd>` : '');
+        })()}
       </dl>
-      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID, passport, residency visa and labour card numbers</b> are held because payroll, insurance and the MOHRE filings need them &mdash; only you and accounts can see them, on any screen, they are never in an email, and they are masked until you press Show. A number that is missing is yours to type in from the document; once it is on file it becomes accounts&rsquo; to correct, because they check it against the document itself &mdash; so if one shown here is wrong, tell them rather than us both holding a different number. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
+      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID, passport, residency visa and labour card numbers</b> are held because payroll, insurance and the MOHRE filings need them &mdash; only you and accounts can see them, on any screen, they are never in an email, and they are masked until you press Show. A missing one is yours to type in, on <b>Your documents</b> below, off the document itself; once it is on file it becomes accounts&rsquo; to correct, so if one shown here is wrong, tell them rather than us both holding a different number. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>
     </section>
     <section class="panel">
       <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>
@@ -4018,7 +4012,7 @@ function vProfile(){
     <header><h3>Your documents</h3>
       <span class="hint">upload a copy and type the expiry date &mdash; the date is what drives the reminders</span></header>
     <div class="tw"><table>
-      <thead><tr><th>Document</th><th>Copy</th><th>Expires</th><th>When</th><th>Status</th></tr></thead>
+      <thead><tr><th>Document</th><th>Copy</th><th>Number</th><th>Expires</th><th>When</th><th>Status</th></tr></thead>
       <tbody>${UPLOADS().map(t=>{
         const f = fileOf(u,t.k), exp = docs[t.k]||'';
         const n = exp ? dTo(exp) : null;
@@ -4028,6 +4022,7 @@ function vProfile(){
           <td class="nw">${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <button class="lookbtn" data-look="${esc(t.k)}" type="button">View</button>`:''}</span>`
             :'<span style="color:var(--ink3)">not uploaded</span>'}
             <label class="pfup">${state.upBusy===t.k ? 'Uploading…' : f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="${esc(t.k)}" hidden${state.upBusy?' disabled':''}></label></td>
+          <td class="nw refnum">${refCell(u, t.k)}</td>
           <td><input class="ff pfdate" type="date" data-docexp="${esc(t.k)}" value="${esc(exp)}"></td>
           <td class="nw" style="color:var(--ink2)">${exp?esc(inWord(n)):'—'}</td>
           <td>${exp?DOCPILL(state2):'<span class="pill mute">Nothing yet</span>'}</td></tr>`;
@@ -4039,7 +4034,7 @@ function vProfile(){
         : 'Your changes are saved'}</span>
       <button class="btn" id="pfSave" type="button"${state.pfDirty ? '' : ' disabled'}>Save changes</button>
     </div>
-    <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. The expiry date you type is what drives the reminders, so take it off the document rather than from memory. <b>The number on each of these is held too</b>, by accounts, off the copy you upload &mdash; that changed in September 2026, and the four are listed under Employment above. Your documents and your numbers are visible to you and to accounts, nobody else.</p>
+    <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. The expiry date you type is what drives the reminders, so take it off the document rather than from memory. <b>Type the number off each document</b> in the column beside it. Once a number is on file it becomes accounts&rsquo; to correct, because they check it against the copy you upload; the four are listed under Employment above as well. Your documents and your numbers are visible to you and to accounts, nobody else.</p>
   </section>`;
 }
 
