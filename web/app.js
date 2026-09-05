@@ -2451,10 +2451,13 @@ function vDocsEdit(){
       const DOCS = ORDER.map(k => types.find(t => t.k === k)).filter(Boolean)
         .concat(types.filter(t => !ORDER.includes(t.k)));
       /* Thirteen columns wide plus the birth date, so the widths are set from
-         what each one actually has to hold at the grid's own width — a masked
-         number, a date in words, and the word "Document" whole. The heading
-         came out as "DOCUME…" the first time these were guessed at. */
-      const each = (100 - 16.5 - 8) / (DOCS.length * 3);
+         what each one actually has to hold at the grid's own width. Two of
+         those were sized wrong to begin with: the heading came out as
+         "DOCUME…", and the number column was cut to fit a MASKED number
+         when the width that matters is the one it needs with the numbers
+         SHOWN — '784-1990-1234567-1' is eighteen characters and the point of
+         the button is to read it. Avin: 'i want to see the numbers clearly'. */
+      const each = (100 - 15.4 - 7.7) / (DOCS.length * 3);
       /* Second column, off the same passport as the rest of the row. A date
          held without a year still shows what there is, with the gap named,
          because 'not on file' would be a lie about a birthday everybody
@@ -2491,7 +2494,7 @@ function vDocsEdit(){
       };
       return byCompany(rows, {
         who: n => n, cls: 'dgrid',
-        cols: colsOf([16.5, 8].concat([].concat(...DOCS.map(() => [each * 1.15, each * 0.955, each * 0.895])))),
+        cols: colsOf([15.4, 7.7].concat([].concat(...DOCS.map(() => [each * 1.282, each * 0.893, each * 0.815])))),
         note: rs => `${rs.filter(n => gaps(n)).length} still to fill in`,
         head: `<thead>
           <tr class="dgrp"><th></th><th></th>${DOCS.map(t =>
@@ -8614,7 +8617,11 @@ function render(){
   // columns wide and a viewport-height pane cut the last three off
   mainEl.classList.toggle('fixed', ['invoices'].includes(state.tab));
   document.body.classList.toggle('printinv', !!state.invPrint);
-  mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));
+  /* Every console screen is a table or a form over one, so the console is
+     wide by definition rather than by a list somebody has to remember to add
+     to. The named staff screens keep their place on the list. */
+  mainEl.classList.toggle('wide', state.mode === 'console'
+    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));
   const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
   const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
   if(SALESTABS.includes(state.tab) && activeCo().sales && !yearHeld){

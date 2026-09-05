@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609051306">
+<link rel="manifest" href="manifest.webmanifest?v=202609051325">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -177,7 +177,10 @@ main{min-width:0;display:flex;flex-direction:column}
 .conbar .cback:hover{background:rgba(255,255,255,.1)}
 .pick{display:flex;align-items:center;gap:7px}
 .pick select{width:auto;max-width:220px;padding:6px 9px;font-size:12.5px;border-radius:8px;background:var(--panel);text-overflow:ellipsis}
-.content{padding:22px 24px 60px;display:flex;flex-direction:column;gap:18px;max-width:1560px}
+/* A cap so a line of prose stays readable on a wide monitor; 1560 was set
+   when the widest screen in the office was smaller than the ones on the desks
+   now, and it left a blank strip down the right of every staff page. */
+.content{padding:22px 24px 60px;display:flex;flex-direction:column;gap:18px;max-width:1780px}
 
 /* ---------- pieces ---------- */
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
@@ -357,7 +360,9 @@ svg .dl{fill:var(--ink);font-size:10.5px;font-family:'IBM Plex Sans',system-ui,s
 .bell .dot{position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:99px;
   background:var(--accent);color:var(--accentInk);font-size:10.5px;font-weight:600;display:grid;place-items:center;
   font-family:'IBM Plex Sans',system-ui,sans-serif}
-main.wide .content{max-width:1800px}
+/* No cap at all. A table is never too wide to read, only too narrow, and
+   everything this class is put on is a table. */
+main.wide .content{max-width:none}
 main.fixed{height:100vh;overflow:hidden}
 main.fixed .content{flex:1;min-height:0;overflow:hidden;max-width:none;padding-bottom:18px}
 .paygrid{display:grid;grid-template-columns:minmax(330px,390px) minmax(0,1fr);gap:14px;height:100%;min-height:0}
@@ -1250,7 +1255,7 @@ select:disabled,select option:disabled{color:var(--ink3)}
    to fit thirteen columns into a panel. So it keeps its real widths and
    scrolls sideways inside .tw rather than crushing a date into '16 Fe…'. The
    employee column is what you read down, so it is the widest and it stays. */
-.dgrid{min-width:1900px}
+.dgrid{min-width:2010px}
 .dgrid th,.dgrid td{padding-left:9px;padding-right:9px}
 /* The group heading: one document, spanning its three columns. */
 .dgrid tr.dgrp th.grp{text-align:center;font-size:11.5px;letter-spacing:.06em;
@@ -1958,8 +1963,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609051306';</script>
-<script src="config.js?v=202609051306"></script>
-<script type="module" src="boot.js?v=202609051306"></script>
+<script>window.__BUILD = '202609051325';</script>
+<script src="config.js?v=202609051325"></script>
+<script type="module" src="boot.js?v=202609051325"></script>
 </body>
 </html>
