@@ -81,6 +81,8 @@ const TABLES = {
   // Optional: the portal opens without it, minus the two team screens. It is
   // created by migration 0044, which is run after this code is deployed.
   sales_team:       ['sales_team_figures', null, true],
+  // optional until 0021 has been run: a missing table must not close the portal
+  ticket_rates:     ['ticket_rates', 'country', true],
   sales_company:    ['sales_company'],
   sales_bands:      ['sales_bands'],
   sales_uploads:    ['sales_uploads'],
@@ -1234,6 +1236,41 @@ window.__db = {
       await reload();
       return true;
     }catch(e){ oops(e, what); await reload(); return null; }
+  },
+
+  /* {country: '' | '2500'} — '' clears the rate, which leaves the country on
+     the list unpriced. Each one goes through set_ticket_rate, which also
+     carries everybody from that country with it; that is the whole point of
+     the function existing rather than an upsert here. */
+  async saveTicketRates(map){
+    try{
+      for(const [country, v] of Object.entries(map)){
+        const rate = String(v).trim() === '' ? null : Number(v) || 0;
+        const {error} = await sb.rpc('set_ticket_rate', {p_country: country, p_rate: rate});
+        if(error) throw error;
+      }
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'The ticket rates'); await reload(); return null; }
+  },
+
+  async setTicketRate(country, rate){
+    try{
+      const {data, error} = await sb.rpc('set_ticket_rate',
+        {p_country: country, p_rate: rate === null || rate === '' ? null : Number(rate) || 0});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The ticket rate'); await reload(); return null; }
+  },
+
+  async dropTicketRate(country){
+    try{
+      const {error} = await sb.rpc('delete_ticket_rate', {p_country: country});
+      if(error) throw error;
+      await reload();
+      return true;
+    }catch(e){ oops(e, 'Taking it off the list'); await reload(); return null; }
   },
 
   // {name: '' | '12.5'} — '' means nothing carried forward is recorded

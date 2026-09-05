@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609052103">
+<link rel="manifest" href="manifest.webmanifest?v=202609052127">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -651,6 +651,24 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   min-width:18px;text-align:center;padding:1px 6px;border-radius:999px;
   background:var(--accent);color:var(--accentInk)}
 .rail.tuck button.nav .navcnt{display:none}
+
+/* ---------- country rates ---------- */
+.ratefind{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line)}
+.ratefind input{flex:0 1 300px;padding:7px 11px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px}
+.ratefind input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.ratefind span{font-size:12.5px;color:var(--ink3)}
+/* Ten rows, then it scrolls. The row at the boundary fades rather than being
+   sliced in half: a scroll hint should not look like clipped text. */
+.ratescroll{max-height:433px;overflow-y:auto;overscroll-behavior:contain;
+  -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent);
+          mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent)}
+.ratescroll.atend{-webkit-mask-image:none;mask-image:none}
+.ratescroll thead th{position:sticky;top:0;z-index:1;background:var(--panel2)}
+.rateIn{width:100%;max-width:110px;text-align:right;padding:4px 7px;border:1px solid var(--line);
+  border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px;
+  font-variant-numeric:tabular-nums}
+.rateIn:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
 
 /* ---------- payslip ---------- */
 .slwrap{padding:22px 18px 26px;background:var(--sunk);display:flex;justify-content:center;overflow-x:auto}
@@ -1986,8 +2004,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609052103';</script>
-<script src="config.js?v=202609052103"></script>
-<script type="module" src="boot.js?v=202609052103"></script>
+<script>window.__BUILD = '202609052127';</script>
+<script src="config.js?v=202609052127"></script>
+<script type="module" src="boot.js?v=202609052127"></script>
 </body>
 </html>

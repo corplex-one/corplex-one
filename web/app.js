@@ -870,6 +870,18 @@ const EDTABLES = {
             && (String(a).trim() === '' || (+a || 0) === (+b || 0)),
     save: d => window.__db.setCarried(d, OPENAT())
   },
+  rates: {
+    title: 'Ticket rates by country',
+    now:  k => { const r = rateFor(k); return r === null ? '' : String(r); },
+    /* The headcount belongs in the confirm list, not beside the box: what a
+       rate change actually does is move those people. */
+    name: k => { const n = onCountry(k);
+      return k + ' \u2014 ticket allowance' + (n ? ' (' + n + ' ' + (n === 1 ? 'person' : 'people') + ')' : ''); },
+    fmt:  v => String(v).trim() === '' ? 'no rate set' : 'AED ' + money(+v || 0, 0),
+    same: (a, b) => (String(a).trim() === '') === (String(b).trim() === '')
+            && (String(a).trim() === '' || (+a || 0) === (+b || 0)),
+    save: d => window.__db.saveTicketRates(d)
+  },
   shifts: {
     title: 'Shifts and reporting lines',
     now:  k => k[0] === 's' ? (shiftOf(k.slice(2)) || {}).id || '' : (mgrName(k.slice(2)) || ''),
@@ -3834,7 +3846,16 @@ function maskRef(v){
 const DOCREF = {eid:'eid', passport:'passport', visa:'visa', labour:'labour'};
 const fileOf = (u,k) => ((HR().files||{})[u]||{})[k] || null;
 const kb = n => n>=1048576 ? (n/1048576).toFixed(1)+' MB' : Math.round(n/1024)+' KB';
-const PICKS = {gender:['Female','Male'], marital:['Single','Married']};
+/* Every country, in one place, read by three screens: the rates table, the
+   joiner form and a person's own profile. A getter rather than a value
+   because the list is data now — it arrives with everything else. */
+const COUNTRIES = () => (DATA.tickets.rates || []).map(r => r.country);
+const rateFor = c => { const r = (DATA.tickets.rates || []).find(x => x.country === c);
+  return r && r.rate !== null && r.rate !== undefined ? +r.rate : null; };
+const onCountry = c => (DATA.tickets.employees || [])
+  .filter(e => e.country === c && !e.lwd).length;
+const PICKS = {gender:['Female','Male'], marital:['Single','Married'],
+  get country(){ return COUNTRIES(); }};
 /* row groups the fields into lines; the numbers are what the page reads across */
 const PFIELDS = [
   {k:'callMe',      label:'Name you go by',         group:'you',   req:false, ph:'Leave blank to use your full name', row:1},
@@ -3845,7 +3866,7 @@ const PFIELDS = [
    note:'Only you and accounts see this. Colleagues get the work number.', row:2},
   {k:'pemail',      label:'Personal email',         group:'you',   req:true,  ph:'you@example.com', row:3},
   {k:'uaeAddr',     label:'Address in the UAE',     group:'you',   req:true,  ph:'Flat, building, area, emirate', row:3},
-  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  ph:'Country', row:1},
+  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  pick:'country', row:1},
   {k:'homeAddr',    label:'Permanent address',      group:'home',  req:true,  ph:'Address back home', row:1},
   {k:'homeContact', label:'Contact there',          group:'home',  req:false, ph:'Name of someone at that address', row:2},
   {k:'homePhone',   label:'Their phone',            group:'home',  req:false, ph:'+00 00 000 0000', row:2},
@@ -6733,6 +6754,77 @@ function vPayroll(){
   </section>`:''}`;
 }
 
+/* Which countries to draw. The ones with a rate and the ones somebody is
+   from, because those are the rows that mean anything; the other two hundred
+   are one search box away and appear the moment you type. */
+function rateRows(){
+  const all = DATA.tickets.rates || [];
+  const q = (state.rateFind || '').trim().toLowerCase();
+  if(q) return all.filter(r => r.country.toLowerCase().includes(q));
+  return all.filter(r => r.rate !== null || onCountry(r.country));
+}
+
+function vCountryRates(active, annual){
+  const rows = rateRows();
+  const q = (state.rateFind || '').trim();
+  const all = DATA.tickets.rates || [];
+  const priced = all.filter(r => r.rate !== null).length;
+  /* Somebody is from there and no figure has been agreed. Until now this was
+     invisible: they simply were not on the list, and the total under it did
+     not add up to the rows above it. */
+  const unpriced = [...new Set((DATA.tickets.employees || [])
+    .filter(e => !e.lwd && e.country && rateFor(e.country) === null)
+    .map(e => e.country))];
+  const upl = canUpload(state.user);
+  return `
+    <section class="panel">
+      <header><h3>Country rates</h3>
+        <span class="pill ${unpriced.length ? 'warn' : 'mute'}">${priced} priced</span>
+        <span class="hint">fixed allowance from June 2026</span>
+        ${upl ? edBar('rates') : ''}</header>
+      ${edSaved('rates')}${edConfirm('rates')}
+      <div class="ratefind">
+        <input id="rateFind" type="search" placeholder="Search ${all.length} countries" value="${esc(q)}"
+          aria-label="Search countries">
+        <span>${q ? rows.length + (rows.length === 1 ? ' match' : ' matches')
+          : 'priced countries and countries somebody is from'}</span>
+      </div>
+      ${unpriced.length ? `<div class="note" style="margin:12px 18px 0;border-left-color:var(--warn)">
+        <b>${esc(unpriced.join(', '))}</b> ${unpriced.length === 1 ? 'has' : 'have'} nobody's rate agreed yet,
+        and somebody is from ${unpriced.length === 1 ? 'there' : 'those'}. Their ticket is worth nothing until a
+        figure is set here.</div>` : ''}
+      <div class="ratescroll"><div class="tw"><table>
+        ${colsOf([44, 18, 12, 18, 8])}
+        <thead><tr><th>Country</th><th class="r">Rate</th><th class="r">Staff</th><th class="r">Annual cost</th><th></th></tr></thead>
+        <tbody>${rows.map(r => { const k = onCountry(r.country);
+          const v = r.rate;
+          return `<tr${k ? '' : ' style="color:var(--ink3)"'}>
+            <td class="nw">${esc(r.country)}${k ? '' : v === null ? ' <span class="pill mute">no rate</span>' : ''}</td>
+            <td class="n r">${upl ? edCell('rates', r.country,
+                x => `<input class="rateIn" type="number" step="1" min="0" value="${esc(x)}" placeholder="\u2014"${
+                  edAttr('rates', r.country)} aria-label="Ticket rate for ${esc(r.country)}">`,
+                x => String(x).trim() === '' ? '<span class="edread none">\u2014</span>'
+                   : '<span class="edread">' + money(+x, 0) + '</span>')
+              : (v === null ? '\u2014' : money(v, 0))}</td>
+            <td class="n r">${k || '\u2014'}</td>
+            <td class="n r">${k && v !== null ? money(k * v, 0) : '\u2014'}</td>
+            <td class="r nw">${upl && !r.standard && v === null && !k
+              ? `<button class="btn ghost sm" data-ratedrop="${esc(r.country)}" type="button" title="Take this off the list">Remove</button>`
+              : ''}</td></tr>`; }).join('')}
+          ${rows.length ? '' : `<tr><td colspan="5" style="color:var(--ink3);padding:18px">
+            No country matches \u201c${esc(q)}\u201d.${upl ? ` <button class="btn ghost sm" id="rateAdd" type="button">Add \u201c${esc(q)}\u201d to the list</button>` : ''}</td></tr>`}
+        </tbody></table></div></div>
+      <div class="tw"><table>${colsOf([44, 18, 12, 18, 8])}<tbody>
+        <tr class="tot"><td>Everybody on the scheme</td><td></td>
+          <td class="n r">${active.length}</td><td class="n r netcol">${money(annual, 0)}</td><td></td></tr>
+      </tbody></table></div>
+      <p class="cap">The country rate is the fixed allowance paid regardless of what the ticket actually costs.
+        ${upl ? `Changing one changes it for <b>everybody from that country</b> \u2014 you are shown who, and by how much,
+        before it is saved. Tickets already paid keep the figure they were paid at. A country with no rate can still be
+        picked when somebody joins; the rate is asked for then.` : ''}</p>
+    </section>`;
+}
+
 function vTickets(){
   const T = DATA.tickets, f = state.atFilter, so = state.atSort;
   const all = T.employees;
@@ -6910,19 +7002,9 @@ function vTickets(){
         </tbody></table></div>
       <p class="cap">Valued at the current fixed rate, since what an untaken ticket would have cost cannot be known.</p>
     </section>
-
-    <section class="panel">
-      <header><h3>Country rates</h3><span class="hint">fixed allowance from June 2026</span></header>
-      <div class="tw"><table>
-        <thead><tr><th>Country</th><th class="r">Rate</th><th class="r">Staff</th><th class="r">Annual cost</th></tr></thead>
-        <tbody>${T.rates.map(([c,v])=>{const k=active.filter(r=>r.country===c).length;
-          return `<tr${k?'':' style="color:var(--ink3)"'}><td>${esc(c)}</td><td class="n r">${money(v,0)}</td>
-            <td class="n r">${k||'—'}</td><td class="n r">${k?money(k*v,0):'—'}</td></tr>`;}).join('')}
-          <tr class="tot"><td>Total</td><td></td><td class="n r">${active.length}</td><td class="n r netcol">${money(annual,0)}</td></tr>
-        </tbody></table></div>
-      <p class="cap">The country rate is the fixed allowance paid regardless of what the ticket actually costs.</p>
-    </section>
   </div>
+
+  ${vCountryRates(active, annual)}
 
   <div class="grid g2">
     <section class="panel">
@@ -7898,6 +7980,49 @@ const JF = () => state.jf || (state.jf = {name:'', legal:'', email:'', email2:''
 
 // Why the button is off. A disabled control that will not say what it wants is
 // the most irritating thing a form can do.
+/* The country is picked and the rate follows it. The one case where the rate
+   is typed is a country nobody has joined from before — Avin's own example was
+   Australia — and then what he types becomes that country's rate, not a
+   private number on one person's record. */
+function jCountryFields(){
+  const co = JF().country, known = co ? rateFor(co) : null;
+  const fresh = !!co && known === null;
+  const off = JF().noTicket;
+  const opt = c => '<option value="' + esc(c) + '"' + (c === co ? ' selected' : '') + '>'
+    + esc(c) + (rateFor(c) === null ? ' \u2014 no rate yet' : ' \u2014 ' + money(rateFor(c), 0))
+    + '</option>';
+  const note = fresh
+    ? '<p class="jnote wide" style="border-left-color:var(--warn)">Nobody from <b>' + esc(co)
+      + '</b> has joined before, so there is no rate for it yet. What you type here becomes the rate for '
+      + esc(co) + ' on the country list, not just for this person.</p>'
+    : '<p class="jnote wide">' + (co
+        ? 'The rate comes from the country list, where ' + esc(co) + ' is AED ' + money(known, 0)
+          + '. Change it on the <b>Air ticket</b> screen and it changes for everybody from there.'
+        : 'Pick a country and its rate fills in. Leave it unchosen without ticking the box below and no '
+          + 'entitlement is ever created &mdash; not in eleven months, not ever.')
+      + ' The first ticket falls due eleven months after joining.</p>';
+  return '<label><span>Home country &mdash; for the air ticket</span>'
+    + '<select id="jCountry"' + (off ? ' disabled' : '') + '>'
+    + '<option value="">Choose a country</option>' + COUNTRIES().map(opt).join('')
+    + '</select></label>'
+    + '<label><span>Ticket allowance (AED)</span>'
+    + '<input id="jRate" inputmode="decimal" value="'
+    + esc(fresh ? JF().rate : (known === null ? '' : String(known))) + '"'
+    + (off || !fresh ? ' disabled' : '') + '></label>'
+    + '<label class="wide tick"><input id="jNoTicket" type="checkbox"' + (off ? ' checked' : '')
+    + '><span>No air ticket entitlement</span></label>'
+    + note;
+}
+
+/* What this joiner's ticket is worth: the country's rate, or — for a country
+   with none yet — the figure being agreed on this form. */
+function jTicketRate(f){
+  const c = (f.country || '').trim();
+  if(!c) return 0;
+  const known = rateFor(c);
+  return known === null ? (+f.rate || 0) : known;
+}
+
 function jWhy(){
   const f = JF();
   if(!f.name.trim())                       return 'A name, first.';
@@ -7906,6 +8031,8 @@ function jWhy(){
   if(f.basis !== 'commission' && !(+f.basic > 0))
                                            return 'A salaried joiner needs a basic. Choose commission only if they have none.';
   if(!f.noTicket && !f.country.trim())     return 'Home country, or tick that there is no ticket entitlement.';
+  if(!f.noTicket && f.country.trim() && rateFor(f.country.trim()) === null && !(+f.rate > 0))
+    return 'A ticket allowance for ' + f.country.trim() + ' — nobody from there has joined before.';
   return '';
 }
 const jReady = () => !jWhy();
@@ -8105,14 +8232,7 @@ function vAdmin(){
           salary of 10,000 that is a 6,000 basic — entering the whole salary as basic over-provides for the
           entire life of their employment before anybody notices.${JF().basis==='commission'?' A commission-only joiner gets no salary letter and no gratuity row, because there is no basic to accrue on.':''}</p>
 
-        <label><span>Home country &mdash; for the air ticket</span>
-          <input id="jCountry" value="${esc(JF().country)}"${JF().noTicket?' disabled':''} placeholder="India"></label>
-        <label><span>Ticket allowance (AED)</span>
-          <input id="jRate" inputmode="decimal" value="${esc(JF().rate)}"${JF().noTicket?' disabled':''}></label>
-        <label class="wide tick"><input id="jNoTicket" type="checkbox"${JF().noTicket?' checked':''}>
-          <span>No air ticket entitlement</span></label>
-        <p class="jnote wide">Leave the country blank without ticking that and no entitlement is ever created
-          &mdash; not in eleven months, not ever. The first ticket falls due eleven months after joining.</p>
+        ${jCountryFields()}
       </div>
       <div class="drow" style="margin-top:6px">
         <button class="btn" id="jSave" type="button"${jReady()?'':' disabled'}>Add them</button>
@@ -9281,6 +9401,12 @@ function render(){
   const jsv = document.getElementById('jSave');
   if(jsv) jsv.onclick = async ()=>{
     const f = JF(); jsv.disabled = true; jsv.textContent = 'Adding\u2026';
+    /* A country nobody has joined from before. The figure goes on the country
+       list first, so the next person from there is not asked again. */
+    if(!f.noTicket && f.country.trim() && rateFor(f.country.trim()) === null){
+      const put = await window.__db.setTicketRate(f.country.trim(), +f.rate || 0);
+      if(!put){ jsv.disabled = false; jsv.textContent = 'Add them'; return; }
+    }
     const r = await window.__db.addEmployee({
       name: f.name.trim(), legal: f.legal.trim() || null,
       email: f.email.trim() || null, doj: f.doj,
@@ -9291,7 +9417,7 @@ function render(){
       allow: f.basis==='commission' ? 0 : +f.allow||0,
       shift: f.shift || 'S2',
       country: f.noTicket ? null : (f.country.trim() || null),
-      rate: f.noTicket ? null : (+f.rate || 0),
+      rate: f.noTicket ? null : jTicketRate(f),
       staffNo: f.staffNo.trim() || null});
     if(r){ state.jDone = r; state.jf = null; }
     render(); };
@@ -9355,6 +9481,22 @@ function render(){
     const r=HR().requests.find(x=>x.id===b.dataset.declineReq);
     if(r){ r.status='Declined'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'declined'); } render(); });
   document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
+  { const rf = document.getElementById('rateFind');
+    if(rf){ let tm; rf.oninput = () => { clearTimeout(tm); tm = setTimeout(() => {
+      state.rateFind = rf.value; render();
+      const e2 = document.getElementById('rateFind');
+      if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+    }, 220); }; } }
+  /* The fade is a hint that there is more below, so it goes once there is not. */
+  { const rs = document.querySelector('.ratescroll');
+    if(rs){ const mark = () => rs.classList.toggle('atend',
+        rs.scrollTop + rs.clientHeight >= rs.scrollHeight - 2);
+      rs.onscroll = mark; mark(); } }
+  { const ra = document.getElementById('rateAdd');
+    if(ra) ra.onclick = async () => { ra.disabled = true;
+      await window.__db.setTicketRate((state.rateFind || '').trim(), null); render(); }; }
+  document.querySelectorAll('[data-ratedrop]').forEach(b => b.onclick = async () => {
+    b.disabled = true; await window.__db.dropTicketRate(b.dataset.ratedrop); render(); });
   document.querySelectorAll('#docSeg button').forEach(b=>b.onclick=()=>{ state.docFilter=b.dataset.df; render(); });
   const touchProf = () => { const p=PROF(state.user); if(p) p.updated = HDATE(); };
   document.querySelectorAll('[data-pf]').forEach(el=>{

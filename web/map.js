@@ -688,7 +688,14 @@ export function buildData(db, meId){
   const tp = S.ticket_policy || {};
   const tickets = {
     asOf: tp.asOf || '', procMonth: tp.procMonth || '', policyNote: tp.note || '',
-    rates: tp.rates || {}, ratesArePlaceholder: !!tp.placeholder,
+    /* One list, one source. It used to be a copy in settings that nothing
+       could write to and no code path consulted when a rate was actually
+       paid; it is a table now, every country in it, a rate where one has
+       been agreed and null where it has not. */
+    rates: (db.ticket_rates || []).map(r => ({
+      country: r.country, rate: r.rate === null || r.rate === undefined ? null : +r.rate,
+      standard: !!r.standard})).sort((a, b) => a.country.localeCompare(b.country)),
+    ratesArePlaceholder: !!tp.placeholder,
     paid: [], due: [], upcoming: [], backlogLapses: [], lastRun: '',
     excluded: S.ticket_excluded || [],
     // what each person has already had, keyed by staff number the way the
