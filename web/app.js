@@ -101,7 +101,7 @@ const state = {
   payCompany: 'all',
   deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null,
   exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',
-  revQ: '', refShow: false, dirWho: null, attTab: 'me', slipRun: null,
+  revQ: '', refShow: false, dirWho: null, attTab: 'me', slipRun: null, slipYear: '',
   opForm: null, opDone: '', reqForm: null, reqSent: false, onOfficeNet: true,
   annNew: false, annT: '', annB: '',
   docFilter: 'attention', docQ: '', ltForm: null, ltSent: false, ltOpen: null,
@@ -6688,7 +6688,7 @@ function inWords(n){
   if(fils) s += ' and '+w3(fils)+' Fils';
   return s;
 }
-function slipOf(r){
+function slipOf(r, run){
   const M = DATA.master, P = salPartsRow(r);
   // r.salary is what the month actually paid; P.salary is the contractual monthly figure
   const sfm = Math.round((r.salary||0)*100)/100;
@@ -6709,7 +6709,8 @@ function slipOf(r){
   const mp = (M.people||{})[r.id] || {};
   return {r, earn, ded, gross, dedT, net: Math.round((gross-dedT)*100)/100,
     paidDays: r.days, lop: Math.max(0, 30 - r.days), ent, mol: mp.mol||'', acct4: mp.acct4||'',
-    payDate: ent.payDate || M.payDate, period: DATA.payroll.month,
+    payDate: (run && run.payDate) || ent.payDate || M.payDate,
+    period: (run && run.label) || DATA.payroll.month,
     logo: (LOGOS[vco.key] || LOGOS.corplex).slip};
 }
 function slipHTML(s, printable){
@@ -7018,16 +7019,30 @@ function vMySlip(){
       : 'No month has been released to you. If that looks wrong, speak to accounts.'}</p></div></section>`;
 
   const here = mine.find(x => x.key === state.slipRun) || mine[0];
-  const s = slipOf(here.row);
-  const bar = mine.length > 1 ? `<div class="seg" id="slipSeg" style="margin-left:auto">${
-    mine.map(x => `<button data-mymonth="${esc(x.key)}" aria-pressed="${x.key === here.key}"
-      type="button">${esc(x.label)}</button>`).join('')}</div>` : '';
+  const s = slipOf(here.row, here.run);
+
+  /* The list itself is the switcher, so there is no row of month buttons above
+     it — a person three years in would have had thirty of them. What a long
+     list needs instead is a way to cut it down, and the only cut that means
+     anything here is the year. It appears once there are more than a year and
+     a bit of payslips to scroll. */
+  const years = [...new Set(mine.map(x => x.run.key.slice(0, 4)))];
+  const long = mine.length > 14 && years.length > 1;
+  const year = !long ? '' :
+    (state.slipYear === 'all' || years.includes(state.slipYear)
+      ? state.slipYear : here.run.key.slice(0, 4));
+  const shown = year && year !== 'all'
+    ? mine.filter(x => x.run.key.slice(0, 4) === year) : mine;
+  const pick = long ? `<select id="slipYear" class="ff" style="margin-left:auto;width:auto"
+      aria-label="Which year to list">${years.map(y =>
+      `<option value="${y}"${y === year ? ' selected' : ''}>${y}</option>`).join('')
+      }<option value="all"${year === 'all' ? ' selected' : ''}>Every year</option></select>` : '';
 
   /* On a phone the A4 sheet is unreadable, so the figures are a list and the
      document itself is one tap away. */
   if(MOBILE()) return `${notes}${soon}
   <section class="panel">
-    <header><h3>${esc(here.label)}</h3><span class="pill good"><span class="dt"></span>Released</span>${bar}</header>
+    <header><h3>${esc(here.label)}</h3><span class="pill good"><span class="dt"></span>Released</span></header>
     <div class="mnet">
       <span>Total net pay</span>
       <b>AED ${money(s.net,2)}</b>
@@ -7050,11 +7065,11 @@ function vMySlip(){
     <div class="slwrap printonly">${slipHTML(s)}</div>
   </section>
   ${mine.length > 1 ? `<section class="panel">
-    <header><h3>Earlier payslips</h3><span class="hint">${mine.length} in all</span></header>
-    <div class="pad" style="display:flex;flex-direction:column;gap:8px">${mine.map(x => {
-      const ss = slipOf(x.row);
-      return `<button class="btn ghost wide" data-mymonth="${esc(x.key)}" type="button"
-        style="justify-content:space-between">${esc(x.label)}<b>AED ${money(ss.net,2)}</b></button>`;
+    <header><h3>All your payslips</h3><span class="hint">${mine.length} in all</span>${pick}</header>
+    <div class="pad" style="display:flex;flex-direction:column;gap:8px">${shown.map(x => {
+      const ss = slipOf(x.row, x.run);
+      return `<button class="btn${x.key === here.key ? '' : ' ghost'} wide" data-mymonth="${esc(x.key)}"
+        type="button" style="justify-content:space-between">${esc(x.label)}<b>AED ${money(ss.net,2)}</b></button>`;
     }).join('')}</div>
   </section>` : ''}`;
 
@@ -7074,11 +7089,11 @@ function vMySlip(){
   </div>
 
   <section class="panel">
-    <header><h3>Your payslips</h3><span class="hint">click a month to open it</span>${bar}</header>
+    <header><h3>Your payslips</h3><span class="hint">click a month to open the sheet</span>${pick}</header>
     <div class="tw"><table>
       <thead><tr><th>Month</th><th>Paid on</th><th class="r">Earnings</th>
         <th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
-      <tbody>${mine.map(x => { const ss = slipOf(x.row);
+      <tbody>${shown.map(x => { const ss = slipOf(x.row, x.run);
         return '<tr class="sliprow' + (x.key === here.key ? ' on' : '') + '" data-myslip="' + esc(x.key) + '">'
           + '<td class="nw"><b>' + esc(x.label) + '</b></td>'
           + '<td class="n nw">' + esc(ss.payDate) + '</td>'
@@ -7089,8 +7104,10 @@ function vMySlip(){
           + '" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>';
       }).join('')}
       </tbody></table></div>
-    <p class="cap">Every released month stays here. The payslip opens on ${esc(s.ent.legal)} letterhead and can be
-      printed or saved as a PDF from the window.${mine.length > 1 ? '' : ' From here on, every released month joins this list.'}</p>
+    <p class="cap">Every released month stays here${year && year !== 'all'
+        ? ', and the year above chooses which of them the list shows' : ''}. The payslip opens on
+      ${esc(s.ent.legal)} letterhead and can be printed or saved as a PDF from the
+      window.${mine.length > 1 ? '' : ' From here on, every released month joins this list.'}</p>
   </section>`;
 }
 
@@ -8945,6 +8962,8 @@ function render(){
      quietly take the button over. */
   document.querySelectorAll('[data-mymonth]').forEach(b => b.onclick = () => {
     state.slipRun = b.dataset.mymonth; render(); window.scrollTo({top: 0}); });
+  { const y = document.getElementById('slipYear');
+    if(y) y.onchange = () => { state.slipYear = y.value; render(); }; }
   { const c = document.getElementById('rvCo');
     if(c) c.onchange = () => { state.revForm.co = c.value; render(); }; }
   { const q = document.getElementById('revQ');
@@ -9595,7 +9614,7 @@ function render(){
       const runs = DATA.payroll.runs || [];
       const here = runs.find(r=>r.key===state.payRun) || runs[0];
       const row = (here ? here.rows : DATA.payroll.rows).find(r=>r.id===b.dataset.slip);
-      if(row) return openSlipFor(row);
+      if(row) return openSlipFor(row, here);
       state.slipOpen = state.slipOpen===b.dataset.slip ? null : b.dataset.slip; render();
       const el=document.querySelector('.slwrap'); if(el) el.scrollIntoView({behavior:'smooth',block:'center'});
     });
@@ -9608,7 +9627,7 @@ function render(){
       const run = (DATA.payroll.runs||[]).find(r => r.key === key);
       const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy
         && (x.company || '') === co);
-      if(row) openSlipFor(row);
+      if(row) openSlipFor(row, run);
     });
   }
   if(state.tab==='tickets'){
@@ -10261,9 +10280,12 @@ function showSlip(html, title, sub){
   };
   document.body.style.overflow = 'hidden';
 }
-function openSlipFor(row){
+function openSlipFor(row, run){
   if(!row) return;
-  const s = slipOf(row);
+  const s = slipOf(row, run);
+  /* s.month never existed — the subtitle read "CorpLex · undefined". It is
+     s.period, and now that a payslip is dated by its own run it is the month
+     the sheet is actually for rather than the month the console is on. */
   showSlip(slipHTML(s), nm(row.portalName || row.name),
-           (DATA.payroll.label[row.company] || row.company) + ' \u00b7 ' + s.month);
+           (DATA.payroll.label[row.company] || row.company) + ' \u00b7 ' + s.period);
 }

@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609051158">
+<link rel="manifest" href="manifest.webmanifest?v=202609051213">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1469,6 +1469,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .slipbody .slip{margin:0 auto}
   .sliprow, tr.sliprow{cursor:pointer}
   tr.sliprow:hover{background:var(--panel2)}
+  /* The newest month — the one the figures at the top of the page are about. */
+  tr.sliprow.on td:first-child{box-shadow:inset 3px 0 0 var(--ink)}
   @media print{
     body.printslip #app{display:none!important}
     body.printslip #lookWrap{position:static!important;z-index:auto}
@@ -1939,8 +1941,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609051158';</script>
-<script src="config.js?v=202609051158"></script>
-<script type="module" src="boot.js?v=202609051158"></script>
+<script>window.__BUILD = '202609051213';</script>
+<script src="config.js?v=202609051213"></script>
+<script type="module" src="boot.js?v=202609051213"></script>
 </body>
 </html>
