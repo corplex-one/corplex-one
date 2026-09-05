@@ -47,7 +47,13 @@ const COMPANIES = ['CorpLex','POA','Lex Estates'];
 const ROLELABEL = {staff:'Consultant', manager:'Department manager', admin:'Accounts manager', owner:'Owner', former:'Left the firm'};
 const roleOf = u => ROLE[u] || 'former';
 const FORMER = Object.keys(DATA.engine).filter(n=>!ROLE[n]).sort();
-const inSales = u => !!DATA.dept[u] && companyOf(u).sales;
+/* The department's figures: the sales_company aggregate arrived, so this
+   person may read what the whole department did. */
+const seesDeptSales = u => !!DATA.dept[u] && companyOf(u).sales;
+/* Their own: commission rows of their own came back, which the database sends
+   to everybody about themselves. */
+const hasOwnSales = u => !!(DATA.engine || {})[u];
+const inSales = u => seesDeptSales(u) || hasOwnSales(u);
 const isPartner = u => (HR().partners||[]).includes(u);
 const noGratuity = u => (HR().noGratuity||[]).includes(u);
 /* What a person wants to be called. Every record in the portal shows this once they
@@ -3477,6 +3483,26 @@ function vLoans(){
       </dl></div>
     </section>
   </div>
+
+  ${adm ? `<section class="panel">
+    <header><h3>Your advances</h3>
+      <span class="hint">accounts take advances like anybody else &mdash; these are yours</span>
+      <span style="margin-left:auto;color:var(--ink3);font-size:12.5px">${mine.length}</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Reference</th><th class="r">Amount</th><th class="r">Monthly</th><th>From</th>
+        <th class="r">Repaid</th><th class="r">Left</th><th>Reason</th><th>Status</th></tr></thead>
+      <tbody>${mine.length ? mine.map(x => `<tr>
+        <td class="n nw">${esc(x.id)}</td><td class="n r">${money(x.amount,2)}</td>
+        <td class="n r">${money(x.monthly,2)}</td><td class="nw">${esc(x.start||'\u2014')}</td>
+        <td class="n r">${money(x.paid||0,2)}</td>
+        <td class="n r netcol"${loanLeft(x)>0?' style="color:var(--warn)"':''}>${x.status==='Approved'?money(loanLeft(x),2):'\u2014'}</td>
+        <td style="color:var(--ink2)">${esc(x.why)}</td>
+        <td>${stPill(x.status)}${x.status==='Pending'
+          ? ` <button class="btn ghost sm" data-lnpull="${esc(x.id)}" type="button"
+                style="padding:2px 9px;font-size:11.5px;margin-left:6px">Withdraw</button>` : ''}</td></tr>`).join('')
+        : '<tr><td colspan="8" style="color:var(--ink3)">Nothing yet.</td></tr>'}
+      </tbody></table></div>
+  </section>` : ''}
 
   <section class="panel">
     <header><h3>${adm?'Advances ledger':'Your advances'}</h3>
@@ -8207,9 +8233,11 @@ const TABS = [
   {id:'dashboard',   group:'mine',  label:'My dashboard',     title:'Dashboard', gate:inSales},
   {id:'commission',  group:'mine',  label:'My commission',    title:'Commission', gate:inSales},
   {id:'invoices',    group:'mine',  label:'My invoices',      title:'Invoices', gate:inSales},
-  {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&inSales(u)},
-  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:inSales},
-  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:inSales},
+  // These three are made of other people's rows, so they still ask whether the
+  // department's figures arrived at all.
+  {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&seesDeptSales(u)},
+  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:seesDeptSales},
+  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},
   {id:'tools',       group:'other', label:'Calculator', title:'Calculator'},
   // payment requests are a CorpLex process; POA and Lex do not use them
   {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
@@ -8220,7 +8248,12 @@ const TABS = [
   {id:'profile',     group:'hr',    label:'My profile',       title:'My profile', hide:true},
   {id:'attend',      group:'hr',    label:'My attendance',    title:'My attendance', gate:tracksAtt},
   {id:'people',      group:'hr',    label:'People',           title:'People'},
-  {id:'requests',    group:'hr',    label:'Leave & WFH',      title:'Leave and working from home'},
+  /* The owner does not book leave. He does approve it, so the page comes
+     back the moment something is waiting on him rather than stranding his
+     team's requests behind a tab he cannot open. */
+  {id:'requests',    group:'hr',    label:'Leave & WFH',      title:'Leave and working from home',
+   gate:u => roleOf(u) !== 'owner'
+     || (HR().requests || []).some(r => r.mgr === u && r.status === 'Pending')},
   {id:'loans',       group:'hr',    label:'Advances & letters', title:'Advances and letters'},
 
   {id:'myslip',      group:'hr',    label:'My payslip',       title:'My payslip', gate:u=>!isPartner(u)},
@@ -8779,7 +8812,12 @@ function render(){
     return;
   }
   const CON = state.mode==='console';
-  if(!CON && SALESTABS.includes(state.tab) && !activeCo().sales){
+  /* My dashboard, My commission and My invoices are built from the person's
+     own rows. Whether the company aggregate arrived says nothing about
+     whether those exist, so it is not asked on those three. */
+  const MINE_ONLY = ['dashboard', 'commission', 'invoices'];
+  if(!CON && SALESTABS.includes(state.tab) && !activeCo().sales
+     && !(MINE_ONLY.includes(state.tab) && hasOwnSales(state.user))){
     v.innerHTML = vNoSales();
     document.querySelectorAll('#view [data-go]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.go; render(); });
     return;
