@@ -2304,7 +2304,7 @@ function vHRAdmin(){
   </section>
 
   <section class="panel">
-    <header><h3>Other leave balances</h3>
+    <header><h3>Leave balances</h3>
       <span class="pill mute">${OTHERKINDS().length} kinds</span>
       <span class="hint">what each person has left, not what they have taken</span></header>
     ${(() => {
@@ -2322,7 +2322,7 @@ function vHRAdmin(){
       const roll = list.filter(n => !isPartner(n));
       const short = roll.filter(n => { const p = PROF(n) || {}; return !p.gender || !p.marital; });
       const cell = (n, t) => { const b = otherBal(n, t.id);
-        return `<td class="n r${b.off ? ' obdash' : ''}"${full(b.why)}${
+        return `<td class="n r${b.off ? ' obdash' : ''}"${full(b.why, true)}${
           b.n !== null && b.n < 0 ? ' style="color:var(--bad)"' : ''} data-always="1">${esc(b.txt)}</td>`; };
       return byCompany(roll, {
         who: n => n,
@@ -2334,9 +2334,9 @@ function vHRAdmin(){
             <th class="r" colspan="${paid.length}">Paid</th>
             <th class="r" colspan="${free.length}">Not paid</th></tr>
           <tr><th>Employee</th>${KINDS.map(t =>
-            `<th class="r"${full(t.note || '')}>${esc(t.label.replace(/ leave$/i, ''))}</th>`).join('')}</tr>
+            `<th class="r"${full(t.note || '', true)}>${esc(t.label.replace(/ leave$/i, ''))}</th>`).join('')}</tr>
         </thead>`,
-        row: n => `<tr><td${full(NM(n) === n ? '' : n)}>${nm(n)}</td>${KINDS.map(t => cell(n, t)).join('')}</tr>`,
+        row: n => `<tr><td${full(NM(n) === n ? '' : n, true)}>${nm(n)}</td>${KINDS.map(t => cell(n, t)).join('')}</tr>`,
         empty: 'Nobody is on the leave scheme yet.'
       }) + `<p class="cap">Every figure is what is <b>still available</b>, so a zero means it has been used up.
         Unpaid leave has no entitlement to draw on \u2014 Avin: <i>we cant keep a fixed number of days</i> \u2014 so
@@ -5652,6 +5652,7 @@ function cellHover(){
     current = td.dataset.full;
     txt.textContent = current;
     cpy.textContent = 'Copy';
+    cpy.style.display = td.hasAttribute('data-plain') ? 'none' : '';
     card.classList.remove('hidden');
     const r = td.getBoundingClientRect();
     const w = Math.min(460, Math.max(240, r.width * 2.4));
@@ -5665,7 +5666,8 @@ function cellHover(){
   });
 }
 
-function full(v){ const t = String(v || '').trim(); return t ? ` data-full="${esc(t)}"` : ''; }
+function full(v, plain){ const t = String(v || '').trim();
+  return t ? ` data-full="${esc(t)}"${plain ? ' data-plain="1"' : ''}` : ''; }
 
 function pencil(r){
   if(r.status !== 'Pending' && r.status !== 'Approved') return '';
@@ -8475,7 +8477,7 @@ const TABS = [
   {id:'holidays',   group:'con', sec:'people', label:'Holidays',       title:'Public holidays', gate:canAdmin, con:true},
   {id:'leaverules', group:'con', sec:'people', label:'Leave policy',   title:'Leave policy', gate:canUpload, con:true},
   {id:'leavebal',   group:'con', sec:'people', label:'Annual leave',   title:'Annual leave balances', gate:canAdmin, con:true},
-  {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},
+  {id:'leaveother', group:'con', sec:'people', label:'Leave balance',  title:'Leave balances', gate:canAdmin, con:true},
   // The first thing that happens to a person, at the end of the section
   // about people, rather than under a heading of its own.
   {id:'addstaff',   group:'con', sec:'people', label:'Add somebody',   title:'Add somebody to the staff list', gate:canUpload, con:true},
@@ -9089,7 +9091,7 @@ const PAGE = {
   hradmin:    ['hradmin', ['attendance'], true],
   shifts:     ['hradmin', ['Shifts and reporting lines']],
   leavebal:   ['hradmin', ['Annual leave balances'], true],
-  leaveother: ['hradmin', ['Other leave balances'], true],
+  leaveother: ['hradmin', ['Leave balances'], true],
   holidays:   ['hradmin', ['Public holidays']],
   // Avin: 'once opened, keep the hero of expired, expiring etc' — so the four
   // document pages all carry the same strip, and moving between them does not
