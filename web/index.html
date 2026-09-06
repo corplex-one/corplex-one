@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609062044">
+<link rel="manifest" href="manifest.webmanifest?v=202609062133">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1043,6 +1043,46 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .dpill::before{content:'';width:8px;height:8px;border-radius:2px;background:var(--dc);flex:none}
 .availtable{table-layout:auto;width:100%}
 .availtable th.r{text-align:center;font-weight:600;padding:6px 0;min-width:34px}
+/* ---------- Team availability: one month, full width ---------- */
+/* The day columns are given a width and the name column takes what is left,
+   rather than both being percentages of a table nobody has measured. 34px is
+   the 40% cut off the fortnight strip's 57px, and thirty-one of them is about
+   1,050px — so on any screen this page opens at, the name column gets several
+   hundred pixels and a full name fits without being cut. */
+.availtable.avmonth{table-layout:fixed}
+.availtable.avmonth th.r,.availtable.avmonth td.av{width:34px}
+/* On a laptop the same sum does not come out: thirty-one days at 34px plus a
+   name column leaves nothing for the name, and 'Abdulkhamid Makhamatjanov' is
+   twenty-five characters. The day gives up six pixels there rather than the
+   name being cut — a single letter reads the same at 28px, and a name that is
+   half a name does not. */
+@media screen and (max-width:1700px){
+  .availtable.avmonth th.r,.availtable.avmonth td.av{width:28px}
+}
+.availtable.avmonth th.s1{min-width:200px}
+.availtable.avmonth th.r{min-width:0;padding:5px 0}
+/* 11px is the portal's floor for type somebody has to read, and a weekday
+   initial is no exception — it was 9px here, which is the same mistake as the
+   10px payroll headings Avin caught. A single letter fits at 11 in a 28px
+   column with room to spare. */
+.availtable.avmonth th.r span{font-size:11px;letter-spacing:0;line-height:1.2}
+.availtable.avmonth th.r b{font-size:12px;font-weight:600;line-height:1.2}
+.availtable.avmonth th.av-off{background:var(--sunk)}
+.availtable.avmonth td.av{font-size:11px;padding:7px 0}
+.availtable.avmonth td.s1,.availtable.avmonth th.s1{width:auto;padding-right:10px}
+/* One hairline down each side of today rather than two heavy bars — beside a
+   shaded weekend the old two-pixel pair read as something being wrong. */
+.availtable.avmonth .av-today{box-shadow:inset 1px 0 0 var(--accent),inset -1px 0 0 var(--accent)}
+.availtable.avmonth th.av-today{background:var(--accentSoft)}
+.avhead{display:flex;align-items:center;gap:12px;margin-left:auto;flex-wrap:wrap}
+.avmon{display:flex;align-items:center;gap:6px}
+.avmon b{font-size:14px;font-weight:600;min-width:13ch;text-align:center;
+  font-family:'IBM Plex Sans',system-ui,sans-serif}
+.avmon .btn.sm{padding:3px 10px;line-height:1.2}
+.avmon .btn.sm[data-avmon="-1"],.avmon .btn.sm[data-avmon="1"]{font-size:17px;padding:0 10px}
+@media screen and (max-width:900px){
+  .avhead{width:100%;margin-left:0}
+}
 .availtable th.r span{display:block;font-size:11.5px;letter-spacing:0;color:var(--ink2);text-transform:none}
 .availtable th.r b{display:block;font-size:12.5px;font-variant-numeric:tabular-nums}
 .availtable td.av{text-align:center;font-size:11.5px;font-weight:700;color:var(--ink2);padding:8px 0;
@@ -2182,8 +2222,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609062044';</script>
-<script src="config.js?v=202609062044"></script>
-<script type="module" src="boot.js?v=202609062044"></script>
+<script>window.__BUILD = '202609062133';</script>
+<script src="config.js?v=202609062133"></script>
+<script type="module" src="boot.js?v=202609062133"></script>
 </body>
 </html>

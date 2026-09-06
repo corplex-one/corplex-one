@@ -127,6 +127,7 @@ const state = {
   invSort: {key:null, dir:1},
   payCompany: 'all',
   deptView: null, company: null, attMonth: null, edit: null, edSaved: null,
+  availMonth: null, availCo: null,
   exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',
   revQ: '', refShow: false, dirWho: null, attTab: 'me', slipRun: null, slipYear: '',
   opForm: null, opDone: '', reqForm: null, reqSent: false, onOfficeNet: true,
@@ -836,6 +837,37 @@ const dayText = r => dayLabel(r.from) + (r.from!==r.to ? ' \u2013 ' + dayLabel(r
 const reqLabel = t => (REQTYPES.find(x=>x.id===t)||{label:t}).label;
 function spanDays(f,t){ const out=[]; let a=new Date(f+'T00:00:00'), b=new Date(t+'T00:00:00');
   while(a<=b){ out.push(a.toISOString().slice(0,10)); a.setDate(a.getDate()+1); } return out; }
+/* The availability grid's own reading of a day: the plan, on both sides of
+   today. dayStatus below answers a different question — what a day was, which
+   for a past day means attendance — and that is right for My attendance and
+   wrong for a month somebody is scanning for who is off. */
+function availStatus(u, ds){
+  const h = holOn(ds);
+  if(h) return {k:'Holiday', label:h.n};
+  if(isWeekend(ds)) return {k:'Weekend', label:'Weekend'};
+  const r = reqOn(u, ds);
+  return r ? {k:r.type, label:reqLabel(r.type)} : {k:'Planned', label:''};
+}
+/* The month being looked at, as YYYY-MM, and the arrows' arithmetic. Kept as
+   a string rather than a Date so that stepping over a year boundary is the
+   same line of code as stepping over a month one. */
+const availMonth = () => state.availMonth || HDATE().slice(0, 7);
+function monthStep(ym, by){
+  const y = +ym.slice(0, 4), m = +ym.slice(5, 7) + by;
+  const yy = y + Math.floor((m - 1) / 12), mm = ((m - 1) % 12 + 12) % 12 + 1;
+  return yy + '-' + String(mm).padStart(2, '0');
+}
+function monthDays(ym){
+  const y = +ym.slice(0, 4), m = +ym.slice(5, 7);
+  const n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const out = [];
+  for(let d = 1; d <= n; d++) out.push(ym + '-' + String(d).padStart(2, '0'));
+  return out;
+}
+const MONTHFULL = ['January','February','March','April','May','June','July',
+  'August','September','October','November','December'];
+const monthLabel = ym => MONTHFULL[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4);
+
 function reqOn(u, ds){
   return HR().requests.find(r=>r.who===u && r.status==='Approved' && r.from<=ds && ds<=r.to) || null;
 }
@@ -1469,10 +1501,85 @@ function vAttend(){
 }
 
 function leaveTabs(){
-  const T = [['leave','Leave'], ['wfh','Work from home'], ['policy','Leave policy']];
+  const T = [['leave','Leave'], ['wfh','Work from home'], ['avail','Availability'], ['policy','Leave policy']];
   const cur = T.some(x => x[0] === state.leaveTab) ? state.leaveTab : 'leave';
   return {cur, bar: `<div class="seg segbig" id="leaveSeg">${T.map(([v, l]) =>
     `<button data-lv="${v}" aria-pressed="${cur === v}" type="button">${esc(l)}</button>`).join('')}</div>`};
+}
+
+function vAvailTab(u){
+  const ym    = availMonth();
+  const days  = monthDays(ym);
+  const today = HDATE();
+  const thisM = today.slice(0, 7);
+
+  /* Company by company, or all three together. It defaults to the viewer's
+     own company rather than to everyone: the question this screen answers is
+     usually about the people you sit with. */
+  const COS = [['all', 'Everyone']].concat(
+    Object.values(DATA.companies).map(c => [c.key, c.name]));
+  const myCo = companyOf(u).key;
+  const co = COS.some(c => c[0] === state.availCo) ? state.availCo
+           : (COS.some(c => c[0] === myCo) ? myCo : 'all');
+  const roll = USERS.map(x => x.name)
+    .filter(n => co === 'all' || companyOf(n).key === co)
+    .sort((a, b) => a.localeCompare(b));
+
+  const tint = k => 'color-mix(in srgb, ' + (STCOL[k] || 'var(--line)') + ' 22%, var(--panel))';
+  /* Away on any working day of the month — the count in the header, so the
+     month says something before it is read column by column. */
+  const away = roll.filter(n => days.some(d => {
+    const s = availStatus(n, d); return s.k !== 'Weekend' && s.k !== 'Holiday' && s.k !== 'Planned'; }));
+
+  const head = '<thead><tr><th class="s1">Name</th>' + days.map(d => {
+    const wk = isWeekend(d), hol = holOn(d);
+    return '<th class="r' + (d === today ? ' av-today' : '') + (wk || hol ? ' av-off' : '') + '"'
+      + (hol ? ' title="' + esc(hol.n) + '"' : '')
+      + '><span>' + esc(dayName(d).slice(0, 1)) + '</span><b>' + (+d.slice(8, 10)) + '</b></th>';
+  }).join('') + '</tr></thead>';
+
+  const row = n => '<tr><td class="s1">' + whoLink(n) + '</td>' + days.map(d => {
+    const s = availStatus(n, d), short = STSHORT[s.k] || '';
+    const off = s.k === 'Weekend' || s.k === 'Holiday';
+    return '<td class="av' + (d === today ? ' av-today' : '') + (off ? ' av-we' : '') + '"'
+      + (s.k === 'Planned' || s.k === 'Weekend' ? '' : ' style="background:' + tint(s.k) + '"')
+      + ' title="' + esc(n) + ' \u2014 ' + esc(dayLabel(d)) + ': ' + esc(s.label || s.k) + '">'
+      + (off && s.k === 'Weekend' ? '' : short) + '</td>';
+  }).join('') + '</tr>';
+
+  return `
+  <section class="panel">
+    <header>
+      <h3>Team availability</h3>
+      <span class="hint" style="margin-left:0">approved leave and working from home${
+        away.length ? ' \u00b7 ' + away.length + ' of ' + roll.length + ' away at some point' : ''}</span>
+      <div class="avhead">
+        <div class="seg" id="availCo">${COS.map(([v, l]) =>
+          `<button data-avco="${esc(v)}" aria-pressed="${co === v}" type="button">${esc(l)}</button>`).join('')}</div>
+        <div class="avmon">
+          <button class="btn ghost sm" data-avmon="-1" type="button" aria-label="The month before">&lsaquo;</button>
+          <b>${esc(monthLabel(ym))}</b>
+          <button class="btn ghost sm" data-avmon="1" type="button" aria-label="The month after">&rsaquo;</button>
+          ${ym === thisM ? '' : '<button class="btn ghost sm" data-avmon="0" type="button">This month</button>'}
+        </div>
+      </div>
+    </header>
+    <div class="tw"><table class="availtable avmonth">
+      ${head}
+      <tbody>${roll.length ? roll.map(row).join('')
+        : '<tr><td class="s1" colspan="' + (days.length + 1) + '" style="padding:26px;text-align:center;color:var(--ink3)">Nobody in this company.</td></tr>'}</tbody>
+    </table></div>
+    <div class="pad" style="padding-top:12px">${
+      [['WFH','From home (H)'],['Annual','Annual (A)'],['Sick','Sick (S)'],['Unpaid','Unpaid (U)'],
+       ['Bereavement','Bereavement (B)'],['Birthday','Birthday (\u00bd)'],['Maternity','Maternity (M)'],
+       ['Paternity','Paternity (P)'],['Hajj','Hajj (J)'],['Umrah','Umrah (O)'],['Holiday','Public holiday (\u2605)']]
+      .map(([k, l]) => `<span class="lgd"><i style="background:${STCOL[k]}"></i>${l}</span>`).join('')}</div>
+    <p class="cap">Approved leave and working from home, whichever month you are looking at &mdash; a day
+      behind today reads the same way as one ahead of it. An empty cell is a normal working day; weekends
+      and public holidays are shaded. Everyone sees everyone, because the three companies share an office;
+      use <b>Everyone</b> or a company name to change who is listed. Nothing here comes off anybody's
+      attendance record.</p>
+  </section>`;
 }
 
 /* The work-from-home tab. Two columns: apply on the left, what you have asked
@@ -1691,6 +1798,7 @@ function vRequests(){
     if(f.type !== 'WFH') f.type = 'WFH';
     return LV.bar + vWfhTab(u, B, f, mine, inbox);
   }
+  if(LV.cur === 'avail')  return LV.bar + vAvailTab(u);
   if(LV.cur === 'policy') return LV.bar + vLeavePolicyTab(u);
   if(f.type === 'WFH') f.type = 'Annual';
   mine  = mine.filter(r => r.type !== 'WFH');
@@ -2266,24 +2374,7 @@ function vPeople(){
   </section>`).join('')}
   ${shown ? '' : `<section class="panel"><div class="pad" style="padding:44px 24px;text-align:center;color:var(--ink3)">Nobody matches \u201c${esc(state.peopleQ||'')}\u201d.</div></section>`}
 
-  ${avail.length ? `<section class="panel">
-    <header><h3>The next two weeks</h3><span class="hint">planned leave and working from home${q?' &middot; matching your search':''}</span></header>
-    ${byCompany(avail, {
-      who: n => n, cls: 'availtable',
-      cols: colsOf([22].concat(days.map(() => 78 / days.length))),
-      head: `<thead><tr><th>Name</th>${days.map(d=>`<th class="r${d===today?' av-today':''}"><span>${esc(dayName(d).slice(0,2))}</span><b>${esc(dayLabel(d).slice(0,2))}</b></th>`).join('')}</tr></thead>`,
-      row: n => `<tr><td>${whoLink(n)}</td>${days.map(d=>{
-        const ds = dayStatus(n, d), short = STSHORT[ds.k] || '';
-        return `<td class="av${d===today?' av-today':''}${ds.k==='Weekend'?' av-we':''}" style="background:${['Weekend','Planned','Office'].includes(ds.k)?'transparent':tint(ds.k)}"
-          title="${esc(n)} \u2014 ${esc(dayLabel(d))}: ${esc(ds.label||ds.k)}">${short}</td>`;
-      }).join('')}</tr>`,
-      empty: 'Nothing planned in the next two weeks.'
-    })}
-    <div class="pad" style="padding-top:12px">${
-      [['Office','In the office'],['WFH','From home (H)'],['Annual','Annual (A)'],['Sick','Sick (S)'],['Unpaid','Unpaid (U)'],['Bereavement','Bereavement (B)'],['Birthday','Birthday (\u00bd)'],['Maternity','Maternity (M)'],['Hajj','Hajj (J)'],['Umrah','Umrah (O)'],['Holiday','Public holiday (\u2605)']]
-      .map(([k,l])=>`<span class="lgd"><i style="background:${STCOL[k]}"></i>${l}</span>`).join('')}</div>
-    <p class="cap">Everyone sees everyone &mdash; the three companies share an office, so leave, working from home and public holidays are shown across the group. Sales, commission and payroll stay company by company. Public holidays marked \u2605 still need confirming against the official 2026 dates.</p>
-  </section>` : ''}`;
+`;
 }
 
 function vHRAdmin(){
@@ -10106,6 +10197,7 @@ function render(){
      wide by definition rather than by a list somebody has to remember to add
      to. The named staff screens keep their place on the list. */
   mainEl.classList.toggle('wide', state.mode === 'console'
+    || (state.tab === 'requests' && state.leaveTab === 'avail')
     || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove','paypast'].includes(state.tab));
   const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
   const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
@@ -10186,6 +10278,13 @@ function render(){
     if(rt) rt.onclick = ()=>rt.select(); }
   document.querySelectorAll('#peopleSeg button').forEach(b=>b.onclick=()=>{ state.peopleTab=b.dataset.pt; state.who=null; render(); });
   document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });
+  document.querySelectorAll('#availCo button').forEach(b=>b.onclick=()=>{ state.availCo=b.dataset.avco; render(); });
+  /* 0 is 'This month' rather than a third arrow: the two arrows step, and the
+     way back to today is a named button so nobody has to count. */
+  document.querySelectorAll('[data-avmon]').forEach(b=>b.onclick=()=>{
+    const by = +b.dataset.avmon;
+    state.availMonth = by ? monthStep(availMonth(), by) : HDATE().slice(0,7);
+    render(); });
   document.querySelectorAll('#calcSeg button').forEach(b=>b.onclick=()=>{ state.calcTab=b.dataset.ct; render(); });
   {
     const d = document.getElementById('holNewD'), n = document.getElementById('holNewN'),

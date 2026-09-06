@@ -17130,6 +17130,266 @@ app = swap(app,
     <div class="tw paytab"><table data-plain="1">`,
   'and My requests is marked, so nothing on it offers Copy');
 
+/* =============================== Team Availability ========================
+ *
+ *   'Move the "next two weeks" from People page to Leave & WFH / Rename it as
+ *    "Team Availibility" / This should not just be two weeks, but whole month
+ *    should be shown / With an option to check future and previous months /
+ *    Use previous or next arrow to change months / One month should be seen
+ *    on the full width of the screen / Tabs should be: Leave | Work from Home
+ *    | Availability | Leave Policy'
+ *   'Option to check company wise'
+ *   'Same approved leave and WFH'
+ *   '100% i am sure we can fit 31 columns. Now you have put extra width,
+ *    reduce by 40%, easily it will fit'                                -- Avin
+ *
+ * It was a sixteen-day strip at the bottom of People, which is a directory —
+ * a page you go to for a person, not for a month. It belongs beside the leave
+ * you book, so it becomes the third tab of Leave & WFH.
+ *
+ * WHAT IT DRAWS, AND WHY THAT IS NOT WHAT THE OLD STRIP DREW
+ *
+ * dayStatus answers two different questions depending on which side of today
+ * the date falls: ahead of today it is the PLAN, behind it is the RECORD, so
+ * a past day showed 'in the office' or a red '?' for nobody having tapped in.
+ * A month view flips between those halfway across the screen, and a past month
+ * would have been a wall of question marks about attendance rather than a
+ * record of who was away.
+ *
+ * Asked, and answered 'Same approved leave and WFH'. So this grid has its own
+ * reading of a day — public holiday, weekend, an approved request, or nothing
+ * — and it means the same thing in March as it does in December.
+ *
+ * He is right about the width. The strip gave each of sixteen days 4.875% of
+ * the table, which is 57px at a laptop size; a month wants 31 of them. Cut by
+ * the 40% he asked for that is about 34px, and the page is full width now, so
+ * a name column plus 31 days comes in comfortably under the width even at
+ * 1440. It fits by measurement rather than by hope — checklook opens the tab
+ * at both widths and fails if a heading breaks or the table runs past its
+ * panel.
+ */
+app = swap(app,
+`function reqOn(u, ds){`,
+`/* The availability grid's own reading of a day: the plan, on both sides of
+   today. dayStatus below answers a different question — what a day was, which
+   for a past day means attendance — and that is right for My attendance and
+   wrong for a month somebody is scanning for who is off. */
+function availStatus(u, ds){
+  const h = holOn(ds);
+  if(h) return {k:'Holiday', label:h.n};
+  if(isWeekend(ds)) return {k:'Weekend', label:'Weekend'};
+  const r = reqOn(u, ds);
+  return r ? {k:r.type, label:reqLabel(r.type)} : {k:'Planned', label:''};
+}
+/* The month being looked at, as YYYY-MM, and the arrows' arithmetic. Kept as
+   a string rather than a Date so that stepping over a year boundary is the
+   same line of code as stepping over a month one. */
+const availMonth = () => state.availMonth || HDATE().slice(0, 7);
+function monthStep(ym, by){
+  const y = +ym.slice(0, 4), m = +ym.slice(5, 7) + by;
+  const yy = y + Math.floor((m - 1) / 12), mm = ((m - 1) % 12 + 12) % 12 + 1;
+  return yy + '-' + String(mm).padStart(2, '0');
+}
+function monthDays(ym){
+  const y = +ym.slice(0, 4), m = +ym.slice(5, 7);
+  const n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const out = [];
+  for(let d = 1; d <= n; d++) out.push(ym + '-' + String(d).padStart(2, '0'));
+  return out;
+}
+const MONTHFULL = ['January','February','March','April','May','June','July',
+  'August','September','October','November','December'];
+const monthLabel = ym => MONTHFULL[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4);
+
+function reqOn(u, ds){`,
+  'the availability grid reads a day as the plan, on both sides of today');
+
+app = swap(app,
+`function leaveTabs(){
+  const T = [['leave','Leave'], ['wfh','Work from home'], ['policy','Leave policy']];`,
+`function leaveTabs(){
+  const T = [['leave','Leave'], ['wfh','Work from home'], ['avail','Availability'], ['policy','Leave policy']];`,
+  'Leave & WFH has four tabs');
+
+app = swap(app,
+`  if(LV.cur === 'policy') return LV.bar + vLeavePolicyTab(u);`,
+`  if(LV.cur === 'avail')  return LV.bar + vAvailTab(u);
+  if(LV.cur === 'policy') return LV.bar + vLeavePolicyTab(u);`,
+  'and the third one is the month');
+
+/* The tab itself. One month, one company or all of them, and two arrows. */
+app = swap(app,
+`/* The work-from-home tab. Two columns: apply on the left, what you have asked`,
+`function vAvailTab(u){
+  const ym    = availMonth();
+  const days  = monthDays(ym);
+  const today = HDATE();
+  const thisM = today.slice(0, 7);
+
+  /* Company by company, or all three together. It defaults to the viewer's
+     own company rather than to everyone: the question this screen answers is
+     usually about the people you sit with. */
+  const COS = [['all', 'Everyone']].concat(
+    Object.values(DATA.companies).map(c => [c.key, c.name]));
+  const myCo = companyOf(u).key;
+  const co = COS.some(c => c[0] === state.availCo) ? state.availCo
+           : (COS.some(c => c[0] === myCo) ? myCo : 'all');
+  const roll = USERS.map(x => x.name)
+    .filter(n => co === 'all' || companyOf(n).key === co)
+    .sort((a, b) => a.localeCompare(b));
+
+  const tint = k => 'color-mix(in srgb, ' + (STCOL[k] || 'var(--line)') + ' 22%, var(--panel))';
+  /* Away on any working day of the month — the count in the header, so the
+     month says something before it is read column by column. */
+  const away = roll.filter(n => days.some(d => {
+    const s = availStatus(n, d); return s.k !== 'Weekend' && s.k !== 'Holiday' && s.k !== 'Planned'; }));
+
+  const head = '<thead><tr><th class="s1">Name</th>' + days.map(d => {
+    const wk = isWeekend(d), hol = holOn(d);
+    return '<th class="r' + (d === today ? ' av-today' : '') + (wk || hol ? ' av-off' : '') + '"'
+      + (hol ? ' title="' + esc(hol.n) + '"' : '')
+      + '><span>' + esc(dayName(d).slice(0, 1)) + '</span><b>' + (+d.slice(8, 10)) + '</b></th>';
+  }).join('') + '</tr></thead>';
+
+  const row = n => '<tr><td class="s1">' + whoLink(n) + '</td>' + days.map(d => {
+    const s = availStatus(n, d), short = STSHORT[s.k] || '';
+    const off = s.k === 'Weekend' || s.k === 'Holiday';
+    return '<td class="av' + (d === today ? ' av-today' : '') + (off ? ' av-we' : '') + '"'
+      + (s.k === 'Planned' || s.k === 'Weekend' ? '' : ' style="background:' + tint(s.k) + '"')
+      + ' title="' + esc(n) + ' \\u2014 ' + esc(dayLabel(d)) + ': ' + esc(s.label || s.k) + '">'
+      + (off && s.k === 'Weekend' ? '' : short) + '</td>';
+  }).join('') + '</tr>';
+
+  return \`
+  <section class="panel">
+    <header>
+      <h3>Team availability</h3>
+      <span class="hint" style="margin-left:0">approved leave and working from home\${
+        away.length ? ' \\u00b7 ' + away.length + ' of ' + roll.length + ' away at some point' : ''}</span>
+      <div class="avhead">
+        <div class="seg" id="availCo">\${COS.map(([v, l]) =>
+          \`<button data-avco="\${esc(v)}" aria-pressed="\${co === v}" type="button">\${esc(l)}</button>\`).join('')}</div>
+        <div class="avmon">
+          <button class="btn ghost sm" data-avmon="-1" type="button" aria-label="The month before">&lsaquo;</button>
+          <b>\${esc(monthLabel(ym))}</b>
+          <button class="btn ghost sm" data-avmon="1" type="button" aria-label="The month after">&rsaquo;</button>
+          \${ym === thisM ? '' : '<button class="btn ghost sm" data-avmon="0" type="button">This month</button>'}
+        </div>
+      </div>
+    </header>
+    <div class="tw"><table class="availtable avmonth">
+      \${head}
+      <tbody>\${roll.length ? roll.map(row).join('')
+        : '<tr><td class="s1" colspan="' + (days.length + 1) + '" style="padding:26px;text-align:center;color:var(--ink3)">Nobody in this company.</td></tr>'}</tbody>
+    </table></div>
+    <div class="pad" style="padding-top:12px">\${
+      [['WFH','From home (H)'],['Annual','Annual (A)'],['Sick','Sick (S)'],['Unpaid','Unpaid (U)'],
+       ['Bereavement','Bereavement (B)'],['Birthday','Birthday (\\u00bd)'],['Maternity','Maternity (M)'],
+       ['Paternity','Paternity (P)'],['Hajj','Hajj (J)'],['Umrah','Umrah (O)'],['Holiday','Public holiday (\\u2605)']]
+      .map(([k, l]) => \`<span class="lgd"><i style="background:\${STCOL[k]}"></i>\${l}</span>\`).join('')}</div>
+    <p class="cap">Approved leave and working from home, whichever month you are looking at &mdash; a day
+      behind today reads the same way as one ahead of it. An empty cell is a normal working day; weekends
+      and public holidays are shaded. Everyone sees everyone, because the three companies share an office;
+      use <b>Everyone</b> or a company name to change who is listed. Nothing here comes off anybody's
+      attendance record.</p>
+  </section>\`;
+}
+
+/* The work-from-home tab. Two columns: apply on the left, what you have asked`,
+  'the Availability tab');
+
+app = swap(app,
+`  document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });`,
+`  document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });
+  document.querySelectorAll('#availCo button').forEach(b=>b.onclick=()=>{ state.availCo=b.dataset.avco; render(); });
+  /* 0 is 'This month' rather than a third arrow: the two arrows step, and the
+     way back to today is a named button so nobody has to count. */
+  document.querySelectorAll('[data-avmon]').forEach(b=>b.onclick=()=>{
+    const by = +b.dataset.avmon;
+    state.availMonth = by ? monthStep(availMonth(), by) : HDATE().slice(0,7);
+    render(); });`,
+  'the arrows and the company buttons');
+
+app = swap(app,
+`  deptView: null, company: null, attMonth: null, edit: null, edSaved: null,`,
+`  deptView: null, company: null, attMonth: null, edit: null, edSaved: null,
+  availMonth: null, availCo: null,`,
+  'and the month and company they are looking at are remembered');
+
+/* Full width, so 31 columns are 31 columns rather than a squeeze. */
+app = swap(app,
+`  mainEl.classList.toggle('wide', state.mode === 'console'
+    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove','paypast'].includes(state.tab));`,
+`  mainEl.classList.toggle('wide', state.mode === 'console'
+    || (state.tab === 'requests' && state.leaveTab === 'avail')
+    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove','paypast'].includes(state.tab));`,
+  'and the month gets the whole width of the screen');
+
+/* Thirty-one columns, at the width he asked for. The strip gave a day 34px of
+   minimum and 4.875% of the table; a month is fixed-layout so the colgroup
+   decides, the minimum comes down to 20px, and the day heading is a single
+   letter over the number rather than two letters over two. Weekends and
+   public holidays are shaded in the heading as well as the body, so the shape
+   of the month is visible before a single cell is read. */
+shell = swap(shell,
+`.availtable{table-layout:auto;width:100%}
+.availtable th.r{text-align:center;font-weight:600;padding:6px 0;min-width:34px}`,
+`.availtable{table-layout:auto;width:100%}
+.availtable th.r{text-align:center;font-weight:600;padding:6px 0;min-width:34px}
+/* ---------- Team availability: one month, full width ---------- */
+/* The day columns are given a width and the name column takes what is left,
+   rather than both being percentages of a table nobody has measured. 34px is
+   the 40% cut off the fortnight strip's 57px, and thirty-one of them is about
+   1,050px — so on any screen this page opens at, the name column gets several
+   hundred pixels and a full name fits without being cut. */
+.availtable.avmonth{table-layout:fixed}
+.availtable.avmonth th.r,.availtable.avmonth td.av{width:34px}
+/* On a laptop the same sum does not come out: thirty-one days at 34px plus a
+   name column leaves nothing for the name, and 'Abdulkhamid Makhamatjanov' is
+   twenty-five characters. The day gives up six pixels there rather than the
+   name being cut — a single letter reads the same at 28px, and a name that is
+   half a name does not. */
+@media screen and (max-width:1700px){
+  .availtable.avmonth th.r,.availtable.avmonth td.av{width:28px}
+}
+.availtable.avmonth th.s1{min-width:200px}
+.availtable.avmonth th.r{min-width:0;padding:5px 0}
+/* 11px is the portal's floor for type somebody has to read, and a weekday
+   initial is no exception — it was 9px here, which is the same mistake as the
+   10px payroll headings Avin caught. A single letter fits at 11 in a 28px
+   column with room to spare. */
+.availtable.avmonth th.r span{font-size:11px;letter-spacing:0;line-height:1.2}
+.availtable.avmonth th.r b{font-size:12px;font-weight:600;line-height:1.2}
+.availtable.avmonth th.av-off{background:var(--sunk)}
+.availtable.avmonth td.av{font-size:11px;padding:7px 0}
+.availtable.avmonth td.s1,.availtable.avmonth th.s1{width:auto;padding-right:10px}
+/* One hairline down each side of today rather than two heavy bars — beside a
+   shaded weekend the old two-pixel pair read as something being wrong. */
+.availtable.avmonth .av-today{box-shadow:inset 1px 0 0 var(--accent),inset -1px 0 0 var(--accent)}
+.availtable.avmonth th.av-today{background:var(--accentSoft)}
+.avhead{display:flex;align-items:center;gap:12px;margin-left:auto;flex-wrap:wrap}
+.avmon{display:flex;align-items:center;gap:6px}
+.avmon b{font-size:14px;font-weight:600;min-width:13ch;text-align:center;
+  font-family:'IBM Plex Sans',system-ui,sans-serif}
+.avmon .btn.sm{padding:3px 10px;line-height:1.2}
+.avmon .btn.sm[data-avmon="-1"],.avmon .btn.sm[data-avmon="1"]{font-size:17px;padding:0 10px}
+@media screen and (max-width:900px){
+  .avhead{width:100%;margin-left:0}
+}`,
+  'the month grid has a look');
+
+/* And it leaves People, which is a directory: a page you go to for a person,
+   not for a month. The strip of four counts at the top of that page stays —
+   that is today at a glance, and it is not this. */
+{
+  const start = app.indexOf(`  \${avail.length ? \`<section class="panel">\n    <header><h3>The next two weeks</h3>`);
+  if(start < 0) throw new Error('the next-two-weeks panel is not where this expects it');
+  const end = app.indexOf('</section>` : \'\'}`;', start);
+  if(end < 0) throw new Error('the next-two-weeks panel has no end');
+  app = app.slice(0, start) + '`;' + app.slice(end + '</section>` : \'\'}`;'.length);
+  console.log('people      the next two weeks moved to Leave & WFH');
+}
+
 /* 'All employees' means all SALES employees — asked, and answered 'I meant
    sales staff'. So Marketing, HR and Operations do not get a sales screen,
    and the gate is the one it always was: this person is on the sales roster
