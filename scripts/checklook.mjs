@@ -288,10 +288,75 @@ async function look(who, name, mode, tab, width){
            && a.top < c.bottom - 2 && c.top < a.bottom - 2)
           out.push(`two pills overlap: "${pills[i].textContent.trim()}" and "${pills[j].textContent.trim()}"`);
       }
+    /* ---- 7. panels side by side that do not end together.
+     *
+     *   'Time and again same mistakes are repeated. I told you to maintain
+     *    parallel heights'                                            -- Avin
+     *
+     * He had to say it twice, which is once more than a rule should need. The
+     * cause each time is the same one property: align-items:start on a grid
+     * row, or a panel that is not allowed to stretch, and three cards that
+     * start level end at three different places.
+     *
+     * A row is two or more panels that start at the same y and sit in the
+     * same container. A panel wrapped in a bare div of its own counts as
+     * itself — the payment screen puts each of its two cards in an unclassed
+     * div, and a check that only looked at direct siblings would have walked
+     * straight past the widest gap on the portal.
+     *
+     * What is NOT a row: a panel above another panel; a column of panels that
+     * scrolls on its own, where a short card is a short list and not a short
+     * card. Those are excluded rather than tolerated, so the tolerance itself
+     * can stay at 2px for rounding and nothing more. A card 40px shorter than
+     * the one beside it is the fault; a card 4px shorter is the same fault
+     * with a smaller number on it. */
+    {
+      const panels = [...document.querySelectorAll('#view .panel')]
+        .filter(el => el.offsetParent !== null && !el.parentElement.closest('.panel'));
+      /* A lone panel in a wrapper stands for the wrapper, so cards in
+         neighbouring grid cells are compared with each other rather than each
+         being a group of one. */
+      const block = el => {
+        let b = el;
+        while(b.parentElement && b.parentElement.id !== 'view'
+              && b.parentElement.children.length === 1) b = b.parentElement;
+        return b;
+      };
+      const scrolls = el => {
+        for(let p = el.parentElement; p && p.id !== 'view'; p = p.parentElement)
+          if(/auto|scroll/.test(getComputedStyle(p).overflowY)) return true;
+        return false;
+      };
+      /* Keyed on the container ELEMENT, not its class name: two unclassed
+         divs are two containers, and a string cannot tell them apart. */
+      const rows = new Map();
+      panels.forEach(el => {
+        if(scrolls(el)) return;
+        const b = block(el);
+        const r = b.getBoundingClientRect();
+        if(!r.width || !r.height || !b.parentElement) return;
+        const byTop = rows.get(b.parentElement) || rows.set(b.parentElement, new Map()).get(b.parentElement);
+        const key = Math.round(r.top);
+        (byTop.get(key) || byTop.set(key, []).get(key)).push({el, r});
+      });
+      const groups = [];
+      rows.forEach(byTop => byTop.forEach(list => groups.push(list)));
+      groups.forEach(list => {
+        if(list.length < 2) return;
+        const hs = list.map(x => Math.round(x.r.height));
+        const lo = Math.min(...hs), hi = Math.max(...hs);
+        if(hi - lo <= 2) return;
+        const name = x => ((x.el.querySelector(':scope > header h3') || {}).textContent || '')
+          .trim().slice(0, 34) || '(no heading)';
+        out.push('panels in one row end at different heights: '
+          + list.map((x, i) => `"${name(x)}" ${hs[i]}px`).join(', ')
+          + ` — ${hi - lo}px apart`);
+      });
+    }
     return {bad: [...new Set(out)], notes: [...new Set(notes)]};
   });
 
-  /* ---- 7. the rail stays put.
+  /* ---- 8. the rail stays put.
    *
    * It is meant to be pinned, and for a while it was not: a position:relative
    * added to hang the fold toggle off silently replaced the position:sticky

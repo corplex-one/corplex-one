@@ -5062,8 +5062,16 @@ shell = swap(shell,
      containment on anything larger would trap the document pop-up inside it. */
   .payonew{container-type:inline-size}
   .payone{display:grid;grid-template-columns:minmax(0,1fr);
-    gap:14px;align-items:start;margin-bottom:14px}
+    gap:14px;margin-bottom:14px}
   .payone > div:empty{display:none}
+  /* The form and the list end together. align-items:start was here as well,
+     and side by side it left the request list ending five hundred pixels
+     above the bottom of the form. Stacked on a narrow screen each is its own
+     row and none of this applies. */
+  .payone > div{display:flex;flex-direction:column}
+  .payone > div > .panel{flex:1;display:flex;flex-direction:column;min-height:0}
+  .payone > div > .panel > .tw{flex:1;min-height:0}
+  .payone > div > .panel > .cap{margin-top:auto}
   /* Stacked, the form has the whole page to spread across, and a one-line
      Name of the employee eleven hundred pixels wide looks like a mistake.
      Alongside the table its column is 350px, so this never applies there. */
@@ -15646,10 +15654,21 @@ shell = swap(shell,
 /* My commission: three panels in one row. Not a plain third each — the band
    table carries five columns and the line-by-line four, while the not-counted
    panel is a short list of pairs. Widths set to what is in them, so the two
-   tables are not squeezed to make room for a column of prose. */
+   tables are not squeezed to make room for a column of prose.
+
+   Their BOTTOMS LINE UP. align-items:start was here and it should not have
+   been: it is the property that lets three cards side by side end at three
+   different heights, which is the thing Avin has now had to point out more
+   than once. Grid stretches by default, so the fix is to stop overriding it —
+   and then each panel is a column with its footnote pushed to the bottom, so
+   the extra room falls between the table and the note rather than below it. */
 .grid.commrow{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1.25fr) minmax(0,1fr);
-  gap:var(--gap, 18px);align-items:start}
-.grid.commrow > .panel{min-width:0}
+  gap:var(--gap, 18px)}
+.grid.commrow > .panel{min-width:0;display:flex;flex-direction:column}
+.grid.commrow > .panel > .pad{flex:1;display:flex;flex-direction:column}
+.grid.commrow > .panel > .tw{flex:1}
+.grid.commrow > .panel > .cap{margin-top:auto}
+.grid.commrow .cfoot{margin-top:auto;padding-top:14px}
 .grid.commrow table{table-layout:auto;width:100%}
 .grid.commrow th,.grid.commrow td{padding-left:9px;padding-right:9px}
 .grid.commrow th:first-child,.grid.commrow td:first-child{padding-left:14px}
@@ -15997,6 +16016,40 @@ shell = swap(shell,
 `@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500;6..96,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`,
 `@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`,
   'and the two faces are fetched');
+
+/* =========================== cards in a row end where each other ends ======
+ *
+ *   'Time and again same mistakes are repeated. I told you to maintain
+ *    parallel heights'                                                -- Avin
+ *
+ * One property, on one line, is behind every instance of it. gtop is
+ * align-items:start, and it is on the leave screen, the attendance screen,
+ * the air ticket screen, the advances screen and the payment request screen —
+ * so every one of those puts two or three cards in a row that start level and
+ * finish wherever their content happens to run out. Nobody chose that per
+ * screen; it was chosen once, here, and inherited.
+ *
+ * Grid stretches by default, so the line comes out. What replaces it is the
+ * treatment the Home page already had and looked right with: each panel is a
+ * column, its body fills the height, and anything that closes the card —
+ * a .cap footnote, a .note — sits at the bottom. So the room a shorter card
+ * gains opens up inside it rather than showing as a ragged bottom edge.
+ *
+ * checklook now fails on any row of panels whose heights differ by more than
+ * 2px, on every screen it opens. That is the part that matters: the CSS fixes
+ * today's five, and the check is what stops there being a sixth.
+ */
+shell = swap(shell,
+`.grid.gtop{align-items:start}`,
+`/* Was align-items:start. Panels in a row stretch to the tallest, and what
+   closes the card goes to the bottom of it. */
+.grid.gtop > .panel{display:flex;flex-direction:column}
+.grid.gtop > .panel > .pad{flex:1;display:flex;flex-direction:column}
+.grid.gtop > .panel > .tw{flex:1}
+.grid.gtop > .panel > .cap{margin-top:auto}
+.grid.gtop > .panel > .pad > .note:last-child,
+.grid.gtop > .panel > .pad > .cap:last-child{margin-top:auto}`,
+  'cards in a row end where each other ends');
 
 /* The boot screen and the print header are written separately. */
 
@@ -16932,6 +16985,24 @@ app = swap(app,
     <section class="panel">
       <header><h3>\${flat?'Your arrangement':'Your band'}</h3>`,
 'the row stays open for all three');
+
+/* Three cards side by side end where each other ends. The CSS above stopped
+   overriding the stretch; this is the other half — the closing note in each
+   panel is pushed to the bottom of it, so what grows is the gap above the
+   note rather than a strip of empty card below it. The inline margin has to
+   go, because an inline style beats a stylesheet rule and would have pinned
+   the note back under the table. */
+[
+  [`\${fy ? \`<p class="note" style="margin-top:14px">Your band is decided quarter by quarter`,
+   `\${fy ? \`<p class="note cfoot">Your band is decided quarter by quarter`],
+  [`: (nextBand ? \`<p class="note" style="margin-top:14px"><b>AED \${money(gap)}</b> more in eligible net sales`,
+   `: (nextBand ? \`<p class="note cfoot"><b>AED \${money(gap)}</b> more in eligible net sales`],
+  [`: \`<p class="note" style="margin-top:14px">You are in the top band for this quarter.</p>\`)}\`}`,
+   `: \`<p class="note cfoot">You are in the top band for this quarter.</p>\`)}\`}`],
+  [`        <p class="note" style="margin-top:14px">Commission follows <b>collection</b>, not invoicing.`,
+   `        <p class="note cfoot">Commission follows <b>collection</b>, not invoicing.`]
+].forEach(([from, to], i) =>
+  app = swap(app, from, to, `the commission row's notes sit at the bottom of their card (${i + 1} of 4)`));
 
 app = swap(app,
 `  return \`

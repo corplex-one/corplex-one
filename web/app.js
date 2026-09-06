@@ -4886,9 +4886,9 @@ function vCommission(){
               <td>${(!fy && b[0]===e.band)?'▸ ':''}Band ${b[0]}</td>
               <td class="n r">${money(b[1])} – ${b[2]>1e8?'above':money(b[2])}</td>
               <td class="n r">${pct(b[3],0)}</td><td class="n r">${pct(b[4],0)}</td><td class="n r">${pct(b[5],0)}</td></tr>`).join('')}</tbody></table></div>
-          ${fy ? `<p class="note" style="margin-top:14px">Your band is decided quarter by quarter, so a strong Q2 does not carry into Q3. The quarterly table below shows which band each quarter landed in.</p>`
-             : (nextBand ? `<p class="note" style="margin-top:14px"><b>AED ${money(gap)}</b> more in eligible net sales this quarter moves you to band ${nextBand[0]} — existing-client work would then pay ${pct(nextBand[4],0)} instead of ${pct(rates.ex,0)}, on the whole quarter.</p>`
-                : `<p class="note" style="margin-top:14px">You are in the top band for this quarter.</p>`)}`}
+          ${fy ? `<p class="note cfoot">Your band is decided quarter by quarter, so a strong Q2 does not carry into Q3. The quarterly table below shows which band each quarter landed in.</p>`
+             : (nextBand ? `<p class="note cfoot"><b>AED ${money(gap)}</b> more in eligible net sales this quarter moves you to band ${nextBand[0]} — existing-client work would then pay ${pct(nextBand[4],0)} instead of ${pct(rates.ex,0)}, on the whole quarter.</p>`
+                : `<p class="note cfoot">You are in the top band for this quarter.</p>`)}`}
       </div>
     </section>
 
@@ -4903,7 +4903,7 @@ function vCommission(){
           <dt><b>Commission actually earned</b></dt><dd class="big">${money(e.comm,2)}</dd>
           <dt>Difference still sitting with clients</dt><dd>${money(Math.max(0,e.commOnTime-e.comm),2)}</dd>
         </dl>
-        <p class="note" style="margin-top:14px">Commission follows <b>collection</b>, not invoicing. Chase the open invoices on your <b>My invoices</b> tab and the figure above converts by itself.</p>
+        <p class="note cfoot">Commission follows <b>collection</b>, not invoicing. Chase the open invoices on your <b>My invoices</b> tab and the figure above converts by itself.</p>
       </div>
     </section>
   </div>

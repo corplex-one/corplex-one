@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609061751">
+<link rel="manifest" href="manifest.webmanifest?v=202609061850">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -201,7 +201,14 @@ main{min-width:0;display:flex;flex-direction:column}
 .g2{grid-template-columns:repeat(2,minmax(0,1fr))}
 .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
 .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
-.grid.gtop{align-items:start}
+/* Was align-items:start. Panels in a row stretch to the tallest, and what
+   closes the card goes to the bottom of it. */
+.grid.gtop > .panel{display:flex;flex-direction:column}
+.grid.gtop > .panel > .pad{flex:1;display:flex;flex-direction:column}
+.grid.gtop > .panel > .tw{flex:1}
+.grid.gtop > .panel > .cap{margin-top:auto}
+.grid.gtop > .panel > .pad > .note:last-child,
+.grid.gtop > .panel > .pad > .cap:last-child{margin-top:auto}
 .grid.hrow > .panel{display:flex;flex-direction:column;height:auto;min-height:180px}
 .hbody{flex:1;display:flex;flex-direction:column;gap:14px;overflow:hidden}
 .hbody .feed{margin-top:-2px}
@@ -733,10 +740,21 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
 /* My commission: three panels in one row. Not a plain third each — the band
    table carries five columns and the line-by-line four, while the not-counted
    panel is a short list of pairs. Widths set to what is in them, so the two
-   tables are not squeezed to make room for a column of prose. */
+   tables are not squeezed to make room for a column of prose.
+
+   Their BOTTOMS LINE UP. align-items:start was here and it should not have
+   been: it is the property that lets three cards side by side end at three
+   different heights, which is the thing Avin has now had to point out more
+   than once. Grid stretches by default, so the fix is to stop overriding it —
+   and then each panel is a column with its footnote pushed to the bottom, so
+   the extra room falls between the table and the note rather than below it. */
 .grid.commrow{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1.25fr) minmax(0,1fr);
-  gap:var(--gap, 18px);align-items:start}
-.grid.commrow > .panel{min-width:0}
+  gap:var(--gap, 18px)}
+.grid.commrow > .panel{min-width:0;display:flex;flex-direction:column}
+.grid.commrow > .panel > .pad{flex:1;display:flex;flex-direction:column}
+.grid.commrow > .panel > .tw{flex:1}
+.grid.commrow > .panel > .cap{margin-top:auto}
+.grid.commrow .cfoot{margin-top:auto;padding-top:14px}
 .grid.commrow table{table-layout:auto;width:100%}
 .grid.commrow th,.grid.commrow td{padding-left:9px;padding-right:9px}
 .grid.commrow th:first-child,.grid.commrow td:first-child{padding-left:14px}
@@ -1804,8 +1822,16 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      containment on anything larger would trap the document pop-up inside it. */
   .payonew{container-type:inline-size}
   .payone{display:grid;grid-template-columns:minmax(0,1fr);
-    gap:14px;align-items:start;margin-bottom:14px}
+    gap:14px;margin-bottom:14px}
   .payone > div:empty{display:none}
+  /* The form and the list end together. align-items:start was here as well,
+     and side by side it left the request list ending five hundred pixels
+     above the bottom of the form. Stacked on a narrow screen each is its own
+     row and none of this applies. */
+  .payone > div{display:flex;flex-direction:column}
+  .payone > div > .panel{flex:1;display:flex;flex-direction:column;min-height:0}
+  .payone > div > .panel > .tw{flex:1;min-height:0}
+  .payone > div > .panel > .cap{margin-top:auto}
   /* Stacked, the form has the whole page to spread across, and a one-line
      Name of the employee eleven hundred pixels wide looks like a mistake.
      Alongside the table its column is 350px, so this never applies there. */
@@ -2156,8 +2182,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609061751';</script>
-<script src="config.js?v=202609061751"></script>
-<script type="module" src="boot.js?v=202609061751"></script>
+<script>window.__BUILD = '202609061850';</script>
+<script src="config.js?v=202609061850"></script>
+<script type="module" src="boot.js?v=202609061850"></script>
 </body>
 </html>
