@@ -1257,6 +1257,18 @@ window.__db = {
     }catch(e){ oops(e, 'Marking it paid'); await reload(); return null; }
   },
 
+  /* The letter templates, all of them at once, having been shown what changes.
+     The database refuses to drop a kind that letters on file refer to, so the
+     error a person sees here is the one it raises, in its words. */
+  async setLetterTypes(types){
+    try{
+      const {data, error} = await sb.rpc('set_letter_types', {p_types: types});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The letter templates'); await reload(); return null; }
+  },
+
   /* Closing one spell of employment and opening the next on new terms. The
      database refuses unless the settlement for the closed spell has been paid,
      so the error a person sees here is the one it raises, in its words. */

@@ -3473,7 +3473,121 @@ function vLetters(){
       <span class="pill mute" style="margin-left:auto">A4</span>
       <button class="btn" id="slPrint" type="button" style="padding:6px 14px;font-size:13px">Print or save as PDF</button></header>
     <div class="slwrap">${letterHTML(open)}</div>
-  </section>`:''}`;
+  </section>`:''}
+
+  ${adm ? ltTemplates() : ''}`;
+}
+
+/* The placeholders a letter may carry, and what each one puts on the page.
+   Shown beside the box rather than documented elsewhere, because a template
+   language nobody can see is a template language nobody uses. */
+const LTFIELDS = [
+  ['{name}',   'their name as it appears on their passport'],
+  ['{legal}',  'the registered name of the company on their visa'],
+  ['{title}',  'their designation'],
+  ['{doj}',    'the day they joined'],
+  ['{salary}', 'monthly salary, all of it'],
+  ['{basic}',  'the basic part'],
+  ['{allow}',  'the other allowance']
+];
+
+function ltTemplates(){
+  const live = (HR().letterTypes || []).filter(t => !t.issueOnly);
+  const draft = state.ltT || live.map(t => ({id: t.id, label: t.label, body: t.body,
+                                             needsAddressee: !!t.needsAddressee, was: true}));
+  const editing = !!state.ltT;
+  const used = {};
+  (HR().letters || []).forEach(l => { used[l.type] = (used[l.type] || 0) + 1; });
+
+  const changed = () => {
+    const out = [];
+    live.forEach(t => { const d = draft.find(x => x.id === t.id);
+      if(!d) return out.push(['Removed', t.label, 'no longer offered']);
+      if(d.label !== t.label) out.push(['Renamed', t.label, 'now &ldquo;' + esc(d.label) + '&rdquo;']);
+      if(d.body !== t.body) out.push(['Reworded', d.label, 'the text of the letter changes']);
+      if(!!d.needsAddressee !== !!t.needsAddressee)
+        out.push(['Addressee', d.label, d.needsAddressee
+          ? 'now asks who it is addressed to' : 'now goes out to whom it may concern']);
+    });
+    draft.filter(d => !live.some(t => t.id === d.id))
+      .forEach(d => out.push(['New letter', d.label || '(no name)', 'staff can ask for it from today']));
+    return out;
+  };
+  const list = changed();
+
+  const row = (d, i) => {
+    const t = live.find(x => x.id === d.id);
+    const n = used[d.id] || 0;
+    return '<div class="lttpl">'
+      + '<div class="lttop">'
+        + '<label class="ltname"><span>Name of the letter</span>'
+          + '<input data-lt-lab="' + i + '" value="' + esc(d.label || '') + '"'
+          + (editing ? '' : ' disabled') + '></label>'
+        + '<label class="ltadd"><span>Addressed to</span>'
+          + '<select data-lt-adr="' + i + '"' + (editing ? '' : ' disabled') + '>'
+          + '<option value="no"' + (d.needsAddressee ? '' : ' selected') + '>To whom it may concern</option>'
+          + '<option value="yes"' + (d.needsAddressee ? ' selected' : '') + '>Ask who it is for</option>'
+          + '</select></label>'
+        + (editing && t
+            ? (n ? '<span class="ltused">' + n + ' on file</span>'
+                 : '<button class="btn ghost bad ltdel" data-lt-del="' + i + '" type="button">Remove</button>')
+            : (editing ? '<button class="btn ghost bad ltdel" data-lt-del="' + i + '" type="button">Remove</button>'
+                       : (n ? '<span class="ltused">' + n + ' on file</span>' : '')))
+      + '</div>'
+      + '<textarea data-lt-body="' + i + '" rows="3"' + (editing ? '' : ' disabled')
+        + ' placeholder="The letter, with the fields below where the details go">'
+        + esc(d.body || '') + '</textarea>'
+      + '<p class="cap ltprev"><b>Reads as:</b> ' + esc(ltSample(d.body || '')) + '</p>'
+      + '</div>';
+  };
+
+  return '<section class="panel">'
+    + '<header><h3>Letter templates</h3>'
+      + '<span class="hint">what each letter says, and which letters can be asked for</span>'
+      + (editing ? '' : '<button class="btn ghost" id="ltEdit" type="button" style="margin-left:auto">Edit</button>')
+      + '</header>'
+    + '<div class="pad">'
+    + '<p class="cap" style="padding-top:0">A letter is written once here and filled in from the record'
+      + ' every time it is issued &mdash; nobody types a name or a salary into a letter. The salary'
+      + ' revision letter is not on this list: its wording comes from the revision that raises it.</p>'
+    + '<div class="ltfields">' + LTFIELDS.map(f =>
+        '<span><code>' + f[0] + '</code> ' + f[1] + '</span>').join('') + '</div>'
+    + draft.map(row).join('')
+    + (editing
+       ? '<div class="btns" style="margin-top:14px">'
+         + '<button class="btn ghost" id="ltAdd" type="button">Add another letter</button>'
+         + '<button class="btn" id="ltSee" type="button"' + (list.length ? '' : ' disabled') + '>'
+           + (list.length ? 'Review ' + list.length + ' change' + (list.length === 1 ? '' : 's') : 'Nothing changed') + '</button>'
+         + '<button class="btn ghost" id="ltCancel" type="button">Cancel</button></div>'
+       : '')
+    + (editing && state.ltOK
+       ? '<div class="edconf" style="margin-top:16px"><h4>These are the changes</h4>'
+         + '<table class="edtab"><tbody>'
+         + list.map(c => '<tr><td>' + c[0] + '</td><td><b>' + esc(c[1]) + '</b></td><td>' + c[2] + '</td></tr>').join('')
+         + '</tbody></table>'
+         + '<div class="edconfb"><button class="btn" id="ltGo" type="button">Yes, save '
+           + (list.length === 1 ? 'it' : 'them') + '</button>'
+         + '<button class="btn ghost" id="ltBack" type="button">Back</button>'
+         + '<span>Nothing has been written yet. A letter already issued keeps the wording it went out with.</span>'
+         + '</div></div>'
+       : '')
+    + '</div></section>';
+}
+
+/* What the template will read as, against a real person, so a placeholder that
+   has been mistyped shows up as itself before it goes out on paper. */
+function ltSample(body){
+  if(!body.trim()) return 'nothing yet';
+  const who = (DATA.payroll.rows.filter(r => !r.dummy)[0] || {});
+  const P = salParts(who.name || '');
+  return body
+    .replace('{name}', legalOf(who.name || '') || 'the employee')
+    .replace('{legal}', (visaEnt(who.name || '') || {}).legal || 'the company')
+    .replace('{title}', who.title || 'their designation')
+    .replace('{doj}', who.doj || 'their joining date')
+    .replace('{salary}', money(P.salary, 2))
+    .replace('{basic}', money(P.basic, 2))
+    .replace('{allow}', money(P.allow, 2));
 }
 
 function letterHTML(l){
@@ -7320,7 +7434,6 @@ function slipHTML(s, printable){
             ${kv('Date of Joining', esc(r.doj)||'—')}
             ${kv('Pay Period', esc(s.period))}
             ${kv('Pay Date', esc(s.payDate))}
-            ${kv('Account No', s.acct4?('&bull;&bull;&bull;&bull;&nbsp;&bull;&bull;&bull;&bull;&nbsp;'+esc(s.acct4)):'<i class="slmiss">from employee master</i>')}
           </div>
         </div>
         <div class="slnet">
@@ -7474,7 +7587,6 @@ function settleHTML(s){
         ${kv('Designation', esc(r.title||'\u2014'))}
         ${kv('MOL ID', s.mol?esc(s.mol):'<i class="slmiss">from employee master</i>')}
         ${kv('Date of Joining', esc(r.doj)||'\u2014')}
-        ${kv('Account No', s.acct4?('&bull;&bull;&bull;&bull;&nbsp;&bull;&bull;&bull;&bull;&nbsp;'+esc(s.acct4)):'<i class="slmiss">from employee master</i>')}
         ${kv('Pay Period', esc(c.period))}
         ${kv('Paid Days', String(c.paidDays))}
         ${kv('Last Working Date', esc(dd(c.lwd)))}
@@ -7819,7 +7931,7 @@ function vSlips(){
   const rows = co==='all' ? staff : staff.filter(r=>r.company===co);
   const one = state.slipOpen ? staff.find(r=>r.id===state.slipOpen && (co==='all'||r.company===co)) : null;
   const pending = Object.keys(DATA.entities||{}).filter(c=>!(DATA.entities[c]||{}).ready);
-  const noMaster = staff.filter(r=>!((DATA.master.people||{})[r.id]||{}).mol).length;
+  const noMol = staff.filter(r=>!((DATA.master.people||{})[r.id]||{}).mol).length;
   return `
   <section class="panel">
     <header><h3>Payslips</h3>
@@ -7832,9 +7944,9 @@ function vSlips(){
       <span style="color:var(--ink3);font-size:12.5px">${rows.length} ${rows.length===1?'payslip':'payslips'}</span></header>
     <div class="pad" style="padding-bottom:10px">
       <p style="margin:0;color:var(--ink2);font-size:13.5px">Basic and Other Allowance come from each person's own <b>salary revision letter</b> where there is one on file, and fall back to the ${Math.round(DATA.master.basicPct*100)}/${100-Math.round(DATA.master.basicPct*100)} house split where there is not &mdash; ${Object.keys(DATA.master.parts||{}).length} of ${DATA.payroll.rows.filter(r=>!r.dummy).length} have a letter. Both are pro-rated to days worked. Every claim, air ticket, incentive, commission and referral appears as its own earnings line, and each deduction as its own line.</p>
-      ${(pending.length||noMaster)?`<div class="note" style="margin-top:14px;border-left-color:var(--warn)">
+      ${(pending.length||noMol)?`<div class="note" style="margin-top:14px;border-left-color:var(--warn)">
         ${pending.length?`<b>${pending.map(c=>esc(DATA.payroll.label[c]||c)).join(' and ')} letterhead${pending.length>1?'s':''} not set.</b> Their payslips carry a placeholder until you send the legal name, address and P.O. box. `:''}
-        ${noMaster?`<b>MOL ID and account number are missing for ${noMaster} of ${staff.length} people.</b> Upload the employee master once and both fill in on every payslip from then on.`:''}
+        ${noMol?`<b>No MOL ID on file for ${noMol} of ${staff.length} ${noMol===1?'person':'people'}.</b> Their payslip and settlement show a gap where it should be. Upload the employee master once and it fills in from then on.`:''}
       </div>`:''}
     </div>
     ${byCompany(rows, {
@@ -10616,6 +10728,47 @@ function render(){
     render(); });
   document.querySelectorAll('[data-expay]').forEach(b=>b.onclick=async ()=>{
     b.disabled = true; await window.__db.decideExit(b.dataset.expay, b.dataset.mode); render(); });
+  const ltStart = () => { if(state.ltT) return;
+    state.ltT = (HR().letterTypes||[]).filter(t=>!t.issueOnly)
+      .map(t=>({id:t.id, label:t.label, body:t.body, needsAddressee:!!t.needsAddressee}));
+    state.ltOK = false; };
+  const ltE = document.getElementById('ltEdit');
+  if(ltE) ltE.onclick = () => { ltStart(); render(); };
+  const ltC = document.getElementById('ltCancel');
+  if(ltC) ltC.onclick = () => { state.ltT = null; state.ltOK = false; render(); };
+  const ltS = document.getElementById('ltSee');
+  if(ltS) ltS.onclick = () => { state.ltOK = true; render(); };
+  const ltB = document.getElementById('ltBack');
+  if(ltB) ltB.onclick = () => { state.ltOK = false; render(); };
+  const ltA = document.getElementById('ltAdd');
+  if(ltA) ltA.onclick = () => { ltStart();
+    /* An id the letters on file will refer to for as long as they exist, so it
+       is made once from the name and never touched again. */
+    state.ltT.push({id:'', label:'', body:'', needsAddressee:false});
+    state.ltOK = false; render(); };
+  document.querySelectorAll('[data-lt-lab]').forEach(el=>{ el.oninput = () => {
+    const d = state.ltT[+el.dataset.ltLab]; if(!d) return;
+    d.label = el.value;
+    if(!d.was && !d.id) d.id = (el.value.toLowerCase().replace(/[^a-z0-9]+/g,'_')
+      .replace(/^[^a-z]+/,'').replace(/_+$/,'')) || '';
+    const see = document.getElementById('ltSee'); if(see) see.disabled = false; }; });
+  document.querySelectorAll('[data-lt-adr]').forEach(el=>{ el.onchange = () => {
+    const d = state.ltT[+el.dataset.ltAdr]; if(d) d.needsAddressee = el.value === 'yes'; render(); }; });
+  document.querySelectorAll('[data-lt-body]').forEach(el=>{ el.oninput = () => {
+    const d = state.ltT[+el.dataset.ltBody]; if(!d) return;
+    d.body = el.value;
+    const p = el.parentElement.querySelector('.ltprev');
+    if(p) p.innerHTML = '<b>Reads as:</b> ' + esc(ltSample(el.value));
+    const see = document.getElementById('ltSee'); if(see) see.disabled = false; }; });
+  document.querySelectorAll('[data-lt-del]').forEach(b=>b.onclick=()=>{
+    state.ltT.splice(+b.dataset.ltDel, 1); state.ltOK = false; render(); });
+  const ltG = document.getElementById('ltGo');
+  if(ltG) ltG.onclick = async () => { ltG.disabled = true;
+    const out = await window.__db.setLetterTypes(state.ltT.map(d=>({
+      id: d.id, label: d.label, body: d.body, needsAddressee: !!d.needsAddressee})));
+    if(out){ state.ltT = null; state.ltOK = false; }
+    render(); };
+
   document.querySelectorAll('[data-frnew]').forEach(b=>b.onclick=()=>{
     state.frOpen = b.dataset.frnew; state.frOK = false;
     state.frDoj = ''; state.frBasis = 'salaried'; state.frBasic = undefined;

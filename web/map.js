@@ -888,7 +888,30 @@ export function buildData(db, meId){
 
   return {
     companies, hr, payroll, master, gratuity, tickets, ...sales,
-    entities: [],
+
+    /* The letterhead, keyed the way the documents ask for it.
+     *
+     * 'Why the letterheads have no address?'   -- Avin
+     *
+     * Because this was an empty ARRAY. Every payslip, settlement and letter
+     * looks the entity up as DATA.entities[code] — 'CorpLex', 'POA', 'Lex' —
+     * and an array has no such key, so every lookup missed and fell through to
+     * a default carrying the legal name and an empty address. The name was
+     * right, which is why nothing looked broken; the address was the only
+     * thing that could go missing without the page saying so.
+     *
+     * The addresses were on the companies table the whole time, correct for
+     * all three. This is that table, in the shape the paper asks for.
+     *
+     * 'ready' is what puts 'Letterhead details still to be confirmed' on a
+     * document, so it is worked out rather than assumed: a company added
+     * without a registered name or an address says so on its own paper. */
+    entities: Object.fromEntries(Object.values(companies).map(c => [c.code, {
+      key: c.key, code: c.code, name: c.name,
+      legal: c.legal || c.name,
+      addr: c.addr || [],
+      ready: !!(c.legal && (c.addr || []).length)
+    }])),
     _me: meId ? name(meId) : '', _roles: roles
   };
 }

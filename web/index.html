@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609061358">
+<link rel="manifest" href="manifest.webmanifest?v=202609061441">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -705,6 +705,28 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   text-transform:none;letter-spacing:0;
   background:var(--panel2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .gmon tbody tr.sub td{border-top:1px solid var(--line);font-weight:600}
+/* Letter templates. One block per letter, so a body and the name above it read
+   as one object rather than as rows of a form that happen to be adjacent. */
+.ltfields{display:flex;flex-wrap:wrap;gap:6px 18px;margin:2px 0 14px}
+.ltfields span{font-size:12.5px;color:var(--ink2)}
+.ltfields code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink)}
+.lttpl{border:1px solid var(--line);border-radius:10px;padding:12px 13px;margin-bottom:12px;background:var(--panel2)}
+.lttop{display:flex;gap:12px;align-items:flex-end;margin-bottom:9px;flex-wrap:wrap}
+.lttop label{display:flex;flex-direction:column;gap:4px;margin:0}
+.lttop label span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)}
+.lttop .ltname{flex:1 1 260px;min-width:0}
+.lttop .ltadd{flex:0 0 220px}
+.lttop .ltdel{margin-left:auto;flex:none}
+/* Removing a letter is guarded by the database, which refuses while any are on
+   file — so the button does not need to shout. Four red buttons down a panel
+   read as four warnings. */
+.lttop .ltdel{padding:6px 11px;font-size:12.5px;color:var(--ink2)}
+.lttop .ltdel:hover{color:var(--bad);border-color:var(--bad)}
+.ltused{margin-left:auto;font-size:12.5px;color:var(--ink3);white-space:nowrap;align-self:center}
+.lttpl textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:64px;line-height:1.5}
+.lttpl .ltprev{margin:8px 0 0;padding:0;color:var(--ink2)}
+.lttpl .ltprev b{color:var(--ink)}
 .srnew{display:flex;gap:7px;align-items:center}
 .srnew input{min-width:0}
 .srnew .btn{flex:none;white-space:nowrap}
@@ -2080,8 +2102,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609061358';</script>
-<script src="config.js?v=202609061358"></script>
-<script type="module" src="boot.js?v=202609061358"></script>
+<script>window.__BUILD = '202609061441';</script>
+<script src="config.js?v=202609061441"></script>
+<script type="module" src="boot.js?v=202609061441"></script>
 </body>
 </html>
