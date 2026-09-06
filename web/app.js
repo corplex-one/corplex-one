@@ -6091,7 +6091,8 @@ function cellHover(){
     current = td.dataset.full;
     txt.textContent = current;
     cpy.textContent = 'Copy';
-    cpy.style.display = td.hasAttribute('data-plain') ? 'none' : '';
+    // the cell, or anything it sits inside — one mark can cover a whole table
+    cpy.style.display = td.closest('[data-plain]') ? 'none' : '';
     card.classList.remove('hidden');
     const r = td.getBoundingClientRect();
     const w = Math.min(460, Math.max(240, r.width * 2.4));
@@ -6301,11 +6302,9 @@ const PAYTABS = [['payment','Request for payment'], ['payapprove','Approve payme
 function payBar(){
   if(!canUpload(state.user)) return '';
   const waiting = reqs().filter(r=>r.status==='Pending').length;
-  const past = reqs().filter(r=>r.status!=='Pending' && r.status!=='Withdrawn').length;
   return `<div class="subbar"><div class="subtabs">${PAYTABS.map(([id,label])=>
     `<button data-paytab="${id}" aria-current="${state.tab===id}" type="button">${esc(label)}${
-      id==='payapprove' && waiting ? ` <i class="cnt">${waiting}</i>` : ''}${
-      id==='paypast' && past ? ` <i class="cnt mute">${past}</i>` : ''}</button>`).join('')}</div></div>`;
+      id==='payapprove' && waiting ? ` <i class="cnt">${waiting}</i>` : ''}</button>`).join('')}</div></div>`;
 }
 
 function vPayApprove(){
@@ -6548,7 +6547,7 @@ function vPayment(){
   const minePanel = `
   <section class="panel grow">
     <header><h3>My requests</h3><span class="hint">${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
-    <div class="tw paytab"><table>
+    <div class="tw paytab"><table data-plain="1">
       <colgroup>${[5.8, 6.0, 7.0, 14.5, 13.5, 5.8, 9.0, 8.0, 12.4, 9.0, 9.0]
         .map(w => `<col style="width:${(w*0.97).toFixed(2)}%">`).join('')}</colgroup>
       <thead><tr><th>Date</th><th>Order #</th><th class="r">Amount</th><th>Client</th>

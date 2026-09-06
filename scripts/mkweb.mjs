@@ -17082,6 +17082,54 @@ app = swap(app,
    gate:u => canSeeTeam(u) && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
   'and so does the leaderboard');
 
+/* ---- a count is a queue, not a filing cabinet.
+ *
+ *   'Do not show numbers next to past payments, its just for approve
+ *    payments'                                                        -- Avin
+ *
+ * The number beside Approve payments is how many are waiting on him, and it
+ * is meant to be got to nought. The one beside Past payments was how many
+ * there had ever been, which only ever goes up and asks to be acted on in the
+ * same shape as the one that does. */
+app = swap(app,
+`  const waiting = reqs().filter(r=>r.status==='Pending').length;
+  const past = reqs().filter(r=>r.status!=='Pending' && r.status!=='Withdrawn').length;`,
+`  const waiting = reqs().filter(r=>r.status==='Pending').length;`,
+  'past payments are not counted at anybody');
+
+app = swap(app,
+`      id==='payapprove' && waiting ? \` <i class="cnt">\${waiting}</i>\` : ''}\${
+      id==='paypast' && past ? \` <i class="cnt mute">\${past}</i>\` : ''}</button>\`).join('')}</div></div>\`;`,
+`      id==='payapprove' && waiting ? \` <i class="cnt">\${waiting}</i>\` : ''}</button>\`).join('')}</div></div>\`;`,
+  'and only the queue carries a number');
+
+/* ---- no Copy on your own requests.
+ *
+ *   'Also remove the copy option on hover in my requests page for everyone'
+ *                                                                    -- Avin
+ *
+ * The hover card that shows a cut cell in full already knew how to appear
+ * without a Copy button — data-plain on the cell — but it was set one cell at
+ * a time, and My requests has eight of them. It reads the nearest marked
+ * ancestor now, so a whole table is marked once and cannot be half-done: a
+ * new column added to that table inherits the rule instead of quietly
+ * arriving with a Copy button on it.
+ *
+ * The approve and past tables are untouched. Copying an order number out of
+ * those is how the details reach the bank, which is what the button is for. */
+app = swap(app,
+`    cpy.style.display = td.hasAttribute('data-plain') ? 'none' : '';`,
+`    // the cell, or anything it sits inside — one mark can cover a whole table
+    cpy.style.display = td.closest('[data-plain]') ? 'none' : '';`,
+  'the hover card reads the mark from the cell or the table around it');
+
+app = swap(app,
+`    <header><h3>My requests</h3><span class="hint">\${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
+    <div class="tw paytab"><table>`,
+`    <header><h3>My requests</h3><span class="hint">\${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span></header>
+    <div class="tw paytab"><table data-plain="1">`,
+  'and My requests is marked, so nothing on it offers Copy');
+
 /* 'All employees' means all SALES employees — asked, and answered 'I meant
    sales staff'. So Marketing, HR and Operations do not get a sales screen,
    and the gate is the one it always was: this person is on the sales roster

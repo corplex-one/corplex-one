@@ -32,7 +32,7 @@ const T = {companies:'companies', employees:'staff_directory', private:'employee
  gratuity_rows:'gratuity_rows', gratuity_basic:'gratuity_basic', loans:'loans', letters:'letters',
  employee_files:'employee_files', company_docs:'company_docs', exits:'exits',
  tickets:'ticket_entitlements', ticket_history:'ticket_history', ticket_rates:'ticket_rates',
- sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company', sales_company_mine:'sales_company_mine',
+ sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company',
  sales_bands:'sales_bands', sales_uploads:'sales_uploads',
  payment_requests:'payment_requests', payment_files:'payment_files'};
 
@@ -296,6 +296,58 @@ console.log('the seven Payment request items:\n');
   });
   ok('5 and hovering it shows the instruction', /With accounts|Turned down|Payment initiated/.test(card), card.slice(0, 60));
   await page.close();
+}
+
+/* ============================================ two more, from a later sheet
+ *
+ *   'Do not show numbers next to past payments, its just for approve payments'
+ *   'Also remove the copy option on hover in my requests page for everyone'
+ *                                                                    -- Avin
+ */
+console.log('\nthe sub-bar, and the hover card on your own requests');
+{
+  const page = await pageFor(AVIN, 'Avin Mascarenhas', 'payapprove');
+  const tabs = await page.evaluate(() =>
+    [...document.querySelectorAll('#view .subtabs button')].map(b => ({
+      label: b.textContent.trim(), cnt: !!b.querySelector('.cnt') })));
+  const app = tabs.find(t => /Approve payments/.test(t.label)) || {};
+  const pst = tabs.find(t => /Past payments/.test(t.label)) || {};
+  ok('Approve payments still carries the number waiting on him', app.cnt === true, tabs);
+  ok('and Past payments carries none', pst.cnt === false, tabs);
+  ok('the number is a queue to clear, not a total that only grows',
+     /Approve payments\s+\d/.test(app.label) && !/\d/.test(pst.label), tabs);
+  await page.close();
+}
+{
+  /* The hover card only appears on a cell that is actually cut, so the cell is
+     chosen by measuring rather than by hoping the first one is narrow. */
+  const pick = async (page, tab) => page.evaluate(async t => {
+    state.mode = 'staff'; state.tab = t; render();
+    await new Promise(r => setTimeout(r, 80));
+    const td = [...document.querySelectorAll('#view .paytab tbody td[data-full]')]
+      .filter(x => x.scrollWidth > x.clientWidth + 1 || x.hasAttribute('data-always'))[0];
+    if(!td) return null;
+    td.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+    await new Promise(r => setTimeout(r, 80));
+    const c = document.querySelector('.cellpop');
+    return {shown: !!c && !c.classList.contains('hidden'),
+            copy: c ? getComputedStyle(c.querySelector('button')).display : '?'};
+  }, tab);
+
+  const page = await pageFor(AHMED, RAISER, 'payment');
+  const mine = await pick(page, 'payment');
+  ok('a cut cell on My requests still says what it holds', mine && mine.shown === true, mine);
+  ok('but offers no Copy', mine && mine.copy === 'none', mine);
+  await page.close();
+
+  /* The accounts side, on the table that always has rows in it. Same row()
+     as the approve queue, so this is the same question asked where there is
+     something to ask it of. */
+  const p2 = await pageFor(AVIN, 'Avin Mascarenhas', 'paypast');
+  const appr = await pick(p2, 'paypast');
+  ok('while the accounts tables keep Copy — it is how the details reach the bank',
+     appr && appr.shown === true && appr.copy !== 'none', appr);
+  await p2.close();
 }
 
 await b.close();

@@ -36,7 +36,7 @@ const T = {companies:'companies', employees:'staff_directory', private:'employee
  gratuity_rows:'gratuity_rows', gratuity_basic:'gratuity_basic', loans:'loans', letters:'letters',
  employee_files:'employee_files', company_docs:'company_docs', exits:'exits',
  tickets:'ticket_entitlements', ticket_history:'ticket_history', ticket_rates:'ticket_rates',
- sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company', sales_company_mine:'sales_company_mine',
+ sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company',
  sales_bands:'sales_bands', sales_uploads:'sales_uploads',
  payment_requests:'payment_requests', payment_files:'payment_files'};
 const AVIN = json(`select coalesce(json_agg(t),'[]') from (select id,auth_user_id from employees where full_name='Avin Mascarenhas') t`)[0];
@@ -297,8 +297,11 @@ await page.screenshot({path: '/tmp/look/leavebal.png', fullPage: true});
 /* And it is still there where it was built for: a payment remark. */
 {
   const src = fs.readFileSync('web/app.js', 'utf8');
+  /* The mark is read from the cell OR anything it sits inside, so a whole
+     table can opt out with one attribute — which is how My requests does it.
+     Still opt-out: a table that says nothing keeps the button. */
   ok('the Copy button is opt-out, not removed',
-     /cpy\.style\.display = td\.hasAttribute\('data-plain'\)/.test(src));
+     /cpy\.style\.display = td\.closest\('\[data-plain\]'\)/.test(src));
   ok('and the payment screen never opts out',
      !/data-plain/.test((src.match(/function vPayApprove[\s\S]{0,6000}/) || [''])[0]));
 }
