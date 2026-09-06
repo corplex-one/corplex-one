@@ -4846,20 +4846,23 @@ function vCommission(){
   const mo = mgrOf(u,p);
 
   return `
-  <div class="strip">
+  <div class="strip five">
     <div class="stat"><span class="k">Eligible net sales · ${fy?esc(state.year):p}</span><span class="v"><span class="cur">AED</span>${money(e.totElig)}</span>
       <span class="n">${flat?'flat '+pct(e.flat,0)+' — no target':(fy?'band set quarter by quarter':(deptOk?'band '+e.band:'department not commission-eligible'))}</span></div>
     <div class="stat"><span class="k">${mo?'Your own commission':'Commission earned'}</span><span class="v"><span class="cur">AED</span>${money(e.comm,2)}</span>
       <span class="n">${mo?`plus <b>AED ${money(mo.earned,2)}</b> manager override &mdash; total ${money(e.comm+mo.earned,2)}`:(e.totElig?pct(e.comm/e.totElig,2)+' of eligible net sales':'—')}</span></div>
     <div class="stat"><span class="k">Paid to date</span><span class="v"><span class="cur">AED</span>${money(e.paid,2)}</span>
-      <span class="n">${e.lost>0?`<span class="pill bad"><span class="dt"></span>${money(e.lost,2)} forfeited</span>`:'nothing forfeited'}</span></div>
+      <span class="n">${e.paid>0&&e.comm>0?pct(e.paid/e.comm,0)+' of what was earned':'nothing paid yet'}</span></div>
+    <div class="stat${e.lost>0?' bad':''}"><span class="k">Forfeited</span>
+      <span class="v"><span class="cur">AED</span>${money(e.lost,2)}</span>
+      <span class="n">${e.lost>0?'collections more than a month late':'every collection landed in time'}</span></div>
     <div class="stat"><span class="k">Balance owed to you</span><span class="v"><span class="cur">AED</span>${money(e.bal+(mo?mo.bal:0),2)}</span>
       <span class="n">${mo?`${money(e.bal,2)} own + ${money(mo.bal,2)} override`:(e.bal>0?'due after quarter sign-off':'nothing outstanding')}</span></div>
   </div>
 
   ${!deptOk ? `<div class="note"><b>${esc(DATA.dept[u])} is set to non-commission-eligible</b> in the commission rules. Sales are tracked and reported in full — commission calculates to nil.</div>` : ''}
 
-  <div class="grid g2">
+  <div class="grid commrow">
     <section class="panel">
       <header><h3>${fy?'2026 commission, bucket by bucket':p+' commission, line by line'}</h3></header>
       <div class="tw"><table>
@@ -4873,23 +4876,6 @@ function vCommission(){
       <p class="cap">Your band is set by <b>total</b> eligible net sales for the quarter; the three rates then apply to each bucket separately.${fy?' Across a full year the rate column varies, because each quarter lands in its own band.':''}</p>
     </section>
 
-    <section class="panel">
-      <header><h3>Settlement</h3></header>
-      <div class="pad">
-        <dl class="kv">
-          <dt>Commission earned</dt><dd class="big">${money(e.comm,2)}</dd>
-          <dt>Already paid to you</dt><dd>${money(e.paid,2)}</dd>
-          <dt>Forfeited — collections more than a month late</dt><dd style="color:var(--bad)">${money(e.lost,2)}</dd>
-          <div class="sep"></div>
-          <dt><b>Balance owed</b></dt><dd class="big">${money(e.bal,2)}</dd>
-        </dl>
-        ${e.lost>0 ? `<div class="note" style="margin-top:16px;border-left-color:var(--bad)"><b>Why ${money(e.lost,2)} was forfeited.</b> One or more invoices were settled more than a month after quarter end. Under the current rules that forfeits the commission not already paid. Those invoices are flagged <b>Late</b> on your invoice list.</div>`
-          : `<div class="note" style="margin-top:16px;border-left-color:var(--good)">Every collection landed inside the window. Nothing forfeited.</div>`}
-      </div>
-    </section>
-  </div>
-
-  <div class="grid g2">
     <section class="panel">
       <header><h3>${flat?'Your arrangement':'Your band'}</h3>${fy?'<span class="hint">bands are set per quarter</span>':''}</header>
       <div class="pad">
@@ -5179,9 +5165,9 @@ function vInvoices(){
         ${rows.length ? rows.map(r=>`<tr>
           <td class="n nw s1">${esc(r[IC.date])}</td>
           <td class="n nw s2">${esc(r[IC.no])}</td>
-          <td class="n nw">${esc(r[IC.pr])||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td class="n prno"${full(r[IC.pr])}>${esc(r[IC.pr])||'<span style="color:var(--ink3)">—</span>'}</td>
           <td class="nw">${esc(r[IC.type])}</td>
-          <td class="cname">${esc(r[IC.client])}${r[IC.forfeit]>0?' <span class="pill bad"><span class="dt"></span>Late</span>':''}</td>
+          <td class="cname"${full(r[IC.client])}>${esc(r[IC.client])}${r[IC.forfeit]>0?' <span class="pill bad"><span class="dt"></span>Late</span>':''}</td>
           <td class="nw${r[IC.sp]===u?' me':''}" title="${esc(r[IC.sp])}">${esc(first(r[IC.sp]))}</td>
           <td class="nw${r[IC.pm]===u&&r[IC.sp]!==u?' me':''}" title="${esc(r[IC.pm])}">${esc(first(r[IC.pm]))||'<span style="color:var(--ink3)">—</span>'}</td>
           <td class="n r">${money(r[IC.amt],2)}</td>

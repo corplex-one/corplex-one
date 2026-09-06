@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609061621">
+<link rel="manifest" href="manifest.webmanifest?v=202609061704">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -219,7 +219,11 @@ main{min-width:0;display:flex;flex-direction:column}
 
 .strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--panel);border:1px solid var(--line);
   border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
-@media(max-width:840px){.strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.strip.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media screen and (max-width:1400px){.strip.five{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .strip.five .stat:nth-child(3n){border-right:0}}
+@media(max-width:840px){.strip,.strip.five{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .strip.five .stat:nth-child(3n){border-right:1px solid var(--line2)}}
 .stat{padding:15px 18px;border-right:1px solid var(--line2);display:flex;flex-direction:column;gap:5px;min-width:0}
 .strip .stat:last-child{border-right:0}
 .stat .k{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3)}
@@ -439,7 +443,17 @@ main.fixed .content{flex:1;min-height:0;overflow:hidden;max-width:none;padding-b
   font-size:12.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--ink)}
 .invtable td{padding:6px 9px}
 .invtable td.nw{white-space:nowrap}
-.invtable td.cname{min-width:170px;max-width:210px}
+/* One line per invoice. Anything that would wrap is cut with the whole value
+   on hover — the browser's own tooltip, so it works on a touch device's
+   long-press too. */
+.invtable td.cname{min-width:0;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.invtable td.cname .pill{margin-left:5px}
+.invtable td.prno{max-width:96px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The columns that hold a known shape stop being given room to grow into. */
+.invtable td,.invtable th{padding-left:8px;padding-right:8px}
+.invtable td.s1,.invtable th.s1{padding-left:14px}
+.invtable td.n.nw{white-space:nowrap}
+.invtable colgroup col.tight{width:1%}
 .gtable{table-layout:fixed;width:100%;min-width:820px}
 .gtable td.n,.gtable td.r,.gtable th.r,.gtable .netcol{font-variant-numeric:tabular-nums}
 .gtable td.gname,.gtable td.gnote{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -716,6 +730,24 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
 .topbar .tbend{display:flex;align-items:center;gap:8px;margin-left:auto}
 .topbar .bell{margin-left:0}
 @media screen and (max-width:900px){.topbar .ttl small{display:none}}
+/* My commission: three panels in one row. Not a plain third each — the band
+   table carries five columns and the line-by-line four, while the not-counted
+   panel is a short list of pairs. Widths set to what is in them, so the two
+   tables are not squeezed to make room for a column of prose. */
+.grid.commrow{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1.25fr) minmax(0,1fr);
+  gap:var(--gap, 18px);align-items:start}
+.grid.commrow > .panel{min-width:0}
+.grid.commrow table{table-layout:auto;width:100%}
+.grid.commrow th,.grid.commrow td{padding-left:9px;padding-right:9px}
+.grid.commrow th:first-child,.grid.commrow td:first-child{padding-left:14px}
+.grid.commrow th:last-child,.grid.commrow td:last-child{padding-right:14px}
+@media screen and (max-width:1450px){
+  .grid.commrow{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .grid.commrow > .panel:last-child{grid-column:1 / -1}}
+@media screen and (max-width:900px){.grid.commrow{grid-template-columns:minmax(0,1fr)}
+  .grid.commrow > .panel:last-child{grid-column:auto}}
+/* The forfeited tile says something has gone wrong only when it has. */
+.strip .stat.bad .v{color:var(--bad)}
 .lttab2 tbody tr{cursor:pointer}
 .lttab2 tbody tr:hover td{background:color-mix(in srgb, var(--accent) 5%, transparent)}
 .lttab2 td.ltsay{color:var(--ink2);font-size:13px}
@@ -2124,8 +2156,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609061621';</script>
-<script src="config.js?v=202609061621"></script>
-<script type="module" src="boot.js?v=202609061621"></script>
+<script>window.__BUILD = '202609061704';</script>
+<script src="config.js?v=202609061704"></script>
+<script type="module" src="boot.js?v=202609061704"></script>
 </body>
 </html>

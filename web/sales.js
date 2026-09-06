@@ -40,7 +40,34 @@ export const num = v => {
   return isFinite(n) ? n : 0;
 };
 
-export const txt = v => (v === null || v === undefined) ? '' : String(v).trim();
+/* A cell as words.
+ *
+ *   'Thu Apr 30 2026 23:59:48 GMT+0400 (Gulf Standard Time) - There is this
+ *    text on CL INV-2426 - Fix it'                                   -- Avin
+ *
+ * It was String(v), and Excel hands back a Date object for any cell it thinks
+ * is a date — which a PR number can become by one careless format in the
+ * workbook. String(aDate) is that whole machine-readable line, and it went
+ * into the database and onto the screen exactly as it came.
+ *
+ * The cell is not corrupt: somebody formatted it as a date and it holds one.
+ * So it reads as a date — the same way every other date in the portal does —
+ * rather than as an American timestamp with a timezone name on the end. Then
+ * a mis-formatted cell is legible instead of alarming, and it is obvious from
+ * the screen that a date is sitting where a reference belongs.
+ *
+ * This is the one funnel every text column comes through: PR#, client,
+ * salesperson, invoice number. Fixing it here fixes all of them. */
+const MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+export const txt = v => {
+  if(v === null || v === undefined) return '';
+  /* A Date the parser could not make sense of is not 'Invalid Date' on a
+     screen — it is a cell with nothing usable in it. */
+  if(v instanceof Date)
+    return isNaN(v.getTime()) ? ''
+      : String(v.getUTCDate()).padStart(2, '0') + ' ' + MON3[v.getUTCMonth()] + ' ' + v.getUTCFullYear();
+  return String(v).trim();
+};
 
 const blank = v => v === null || v === undefined || String(v).trim() === '';
 
