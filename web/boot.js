@@ -26,6 +26,21 @@ const hide = el => el && el.classList.add('hidden');
 // the opening screen stays up until there is either a portal or a way in
 const settled = () => hide($('boot'));
 
+/* Signing out has to forget which page it was on.
+ *
+ *   'If someone logs out and log ins, default landing should be on home page
+ *    and not the page where he left'                                  -- Avin
+ *
+ * Nothing was remembering it: the URL was. The fragment (#c/payroll) is written
+ * by the app as you move about, and a reload keeps it, so it was still in the
+ * address bar when the next person signed in — and readHash() put them there,
+ * on somebody else's screen from somebody else's session. Dropping the fragment
+ * on the way out leaves deep links alone, which is the point of readHash(): a
+ * link somebody is GIVEN still opens where it points. */
+const forgetPage = () => {
+  if(location.hash) history.replaceState(null, '', location.pathname + location.search);
+};
+
 function say(msg, kind){
   const box = $('lgMsg'); if(!box) return;
   box.textContent = msg || '';
@@ -83,6 +98,7 @@ const TABLES = {
   sales_team:       ['sales_team_figures', null, true],
   // optional until 0021 has been run: a missing table must not close the portal
   ticket_rates:     ['ticket_rates', 'country', true],
+  sales_members:    ['sales_members', null, true],
   sales_company:    ['sales_company'],
   sales_bands:      ['sales_bands'],
   sales_uploads:    ['sales_uploads'],
@@ -184,6 +200,7 @@ async function start(session){
     // Signed in, but not on the staff list. The database is already giving
     // them nothing; this only explains why.
     await sb.auth.signOut();
+    forgetPage();
     show($('login')); settled();
     say('That address is not on the staff list. Ask Avin in Accounts to add you.', 'bad');
     busy(false);
@@ -205,6 +222,7 @@ async function start(session){
   const today = new Date().toISOString().slice(0, 10);
   if(mine.active === false && mine.last_day && String(mine.last_day).slice(0, 10) < today){
     await sb.auth.signOut();
+    forgetPage();
     show($('login')); settled();
     say('Your last working day has passed, so this account is closed. '
       + 'If you need a payslip or your settlement, email accounts@corplex.ae.', 'bad');
@@ -1245,6 +1263,34 @@ window.__db = {
      the list unpriced. Each one goes through set_ticket_rate, which also
      carries everybody from that country with it; that is the whole point of
      the function existing rather than an upsert here. */
+  /* Everything on one person's employment record, in one call. The database
+     refuses what it should — a name that would strand a sign-in, somebody
+     reporting to themselves — so this does not second-guess it. */
+  async saveStaffRecord(r){
+    try{
+      const {data, error} = await sb.rpc('correct_joining', {
+        p_emp: r.emp,
+        p_name: r.name ?? null, p_email: r.email ?? null, p_phone: r.phone ?? null,
+        p_title: r.title ?? null, p_department: r.department ?? null,
+        p_company: r.company ?? null, p_visa_company: r.visa ?? null,
+        p_paid_by: r.paidBy ?? null, p_shift: r.shift ?? null,
+        p_manager: r.manager ?? null, p_staff_no: r.staffNo ?? null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The staff record'); await reload(); return null; }
+  },
+
+  async setSalesMember(emp, on, company, department){
+    try{
+      const {data, error} = await sb.rpc('set_sales_member',
+        {p_emp: emp, p_on: !!on, p_company: company || null, p_department: department || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The sales tick'); await reload(); return null; }
+  },
+
   async saveTicketRates(map){
     try{
       for(const [country, v] of Object.entries(map)){
@@ -1473,7 +1519,10 @@ window.__db = {
     }catch(e){ oops(e, 'Removing your photograph'); return false; }
   },
 
-  async signOut(){ await sb.auth.signOut(); location.reload(); }
+  async signOut(){ await sb.auth.signOut();
+    // replace, not reload: a reload keeps the fragment, and the fragment is the
+    // page they were on. It also keeps sign-out out of the back button.
+    location.replace(location.pathname + location.search); }
 };
 
 // ------------------------------------------------------------------ signin
@@ -1554,7 +1603,7 @@ function wireLogin(){
 
   if(session){
     try{ await start(session); return; }
-    catch(e){ console.error(e); await sb.auth.signOut(); }
+    catch(e){ console.error(e); await sb.auth.signOut(); forgetPage(); }
   }
 
   show($('login'));

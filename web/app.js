@@ -49,7 +49,7 @@ const roleOf = u => ROLE[u] || 'former';
 const FORMER = Object.keys(DATA.engine).filter(n=>!ROLE[n]).sort();
 /* The department's figures: the sales_company aggregate arrived, so this
    person may read what the whole department did. */
-const seesDeptSales = u => !!DATA.dept[u] && companyOf(u).sales;
+const seesDeptSales = u => (!!DATA.dept[u] || !!SALESEXTRA(u)) && companyOf(u).sales;
 /* Their own: commission rows of their own came back, which the database sends
    to everybody about themselves. */
 const hasOwnSales = u => !!(DATA.engine || {})[u];
@@ -8274,6 +8274,223 @@ function vSalesUpload(){
     ${history()}`;
 }
 
+/* ---------- Staff Records ----------
+ *
+ *   'But where do we have add or edit option for the following? ... I feel
+ *    this is all over the place. Why not we have a proper tab to maintain all
+ *    this?'                                                          -- Avin
+ *
+ * He was right. Seven of these twelve could only ever be typed on the Add
+ * somebody form and never changed again; the work phone had no box anywhere in
+ * the portal; and the sales tick did not exist. correct_joining() has been in
+ * the database the whole time, taking exactly the frozen seven, with nothing
+ * calling it.
+ *
+ * One person at a time rather than a grid, because half of these move money —
+ * Company and Paid from decide which run pays them and out of whose account,
+ * and Work email is their sign-in. The confirm list says what a change DOES,
+ * not just what it was, and that needs room.
+ */
+const SRF = () => state.sr || (state.sr = {who:'', draft:{}, confirm:false, busy:false, done:''});
+const srCo = () => Object.keys(DATA.companies);
+
+/* What the record says now, before anything is typed. One place, so the
+   confirm list and the boxes cannot disagree about what is changing. */
+function srNow(n){
+  const id = (HR().ids || {})[n] || '';
+  const t = (DATA.tickets.employees || []).find(e => e.portalName === n || e.name === n) || {};
+  const x = SALESEXTRA(n);
+  return {
+    id, name: n,
+    staffNo: (HR().staffNo || {})[n] || '',
+    company: ((HR().orgCo || {})[n]) || companyOf(n).key,
+    visa: (HR().visaCo || {})[n] || '',
+    paidBy: (HR().paidBy || {})[n] || '',
+    title: titleOf(n) || '',
+    department: orgDeptOf(n) || '',
+    shift: (shiftOf(n) || {}).id || '',
+    manager: mgrName(n) || '',
+    email: emailOf(n) || '',
+    phone: phoneOf(n) || '',
+    sales: !!x, salesCo: x ? x.co : (((HR().orgCo || {})[n]) || companyOf(n).key),
+    salesDept: x ? x.dept : ''
+  };
+}
+const srVal = (k, now) => k in SRF().draft ? SRF().draft[k] : now[k];
+const srSet = (k, v, now) => {
+  const d = SRF().draft;
+  if(String(v) === String(now[k])) delete d[k]; else d[k] = v;
+  SRF().confirm = false;
+};
+
+/* Not what it was and what it is — what it will do. This is the reason the
+   screen is one person wide. */
+function srSays(k, was, now, who){
+  const co = c => (DATA.companies[c] || {}).name || c;
+  const earns = (c, d) => REVDEPT(c).includes(d);
+  switch(k){
+    case 'name': return 'Payslips and letters already issued keep the old name; everything from here on carries the new one.';
+    case 'staffNo': return 'Runs already closed keep the old ID. The next payroll and every payslip after it carry the new one.';
+    case 'company': return nm(who) + ' comes off the ' + co(was) + ' run and onto the ' + co(now)
+      + ' one, from the next month built. Closed months are not touched.';
+    case 'visa': return 'Their payslip, salary certificate and letters carry ' + co(now) + '’s letterhead from now on.';
+    case 'paidBy': return 'Their net pay is transferred out of ' + co(now) + '’s account instead of ' + co(was) + '’s.';
+    case 'department': {
+      const c = srVal('company', srNow(who));
+      return earns(c, was) === earns(c, now)
+        ? 'They move on the organisation chart and on People.'
+        : (earns(c, now)
+            ? 'This <b>puts them into</b> the sales tables, the leaderboard and the commission run.'
+            : 'This <b>takes them out of</b> the sales tables, the leaderboard and the commission run.');
+    }
+    case 'manager': return 'Their leave and working-from-home requests go to '
+      + (now ? nm(now) : 'nobody') + ' from now on, including any waiting right now.';
+    case 'email': return 'This is what they sign in with. The database refuses the change if they have already signed in once — that has to be moved in Supabase Auth first.';
+    case 'shift': return 'Their working hours change, which is what the late-arrival nudge and the attendance day are measured against.';
+    case 'sales': return now === 'yes'
+      ? 'Team performance, the leaderboard and Department open for them, and their figures count towards the company they are set to.'
+      : 'Those three pages close for them again, and their figures stop being counted.';
+    default: return '';
+  }
+}
+const SRFIELDS = [
+  {k:'name',       label:'Name'},
+  {k:'staffNo',    label:'Employee ID'},
+  {k:'company',    label:'Company',    pick:'co'},
+  {k:'visa',       label:'Visa',       pick:'co'},
+  {k:'paidBy',     label:'Paid from',  pick:'co'},
+  {k:'title',      label:'Designation'},
+  {k:'department', label:'Department', list:'srDepts'},
+  {k:'shift',      label:'Shift',      pick:'shift'},
+  {k:'manager',    label:'Reports to', pick:'people'},
+  {k:'email',      label:'Work email'},
+  {k:'phone',      label:'Work phone'}
+];
+const srLabel = k => (SRFIELDS.find(f => f.k === k) || {label:k}).label;
+const srShow = (k, v) => {
+  if(k === 'sales') return v === 'yes' ? 'on the sales scheme' : 'not on the sales scheme';
+  if(!String(v || '').trim()) return 'nothing';
+  if(['company','visa','paidBy','salesCo'].includes(k)) return (DATA.companies[v] || {}).name || v;
+  if(k === 'shift'){ const s = SHIFTS().find(x => x.id === v);
+    return s ? s.label + ' · ' + s.start + '–' + s.end : v; }
+  if(k === 'manager') return NM(v);
+  return String(v);
+};
+
+function vStaffRec(){
+  const F = SRF(), who = F.who;
+  const roll = USERS.map(x => x.name).slice().sort((a, b) => NM(a).localeCompare(NM(b)));
+  const now = who ? srNow(who) : null;
+  const changed = Object.keys(F.draft);
+  const depts = [...new Set(roll.map(orgDeptOf).filter(Boolean)
+    .concat(Object.values(HR().revDept || {}).flat()))].sort();
+  const signedIn = who ? !!(HR().signedIn || {})[who] : false;
+
+  const box = f => {
+    const v = srVal(f.k, now);
+    const off = f.k === 'email' && signedIn;
+    const c = f.pick === 'co'
+      ? '<select data-sr="' + f.k + '">' + srCo().map(k =>
+          '<option value="' + esc(k) + '"' + (k === v ? ' selected' : '') + '>'
+          + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select>'
+      : f.pick === 'shift'
+      ? '<select data-sr="' + f.k + '">' + SHIFTS().map(s =>
+          '<option value="' + esc(s.id) + '"' + (s.id === v ? ' selected' : '') + '>'
+          + esc(s.label + ' · ' + s.start + '–' + s.end) + '</option>').join('') + '</select>'
+      : f.pick === 'people'
+      ? '<select data-sr="' + f.k + '"><option value="">Nobody</option>' + roll.filter(n => n !== who).map(n =>
+          '<option value="' + esc(n) + '"' + (n === v ? ' selected' : '') + '>'
+          + esc(NM(n)) + '</option>').join('') + '</select>'
+      : '<input data-sr="' + f.k + '" value="' + esc(v || '') + '"'
+          + (f.list ? ' list="' + f.list + '"' : '')
+          + (off ? ' disabled title="They have signed in with this. Change it in Supabase Auth first."' : '') + '>';
+    /* The note about a sign-in goes under the box, not inside the label — a
+       label is uppercased here, and 'WORK EMAIL THEIR SIGN-IN' reads as one
+       field name. */
+    return '<label' + (f.k in F.draft ? ' class="srchg"' : '') + '><span>' + esc(f.label) + '</span>' + c
+      + (off ? '<span class="pfhint">They have signed in with this. It has to be moved in Supabase Auth first.</span>' : '')
+      + '</label>';
+  };
+
+  const tick = !who ? '' : (() => {
+    const isOn = String(srVal('sales', now)) === 'true' || srVal('sales', now) === true || srVal('sales', now) === 'yes';
+    const co = srVal('salesCo', now), dept = srVal('salesDept', now);
+    return '<div class="srsales">'
+      + '<label class="srtick"><input type="checkbox" id="srSales"' + (isOn ? ' checked' : '') + '>'
+      + '<b>On the sales scheme</b>'
+      + '<em>Their own figures, and Team performance, the leaderboard and Department, open for them '
+      + 'whatever department they sit in.</em></label>'
+      + (isOn
+        ? '<div class="jform" style="margin-top:12px">'
+          + '<label><span>Counted under</span><select data-sr="salesCo">' + srCo().map(k =>
+              '<option value="' + esc(k) + '"' + (k === co ? ' selected' : '') + '>'
+              + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select></label>'
+          + '<label><span>On which leaderboard</span><input data-sr="salesDept" list="srDepts" value="'
+          + esc(dept || '') + '" placeholder="a sales department"></label></div>'
+          + '<p class="cap" style="padding:10px 0 0">This is what decides whose team they are ranked against. '
+          + 'It does not have to be the department they sit in on the chart &mdash; that is the point of the tick.</p>'
+        : '')
+      + '</div>';
+  })();
+
+  /* Same box every other edit-then-confirm screen uses (.edconf / .edconfb), so
+     this one is not a stranger. The list underneath is wider than a table row
+     because each line has to say what the change DOES. */
+  const confirmList = () => '<div class="edconf"><h4>This is what will change.</h4>'
+    + '<ul class="srlist">' + changed.map(k => {
+        const was = srShow(k, now[k]), is = srShow(k, F.draft[k]);
+        const says = srSays(k, now[k], F.draft[k], who);
+        return '<li><b>' + esc(srLabel(k) || (k === 'sales' ? 'Sales' : k)) + '</b> '
+          + '<span class="edwas">' + esc(was) + '</span> &rarr; '
+          + '<span class="ednow">' + esc(is) + '</span>'
+          + (says ? '<em>' + says + '</em>' : '') + '</li>';
+      }).join('') + '</ul>'
+    + '<div class="edconfb"><button class="btn" id="srGo" type="button"' + (F.busy ? ' disabled' : '')
+    + '>' + (F.busy ? 'Saving\u2026' : 'Yes, save ' + changed.length + (changed.length === 1 ? ' change' : ' changes')) + '</button>'
+    + '<button class="btn ghost" id="srNo" type="button">Back</button>'
+    + '<span>Nothing has been written yet.</span></div></div>';
+
+  return `
+  <section class="panel">
+    <header><h3>Staff record</h3>
+      <span class="hint">everything the portal knows about somebody's employment, in one place</span></header>
+    <div class="pad">
+      <div class="jform">
+        <label><span>Who</span><select id="srWho">
+          <option value="">Choose somebody</option>
+          ${roll.map(n => `<option value="${esc(n)}"${who === n ? ' selected' : ''}>${esc(NM(n))}${
+            titleOf(n) ? ' — ' + esc(titleOf(n)) : ''}</option>`).join('')}
+        </select></label>
+      </div>
+      ${!who ? `<p class="cap" style="padding:14px 0 0">Pick somebody. Every field here can be corrected
+        &mdash; a name, an employee ID, which company pays them &mdash; and you are shown what each change
+        does before it is written.</p>` : ''}
+    </div>
+  </section>
+
+  ${!who ? '' : `
+  <datalist id="srDepts">${depts.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
+  <section class="panel">
+    <header><h3>${nm(who)}</h3>
+      <span class="pill mute">${esc(now.staffNo || 'no ID')}</span>
+      <span class="hint">${changed.length
+        ? changed.length + ' change' + (changed.length === 1 ? '' : 's') + ' not saved yet'
+        : 'nothing changed'}</span>
+      <button class="btn" id="srSave" type="button"${changed.length && !F.busy ? '' : ' disabled'}>Save changes</button>
+      <button class="btn ghost" id="srReset" type="button"${changed.length ? '' : ' disabled'}>Undo</button></header>
+    ${F.confirm ? confirmList() : ''}
+    ${F.done ? `<div class="edok">${esc(F.done)}</div>` : ''}
+    <div class="pad">
+      <div class="jform">${SRFIELDS.map(box).join('')}</div>
+      ${tick}
+      <p class="cap" style="padding:16px 0 0">Nothing is written until you press Save and agree to the list of
+        changes. A joining date, a salary and the air ticket are not here: those are
+        <b>Payroll</b>, <b>Revisions</b> and <b>Air ticket</b>, because each of them writes more than a field.</p>
+    </div>
+  </section>`}`;
+}
+
+
 function vAdmin(){
   // The sales roster, filtered to one entity when a company is chosen. Somebody
   // who has left keeps the company they left from, which is what makes a
@@ -8451,54 +8668,20 @@ function vAdmin(){
           return `<tr${fmr?' style="color:var(--ink3)"':''}><td>${esc(n)}${mg?' <span class="pill" style="background:var(--accentSoft);color:var(--accent2)">Override '+pct(mg.rate,0)+'</span>':''}</td><td>${esc(ROLELABEL[roleOf(n)])}</td><td>${fmr?'<span class="pill mute">Deactivated</span>':(isFlat(e)?'<span class="pill mute">Flat 20%</span>':'<span class="pill good"><span class="dt"></span>Banded</span>')}</td><td class="n r">${money(e.netTot||0)}</td></tr>`}).join('')}</tbody>
       </table></div>
       <p class="cap">Somebody appears here when their department is one that earns revenue for their
-        company \u2014 use the panel below to move somebody in or out \u2014 ${Object.entries(HR().revDept||{}).map(([k,v])=>
+        company \u2014 department is set on Register \u2192 Staff Records \u2014 ${Object.entries(HR().revDept||{}).map(([k,v])=>
           esc((DATA.companies[k]||{}).name || k) + ': ' + v.map(esc).join(', ')).join(' &middot; ')}
         &mdash; or when they are named as an exception. Support departments do not appear, because a
         marketing specialist showing zero net sales reads as a consultant who sold nothing.</p>
     </section>
 
     <section class="panel">
-      <header><h3>Move somebody between departments</h3>
-        <span class="hint" style="margin-left:auto">this is what puts them in or out of sales</span></header>
-      ${(() => {
-        const roll = USERS.map(x => x.name).slice().sort();
-        const who  = state.mvWho;
-        /* Every department anybody is actually in, so the list is the
-           organisation as it stands rather than one I wrote down once. */
-        const all  = [...new Set(roll.map(orgDeptOf).filter(Boolean)
-                       .concat(Object.values(HR().revDept || {}).flat()))].sort();
-        const now  = who ? orgDeptOf(who) : '';
-        const want = state.mvDept === null ? now : state.mvDept;
-        const co   = who ? (((HR().orgCo || {})[who]) || companyOf(who).key) : '';
-        const earns = d => REVDEPT(co).includes(d);
-        const same = String(want).trim() === String(now).trim();
-        return `<div class="pad">
-          <div class="jform">
-            <label><span>Who</span><select id="mvWho">
-              <option value="">Choose somebody</option>
-              ${roll.map(n => `<option value="${esc(n)}"${who === n ? ' selected' : ''}>${esc(NM(n))}${
-                orgDeptOf(n) ? ' \u2014 ' + esc(orgDeptOf(n)) : ' \u2014 no department'}</option>`).join('')}
-            </select></label>
-            <label><span>Department</span>
-              <input id="mvDept" list="mvDepts" value="${esc(want)}" placeholder="${who ? 'type a new one, or pick' : 'choose somebody first'}"${who ? '' : ' disabled'}>
-              <datalist id="mvDepts">${all.map(d => `<option value="${esc(d)}">`).join('')}</datalist></label>
-            <label><span>&nbsp;</span>
-              <button class="btn" id="mvSave" type="button"${(!who || same || state.mvBusy) ? ' disabled' : ''}>${
-                state.mvBusy ? 'Saving\u2026' : 'Move them'}</button></label>
-          </div>
-          ${!who ? `<p class="cap" style="padding:0;margin-top:14px">Pick somebody to see where they sit now and what moving them would do.</p>`
-          : `<p class="note" style="margin-top:16px${earns(String(want).trim()) === earns(now) ? '' : ';border-left-color:var(--warn)'}">
-              <b>${nm(who)}</b> is in <b>${esc(now || 'no department')}</b> at ${esc((DATA.companies[co] || {}).name || co)},
-              which ${earns(now) ? '<b>does</b>' : 'does <b>not</b>'} earn commission there.
-              ${same ? 'Change the department to move them.'
-                : `Moving them to <b>${esc(String(want).trim() || 'no department')}</b> would ${
-                    earns(String(want).trim())
-                      ? '<b>put them into</b> the sales tables, the leaderboard and the commission run'
-                      : '<b>take them out of</b> the sales tables, the leaderboard and the commission run'}.
-                   It also moves them on the organisation chart and on People.`}</p>`}
-        </div>`;
-      })()}
-      ${(() => { const x = state.mvDone; return x ? `<p class="cap"><b>${esc(x)}</b> has been moved.</p>` : ''; })()}
+      <header><h3>Moving somebody between departments</h3>
+        <span class="hint" style="margin-left:auto">this moved</span></header>
+      <div class="pad"><p style="margin:0;color:var(--ink2);font-size:14.5px">Department lives on
+        <b>Register &rarr; Staff Records</b> now, with everything else about a person's employment, and the
+        sales tick beside it. It was in two places, and one of them was here.
+        <button class="btn ghost sm" data-go="staffrec" data-mode="console" type="button"
+          style="margin-left:8px">Go to Staff Records</button></p></div>
     </section>
   </div>
 
@@ -8596,10 +8779,11 @@ const TABS = [
   {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:isAccounts, con:true},
   {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:isAccounts, con:true},
   // ---- Documents: the hero stays put as you move between these four
-  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:isAccounts, con:true},
+  {id:'staffrec',   group:'con', sec:'docs',   label:'Staff Records',  title:'Staff records', gate:isAccounts, con:true},
   {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:isAccounts, con:true},
-  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:isAccounts, con:true},
-  {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true},
+  {id:'staffreg',   group:'con', sec:'docs',   label:'Staff Personal', title:'Staff personal details', gate:isAccounts, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profile completion', title:'Profile completeness', gate:isAccounts, con:true},
+  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:isAccounts, con:true},
   // ---- Notifications: what the portal sends out, which is a setting about
   // the portal and not a fact about anybody.
   {id:'digest',     group:'con', sec:'notif',  label:'Email',          title:'Emails the portal sends', gate:isAccounts, con:true}
@@ -8611,7 +8795,7 @@ const CONTABS = () => TABS.filter(t=>t.con && (!t.gate || t.gate(state.user)));
 function visibleTabs(){ return state.mode==='console' ? CONTABS() : STAFFTABS(); }
 function reachable(){ return state.mode==='console' ? CONTABS() : ALLOWED().filter(onPhone); }
 const SECTIONS = [['pay','Pay'], ['people','People'], ['sales','Sales'],
-                  ['docs','Documents'], ['notif','Notifications']];
+                  ['docs','Register'], ['notif','Notifications']];
 const secOf   = id => (TABS.find(t=>t.id===id) || {}).sec || 'pay';
 const secTabs = s  => CONTABS().filter(t => t.sec === s);
 // A section nobody may open is a section nobody sees: the gates are per screen,
@@ -8671,7 +8855,7 @@ function renderNav(){
     const n = t.id === 'approvals' ? approvalsFor(state.user).length : 0;
     return `<button class="nav" data-tab="${t.id}" aria-current="${state.tab===t.id}" type="button" title="${esc(t.label)}">${navIcon(t.id)}<span>${esc(t.label)}</span>${n ? `<i class="navcnt">${n}</i>` : ''}</button>`; }
   nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{ if(b.dataset.tab!=='payment') state.pqConfirm='';
-    state.mode='staff'; state.tab=b.dataset.tab; render(); });
+    goTab(b.dataset.tab, 'staff'); render(); });
 }
 /* ---------- the phone: a different shape, not a squeezed desktop ----------
    Sales analysis is a laptop job - wide tables, charts, a filter bar - so those six
@@ -8929,7 +9113,7 @@ function renderTabbar(){
     + `<button data-more="1" aria-current="${rest.some(t=>t.id===state.tab)}" type="button">${ico('more')}<span>More</span>
        ${wait ? `<span class="tbdot">${wait}</span>` : ''}</button>`;
   bar.querySelectorAll('[data-mtab]').forEach(b=>b.onclick=()=>{
-    state.tab = b.dataset.mtab; state.who = null; state.askOnly = null; closeSheet(); render(); window.scrollTo({top:0}); });
+    goTab(b.dataset.mtab); closeSheet(); render(); window.scrollTo({top:0}); });
   bar.querySelector('[data-more]').onclick = ()=>openSheet(rest);
   const ab = bar.querySelector('[data-ask]');
   if(ab) ab.onclick = ()=>openAsk();
@@ -8986,7 +9170,7 @@ function openSheet(rest){
       <select id="mUserSel" style="flex:1;min-width:180px">${USERS.map(x=>`<option value="${esc(x.name)}"${x.name===u?' selected':''}>${nm(x.name)}</option>`).join('')}</select></div>`;
   wrap.classList.remove('hidden');
   sh.querySelectorAll('[data-mtab]').forEach(b=>b.onclick=()=>{
-    state.tab = b.dataset.mtab; state.who = null; closeSheet(); render(); window.scrollTo({top:0}); });
+    goTab(b.dataset.mtab); closeSheet(); render(); window.scrollTo({top:0}); });
   sh.querySelectorAll('[data-mco]').forEach(b=>b.onclick=()=>{
     state.company = b.dataset.mco; state.deptView = null; state.who = null;
     if(!reachable().some(t=>t.id===state.tab)) state.tab = state.mode==='console' ? 'payroll' : 'home';
@@ -9194,7 +9378,7 @@ const PAGE = {
   salesup:    ['admin',   ['Weekly upload']],
   salestpl:   ['admin',   ['Upload template']],
   salesrules: ['admin',   ['Commission rules']],
-  salesstaff: ['admin',   ['Staff accounts', 'Move somebody between departments']],
+  salesstaff: ['admin',   ['Staff accounts', 'Moving somebody between departments']],
   salesptr:   ['admin',   ['Referral partners']],
   hradmin:    ['hradmin', ['attendance'], true],
   shifts:     ['hradmin', ['Shifts and reporting lines']],
@@ -9236,7 +9420,16 @@ Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });
    router reads rather than the list of things carved out of a page. */
 PAGEVIEW.onpay = () => vOnPayroll();
 PAGEVIEW.approvals = () => vApprovals();
+PAGEVIEW.staffrec  = () => vStaffRec();
 
+function goTab(id, mode){
+  state.tab = id;
+  if(mode) state.mode = mode;
+  state.who = null;       // the colleague whose profile was open on People
+  state.askOnly = null;   // the one request kind a phone had drilled into
+  state.slipOpen = null;  // the payslip that was unfolded
+  state.deptView = null;  // the department drilled into on the org chart
+}
 function readHash(){
   const h = (location.hash || '').replace(/^#/, '');
   if(!h) return;
@@ -9359,7 +9552,7 @@ function render(){
     if(d) d.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); window.scrollTo({top:0}); }; }
   document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
     const first = secTabs(b.dataset.csec)[0];
-    if(first){ state.tab = first.id; state.slipOpen = null; render(); } });
+    if(first){ goTab(first.id); render(); } });
   document.querySelectorAll('[data-dexp-gone]').forEach(el=>el.onchange=()=>{
     const n = el.dataset.dexp, k = el.dataset.k;
     const D = HR().docs || (HR().docs = {});
@@ -9591,6 +9784,55 @@ function render(){
   document.querySelectorAll('[data-decline-req]').forEach(b=>b.onclick=()=>{
     const r=HR().requests.find(x=>x.id===b.dataset.declineReq);
     if(r){ r.status='Declined'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'declined'); } render(); });
+  { const sw = document.getElementById('srWho');
+    if(sw) sw.onchange = () => { state.sr = {who: sw.value, draft:{}, confirm:false, busy:false, done:''}; render(); }; }
+  document.querySelectorAll('[data-sr]').forEach(el => {
+    const k = el.dataset.sr, now = srNow(SRF().who);
+    const h = () => { srSet(k, el.value, now); SRF().done = ''; render();
+      const e2 = document.querySelector('[data-sr="' + k + '"]');
+      if(e2 && e2.tagName === 'INPUT'){ e2.focus();
+        try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} } };
+    if(el.tagName === 'SELECT') el.onchange = h;
+    else { let tm; el.oninput = () => { clearTimeout(tm); tm = setTimeout(h, 300); }; }
+  });
+  { const st = document.getElementById('srSales');
+    if(st) st.onchange = () => { const now = srNow(SRF().who);
+      srSet('sales', st.checked ? 'yes' : 'no', Object.assign({}, now, {sales: now.sales ? 'yes' : 'no'}));
+      SRF().done = ''; render(); }; }
+  { const b = document.getElementById('srSave');
+    if(b) b.onclick = () => { SRF().confirm = true; render(); window.scrollTo({top:0}); }; }
+  { const b = document.getElementById('srNo');
+    if(b) b.onclick = () => { SRF().confirm = false; render(); }; }
+  { const b = document.getElementById('srReset');
+    if(b) b.onclick = () => { state.sr = {who: SRF().who, draft:{}, confirm:false, busy:false, done:''}; render(); }; }
+  { const b = document.getElementById('srGo');
+    if(b) b.onclick = async () => {
+      const F = SRF(), who = F.who, d = F.draft, now = srNow(who);
+      F.busy = true; render();
+      /* The tick is its own function, because it is its own table. Order
+         matters: the record first, so a rename lands before anything keyed to
+         the person is written beside it. */
+      const rec = ['name','staffNo','company','visa','paidBy','title','department','shift','email','phone']
+        .some(k => k in d) || ('manager' in d);
+      let ok = true;
+      if(rec) ok = !!await window.__db.saveStaffRecord({
+        emp: now.id,
+        name: d.name, staffNo: d.staffNo, company: d.company, visa: d.visa,
+        paidBy: d.paidBy, title: d.title, department: d.department, shift: d.shift,
+        email: d.email, phone: d.phone,
+        manager: 'manager' in d ? ((HR().ids || {})[d.manager] || null) : null});
+      if(ok && ('sales' in d || 'salesCo' in d || 'salesDept' in d)){
+        const on = 'sales' in d ? d.sales === 'yes' : now.sales;
+        ok = !!await window.__db.setSalesMember(now.id, on,
+          'salesCo' in d ? d.salesCo : now.salesCo,
+          'salesDept' in d ? d.salesDept : now.salesDept);
+      }
+      /* The name may have changed, so the person this screen is about is
+         looked up again by the id rather than by what it used to be called. */
+      const still = ok ? (Object.keys(HR().ids || {}).find(n => (HR().ids || {})[n] === now.id) || who) : who;
+      state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false,
+                  done: ok ? 'Saved.' : ''};
+      render(); }; }
   document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
   document.querySelectorAll('.refin.masked').forEach(el => {
     const k = el.dataset.pf;
@@ -9900,20 +10142,6 @@ function render(){
     if(key in state.edit.draft) delete state.edit.draft[key];
     else state.edit.draft[key] = 'x';
     render(); });
-  const mvw=document.getElementById('mvWho'); if(mvw) mvw.onchange=()=>{
-    state.mvWho=mvw.value; state.mvDept=null; state.mvDone=''; render(); };
-  const mvd=document.getElementById('mvDept'); if(mvd) mvd.oninput=()=>{
-    state.mvDept=mvd.value; const at=mvd.selectionStart; render();
-    const e2=document.getElementById('mvDept'); if(e2){ e2.focus(); e2.setSelectionRange(at,at); } };
-  const mvs=document.getElementById('mvSave'); if(mvs) mvs.onclick=async ()=>{
-    const who=state.mvWho, to=String(state.mvDept===null?orgDeptOf(who):state.mvDept).trim();
-    if(!who) return;
-    state.mvBusy=true; render();
-    const ok=await window.__db.setDepartment(who, to);
-    state.mvBusy=false;
-    if(ok){ state.mvDept=null; state.mvDone=NM(who); }
-    render();
-  };
   const exw=document.getElementById('exWho'); if(exw) exw.onchange=()=>{ state.exitWho=exw.value; render(); };
   const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; state.exitSettle=''; render(); };
   const exs=document.getElementById('exSettle'); if(exs) exs.onchange=()=>{ state.exitSettle=exs.value; render(); };
@@ -10601,8 +10829,8 @@ document.querySelectorAll('#themeSeg button').forEach(b=>b.onclick=()=>setTheme(
 document.getElementById('signout').onclick = ()=>window.__db.signOut();
 window.render = render;
 window.addEventListener('hashchange', () => { readHash(); render(); });
-readHash();
-render();
+/* The first paint happens at the very foot of this file, not here — see the
+   note there. Moving it cost nothing and stopped a deep link throwing. */
 
 let _rt, _wasPhone = MOBILE();
 window.addEventListener('resize',()=>{clearTimeout(_rt);_rt=setTimeout(()=>{
@@ -11107,3 +11335,9 @@ function openSlipFor(row, run){
   showSlip(slipHTML(s), nm(row.portalName || row.name),
            (DATA.payroll.label[row.company] || row.company) + ' \u00b7 ' + s.period);
 }
+
+/* The whole file is now defined, so the portal can be drawn. This has to stay
+   the last thing here: anything below it is a const the first paint cannot
+   see. */
+readHash();
+render();

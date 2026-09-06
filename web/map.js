@@ -83,10 +83,17 @@ export function buildData(db, meId){
     // — have something to name them by that a rename cannot break. It is never
     // printed: checkscreens fails the build if a UUID reaches a screen.
     ids:{}, joined:{}, probation:{}, revisions:[], ref:{},
+    staffNo:{}, visaCo:{}, signedIn:{},
     // the rules that decide who counts as sales. Empty here reads as "nobody
     // qualifies", which is why these must come from settings, not a placeholder.
     revDept:     S.rev_dept     || {},
-    salesExtra:  S.sales_extra  || {},
+    /* Who is treated as sales staff whatever their department says. It was a
+       settings blob keyed by full name, which would orphan itself the first
+       time Staff Records corrected somebody's spelling; it is a row keyed by
+       the person now. The shape here is unchanged, so every reader is. */
+    salesExtra:  Object.fromEntries((db.sales_members || [])
+                   .map(m => [name(m.employee_id), {co: m.company, dept: m.department}])
+                   .filter(([n]) => n)),
     salesSecond: S.sales_second || {},
     partners:    S.partners     || [],
     noGratuity:  S.no_gratuity  || [],
@@ -120,6 +127,15 @@ export function buildData(db, meId){
        that reads it falls back to 'salaried' rather than to nothing. */
     hr.payBasis[n] = e.payroll_basis || 'salaried';
     if(e.paid_by) hr.paidBy[n] = e.paid_by;
+    /* Staff Records edits these three, so they have to arrive as themselves
+       rather than as a code borrowed off a payroll line — a person with no
+       line this month has none. */
+    set(hr.staffNo, n, e.staff_no);
+    set(hr.visaCo,  n, e.visa_company);
+    /* Whether they have ever signed in. correct_joining refuses to move the
+       work address of somebody who has, and the screen has to say so before
+       they type rather than after they press Save. */
+    if(e.auth_user_id) hr.signedIn[n] = true;
     if(e.last_day) hr.left[n] = e.last_day;
     if(e.no_leave)      hr.noLeave.push(n);
     if(e.works_remote)  hr.remote.push(n);
