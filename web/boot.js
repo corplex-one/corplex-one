@@ -96,6 +96,7 @@ const TABLES = {
   company_docs:     ['company_docs'],
   exits:            ['exits'],
   exit_lines:       ['exit_lines'],
+  spells:           ['service_spells'],
   tickets:          ['ticket_entitlements'],
   ticket_history:   ['ticket_history'],
   sales_invoices:   ['sales_invoices'],
@@ -1256,6 +1257,25 @@ window.__db = {
     }catch(e){ oops(e, 'Marking it paid'); await reload(); return null; }
   },
 
+  /* Closing one spell of employment and opening the next on new terms. The
+     database refuses unless the settlement for the closed spell has been paid,
+     so the error a person sees here is the one it raises, in its words. */
+  async restartRecord(p){
+    try{
+      const id = this.empId(p.who);
+      if(!id) throw new Error(p.who + ' is not on the staff list');
+      const {data, error} = await sb.rpc('restart_record', {
+        p_emp: id, p_doj: p.doj, p_basis: p.basis,
+        p_basic: p.basic === '' || p.basic === undefined ? null : Number(p.basic),
+        p_allowance: p.allowance === '' || p.allowance === undefined ? null : Number(p.allowance),
+        p_works_remote: p.remote === undefined ? null : !!p.remote,
+        p_note: p.note || null});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'Starting the record again'); await reload(); return null; }
+  },
+
   /* Saving a whole table at once, having been shown what will change.
    *
    * Avin: 'I am finding this risky... Imagine leave balance increased by a
@@ -1349,12 +1369,19 @@ window.__db = {
   async setCarried(map, asAt){
     const day = asAt || '2026-08-31';
     const jobs = [];
+    /* A person whose record was started again carries their own opening date —
+       the day the fresh record began. Typing a figure for them changes the
+       figure and leaves that date alone; moving it back to the policy date
+       would reopen the leave of a spell that has already been settled. */
+    const bal = (window.__DATA && window.__DATA.hr && window.__DATA.hr.balances) || {};
     for(const [who, v] of Object.entries(map)){
       const id = this.empId(who);
       if(!id){ oops(new Error(who + ' is not in the staff list'), 'Carried-forward leave'); return null; }
       const set = String(v).trim() !== '';
+      const mine = (bal[who] || {}).openAt || '';
       jobs.push(() => sb.from('leave_opening').upsert(
-        {employee_id: id, as_at: day, carried: set ? Number(v) || 0 : 0, carried_set: set},
+        {employee_id: id, as_at: mine && mine > day ? mine : day,
+         carried: set ? Number(v) || 0 : 0, carried_set: set},
         {onConflict: 'employee_id'}));
     }
     return this.saveAll('Carried-forward leave', jobs);

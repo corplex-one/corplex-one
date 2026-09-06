@@ -858,7 +858,9 @@ function celebsWithin(fromISO, days){
    date itself - not on completion of the month. The balances Avin typed in are the
    balance as it stood on 31 Aug 2026, with every earlier accrual and every day taken
    already inside them, so the portal only adds what has happened since. */
-const OPENAT = () => (HR().leavePolicy || {}).openingAt || '2026-08-31';
+const OPENAT = u => { const d = (HR().leavePolicy || {}).openingAt || '2026-08-31';
+  const own = ((HR().balances || {})[u] || {}).openAt || '';
+  return own && own > d ? own : d; };
 
 /* ---------- one way to change anything in the console ----------
  *
@@ -1138,7 +1140,7 @@ function leaveBal(u){
   } else {
     return {carried: b.carried||0, carriedSet:!!b.carriedSet, accrued:0, taken:0, booked:
       HR().requests.filter(r=>r.who===u && r.status==='Pending').reduce((s,r)=>s+r.days,0),
-      pendDays:0, monthsIn:0, credits:[], openAt:OPENAT(), next:'',
+      pendDays:0, monthsIn:0, credits:[], openAt:OPENAT(u), next:'',
       yearNo:null, yearStart:'', yearEnd:'', doj:'', left: b.carried||0, noDoj:true, policy:P};
   }
   /* Two live buckets. Days earned in a leave year may be used until the end of the
@@ -1146,7 +1148,7 @@ function leaveBal(u){
      the year boundary. The balances on file are one number, so they are split at the
      opening date: what this leave year has credited so far is the new bucket, the
      rest is last year's remainder, due to expire at the next anniversary. */
-  const open = OPENAT(), rate = P.accrualPerMonth;
+  const open = OPENAT(u), rate = P.accrualPerMonth;
   const openYS = leaveYearStart(j, open);
   const openThisYear = accrualDates(j, subDay(openYS), open).length * rate;
   let cur = Math.round(Math.min(openThisYear, Math.max(b.carried||0, 0)) * 100)/100;
@@ -3810,7 +3812,7 @@ function vExitOne(x){
         and ${nm(x.who)} is on the payroll as normal. <b>Discard this draft</b> clears it \u2014 which is what to
         press after working a settlement out for somebody who then stays, or for somebody who only wanted to
         see the number.</p>` : ''}
-      ${isAcc && st==='paid' ? '<p class="cap" style="padding:14px 0 0">Paid and closed. Nothing further to do.</p>' : ''}
+      ${isAcc && st==='paid' ? freshBox(x) : ''}
     </div>
   </section>
 
@@ -7452,6 +7454,107 @@ function payrollRowFor(user){
 }
 /* A salary revision letter lives with the other letters, but the payslip is where
    someone looks when their pay changes - so it is pointed to from here. */
+/* The panel under a paid settlement. Plain concatenation rather than nested
+   templates: three levels deep is where the escaping stops being readable. */
+function freshBox(x){
+  const open = state.frOpen === x.id;
+  const was  = (HR().joined || {})[x.who] || '';
+  const wasB = (HR().payBasis || {})[x.who] || 'salaried';
+  const BAS  = {salaried:'a fixed salary', commission:'commission only',
+                off:'not on the payroll', director:'a director'};
+  if(!open) return '<p class="cap" style="padding:14px 0 0">Paid and closed.'
+    + ' If ' + nm(x.who) + ' is staying on new terms &mdash; moving onto a salary, say &mdash;'
+    + ' their record can be started again from here.</p>'
+    + '<div class="btns" style="margin-top:12px">'
+    + '<button class="btn ghost" data-frnew="' + esc(x.id) + '" type="button">Start a fresh record</button></div>';
+
+  const doj  = state.frDoj || addDay(x.lastDay);
+  const bas  = state.frBasis || 'salaried';
+  const sal  = bas === 'salaried' || bas === 'director';
+  const bsc  = state.frBasic === undefined ? '' : state.frBasic;
+  const alw  = state.frAll   === undefined ? '' : state.frAll;
+  const rem  = state.frRemote === 'yes' ? 'yes' : 'no';
+  const ready = doj > x.lastDay && (!sal || +bsc > 0);
+
+  const opt = (v, t) => '<option value="' + v + '"' + (bas === v ? ' selected' : '') + '>' + t + '</option>';
+  const form = '<div class="jform g3" style="margin-top:6px">'
+    + '<label><span>Starts on</span><input type="date" id="frDoj" value="' + esc(doj) + '"></label>'
+    + '<label><span>How they are paid</span><select id="frBasis">'
+      + opt('salaried', 'A fixed salary') + opt('commission', 'Commission only, no fixed salary')
+      + opt('director', 'A director') + opt('off', 'Not on the payroll') + '</select></label>'
+    + '<label><span>Based</span><select id="frRem">'
+      + '<option value="no"' + (rem === 'no' ? ' selected' : '') + '>In the office</option>'
+      + '<option value="yes"' + (rem === 'yes' ? ' selected' : '') + '>Works remotely</option></select></label>'
+    + '<label><span>Basic (AED)</span><input id="frBasic" inputmode="decimal" value="' + esc(bsc) + '"'
+      + (sal ? '' : ' disabled') + '></label>'
+    + '<label><span>Other allowance</span><input id="frAll" inputmode="decimal" value="' + esc(alw) + '"'
+      + (sal ? '' : ' disabled') + '></label>'
+    + '<label><span>Note (optional)</span><input id="frNote" placeholder="why the terms changed" value="'
+      + esc(state.frNote || '') + '"></label>'
+    + '</div>';
+
+  const rows = [
+    ['What closes', (was ? dayLabel(was) + ' ' + was.slice(0,4) : 'their joining date')
+      + ' to ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4)
+      + ', on ' + (BAS[wasB] || wasB) + ' &mdash; settled and paid'
+      + (x.paidOn ? ' on ' + dayLabel(x.paidOn) + ' ' + x.paidOn.slice(0,4) : '')],
+    ['What opens', dayLabel(doj) + ' ' + doj.slice(0,4) + ', on ' + (BAS[bas] || bas)
+      + (sal && +bsc > 0 ? ' &mdash; basic ' + money(+bsc, 2)
+          + (+alw > 0 ? ', allowance ' + money(+alw, 2) : '') : '')
+      + (rem === 'yes' ? ', working remotely' : '')],
+    /* What the old spell accrued is not the same question as what the new one
+       will: somebody coming off commission had no basic, so there was nothing
+       to accrue on and the settlement rightly paid nought. Saying 'it has been
+       paid' there would read as though something had been. */
+    ['Gratuity', (sal && +bsc > 0
+      ? 'starts accruing again from ' + dayLabel(doj) + ' ' + doj.slice(0,4) + '. '
+      : 'none accrues on the new terms &mdash; there is no basic to accrue on. ')
+      + (wasB === 'salaried' || wasB === 'director'
+         ? 'What was owed for the spell that closed was paid on the settlement.'
+         : 'Nothing accrued on the spell that closed either, because there was no basic on it.')],
+    ['Air ticket', rem === 'yes' || bas === 'commission' || bas === 'off' || bas === 'director'
+      ? 'not on the scheme on these terms.'
+      : 'starts again from ' + dayLabel(doj) + ' ' + doj.slice(0,4)
+        + ', so the first one falls due in eleven months.'],
+    ['Leave', 'starts at nothing on ' + dayLabel(doj) + ' ' + doj.slice(0,4)
+      + '. Whatever was left was encashed on the settlement.'],
+    ['Payslips to ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4),
+      'stay with accounts. ' + nm(x.who) + ' will not see them on My payslip.'],
+    ['What does not move', 'their sign-in and password, anybody reporting to them, '
+      + 'their documents, their attendance and their sales history.']
+  ];
+  const list = '<div class="edconf" style="margin-top:16px"><h4>Starting '
+    + esc(nm(x.who)) + '&rsquo;s record again does this</h4>'
+    + '<table class="edtab"><tbody>'
+    + rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('')
+    + '</tbody></table>'
+    + '<div class="edconfb">'
+    + '<button class="btn" data-frgo="' + esc(x.id) + '" type="button"'
+      + (ready ? '' : ' disabled') + '>Start the record</button>'
+    + '<button class="btn ghost" data-frback="1" type="button">Back to the form</button>'
+    + '<span>Nothing has been written yet. <b>Back to the form</b> returns you to it '
+    + 'with what you typed still on it.</span>'
+    + '</div></div>';
+
+  const bad = doj <= x.lastDay
+    ? 'It has to start after ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4) + '.'
+    : (sal && !(+bsc > 0) ? 'A salaried record needs a basic \u2014 nothing accrues for the gratuity without one.' : '');
+
+  return '<div class="frbox">'
+    + '<h4>Start a fresh record</h4>'
+    + '<p class="cap">The spell that has just been settled is filed as it stands, and a new one'
+    + ' opens on the terms below. ' + nm(x.who) + ' keeps their sign-in, and everything that points'
+    + ' at them &mdash; reports, documents, invoices &mdash; stays where it is.</p>'
+    + form
+    + '<p class="cap frbad" id="frBad" style="color:var(--bad)"' + (bad ? '' : ' hidden') + '>'
+      + (bad || '') + '</p>'
+    + (state.frOK ? list : '<div class="btns" style="margin-top:14px">'
+        + '<button class="btn" data-frsee="' + esc(x.id) + '" type="button"'
+          + (ready ? '' : ' disabled') + '>Review it</button>'
+        + '<button class="btn ghost" data-frno="1" type="button">Cancel</button></div>')
+    + '</div>';
+}
+
 function exitNote(u){
   const x = (HR().exits || []).find(y => y.who === u && !['draft','withdrawn'].includes(y.status));
   if(!x) return '';
@@ -10435,6 +10538,62 @@ function render(){
     render(); });
   document.querySelectorAll('[data-expay]').forEach(b=>b.onclick=async ()=>{
     b.disabled = true; await window.__db.decideExit(b.dataset.expay, b.dataset.mode); render(); });
+  document.querySelectorAll('[data-frnew]').forEach(b=>b.onclick=()=>{
+    state.frOpen = b.dataset.frnew; state.frOK = false;
+    state.frDoj = ''; state.frBasis = 'salaried'; state.frBasic = undefined;
+    state.frAll = undefined; state.frRemote = 'no'; state.frNote = '';
+    render(); });
+  document.querySelectorAll('[data-frno]').forEach(b=>b.onclick=()=>{
+    state.frOpen = null; state.frOK = false; render(); });
+  document.querySelectorAll('[data-frback]').forEach(b=>b.onclick=()=>{
+    state.frOK = false; render(); });
+  document.querySelectorAll('[data-frsee]').forEach(b=>b.onclick=()=>{
+    state.frOK = true; render(); });
+  /* Typing keeps the values in state, and re-enables the button in place. A
+     full re-render on every keystroke would be simpler and would take the
+     cursor out of the box you are typing in, so the one thing the form has to
+     change as you type is changed directly. */
+  const frKeep = () => {
+    const g = i => { const el = document.getElementById(i); return el ? el.value : undefined; };
+    const d = g('frDoj'); if(d !== undefined) state.frDoj = d;
+    const b = g('frBasis'); if(b !== undefined) state.frBasis = b;
+    const r = g('frRem'); if(r !== undefined) state.frRemote = r;
+    const k = g('frBasic'); if(k !== undefined) state.frBasic = k;
+    const a = g('frAll'); if(a !== undefined) state.frAll = a;
+    const n = g('frNote'); if(n !== undefined) state.frNote = n;
+    const x = (HR().exits||[]).find(y=>y.id===state.frOpen); if(!x) return;
+    const sal = (state.frBasis||'salaried') === 'salaried' || state.frBasis === 'director';
+    const doj = state.frDoj || addDay(x.lastDay);
+    const ready = doj > x.lastDay && (!sal || +(state.frBasic||0) > 0);
+    document.querySelectorAll('[data-frsee],[data-frgo]').forEach(el=>{ el.disabled = !ready; });
+    /* The reason it is not ready has to go the moment it stops being true, or
+       the form sits there telling somebody off for a box they have just filled. */
+    const w = document.getElementById('frBad'); if(!w) return;
+    const why = doj <= x.lastDay
+      ? 'It has to start after ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4) + '.'
+      : (sal && !(+(state.frBasic||0) > 0)
+         ? 'A salaried record needs a basic — nothing accrues for the gratuity without one.' : '');
+    w.innerHTML = why; w.hidden = !why;
+  };
+  ['frDoj','frBasis','frRem','frBasic','frAll','frNote'].forEach(i=>{
+    const el = document.getElementById(i); if(!el) return;
+    el.oninput = () => { frKeep(); if(i === 'frBasis' || i === 'frRem') render(); };
+    el.onchange = () => { frKeep(); render(); };
+  });
+  document.querySelectorAll('[data-frgo]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.frgo); if(!x) return;
+    b.disabled = true;
+    const sal = state.frBasis === 'salaried' || state.frBasis === 'director';
+    const out = await window.__db.restartRecord({
+      who: x.who,
+      doj: state.frDoj || addDay(x.lastDay),
+      basis: state.frBasis || 'salaried',
+      basic: sal ? state.frBasic : null,
+      allowance: sal ? state.frAll : null,
+      remote: state.frRemote === 'yes',
+      note: state.frNote || ''});
+    if(out){ state.frOpen = null; state.frOK = false; state.exitOpen = null; }
+    render(); });
   document.querySelectorAll('[data-exdone]').forEach(b=>b.onclick=async ()=>{
     b.disabled = true; await window.__db.exitPaid(b.dataset.exdone); render(); });
   document.querySelectorAll('[data-exsee]').forEach(b=>b.onclick=()=>{

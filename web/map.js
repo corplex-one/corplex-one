@@ -193,6 +193,11 @@ export function buildData(db, meId){
     hr.balances[n] = {
       carried: Number(o.carried) || 0,
       carriedSet: !!o.carried_set,
+      /* The date the figure above is a balance AS AT. It is the policy's own
+         opening date for everybody, and the day a fresh record started for
+         anybody who has one — their leave begins at nothing on that day, so
+         the year before it must not be counted against them. */
+      openAt: o.as_at ? String(o.as_at).slice(0,10) : '',
       doj: longDate(e && e.doj)
     };
     if(o.sick_used !== null && o.sick_used !== undefined)
@@ -721,6 +726,15 @@ export function buildData(db, meId){
     by: x.created_by ? name(x.created_by) : '',
     lines: exLines[x.id] || []
   })).filter(x => x.who);
+
+  /* A spell of employment that was closed and settled. The live one is on the
+     record itself; these are the ones before it, newest first, so a screen can
+     say what a joining date of last month is sitting on top of. */
+  hr.spells = (db.spells || []).map(s => ({
+    id: s.id, who: name(s.employee_id),
+    doj: String(s.doj).slice(0,10), lastDay: String(s.last_day).slice(0,10),
+    basis: s.basis || '', exit: s.exit_id || '', note: s.note || ''
+  })).filter(s => s.who).sort((a, b) => b.doj.localeCompare(a.doj));
 
   hr.letterTypes   = S.letter_types   || [];
   hr.docTypes      = S.doc_types      || [];
