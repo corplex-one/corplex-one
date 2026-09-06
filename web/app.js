@@ -1956,6 +1956,14 @@ function vPeople(){
               `<dt>${esc(x[0])}</dt><dd>${x[2] ? x[1] : esc(x[1])}</dd>`).join('')}</dl>`
           : `<p style="margin:0;color:var(--ink3)">Nothing on file yet</p>`}</div></section>`;
       const any = here.length || home.length || emg.length;
+      /* And not drawn at all for a colleague. The three of them are built
+         from the private table, which answers only the person and accounts,
+         so for anybody else they were three empty boxes saying "Nothing on
+         file yet" about a profile that might be filled to the brim — and a
+         line underneath stating it as a fact about that person to the whole
+         company. An empty box is a question in the reader's mind, and the
+         answer is not theirs to have. */
+      if(!own) return '';
       return `<div class="grid g3">
         ${panel('Where they live', 'in the UAE', here)}
         ${panel('Back home', '', home)}
