@@ -1,34 +1,29 @@
-/* The wider picture is for the few, and Team performance is for everyone.
+/* Three rungs: the Department for sales staff, the team screens for the manager.
  *
- *   'My Mistake: The department and Team leaderboard was for Me, Miraziz and
- *    Manager (Rana) only. Please revert this'                         -- Avin
+ *   'I wanted everyone to see the Department.
+ *      All employees   - Department
+ *      manager         - Team performance (without commission),
+ *                        team leaderboard, department
+ *      Me and miraziz  - everything'                                  -- Avin
  *
- * Both had been opened to every active sales employee by 0043, which handed
- * the whole sales_company row to anybody in the company — and that row is the
- * Department screen. Taking the row back is not an option, because Team
- * performance draws its department name, its net sales and its target from
- * the same place and is staying open.
+ * The message before it said 'the department and Team leaderboard was for Me,
+ * Miraziz and Manager (Rana) only', which I read as shutting the Department
+ * screen. It is the other way round. This check exists so the mistake cannot
+ * be made a third time by anybody, including me: it states the ladder as
+ * assertions and fails if a rung moves.
  *
- * So the row is split: sales_company for the few, sales_company_mine for
- * everybody, with the four things only the Department screen draws removed.
+ *   Department          every SALES employee of a company that sells —
+ *                       'All employees' meant all sales employees, asked and
+ *                       answered. Marketing, HR and Operations get no sales
+ *                       screen at all.
  *
- * What has to stay true:
+ *   Team performance    accounts, the owner, a department manager, or a named
+ *   Team leaderboard    sales lead. Both name colleagues and put figures
+ *                       beside them, so the DATA is closed to everybody else
+ *                       and not merely the tab.
  *
- *   1. the rule on sales_company is the one it had before 0043 — accounts,
- *      the owner, and the sales-viewers list, which is a LIST and not a rule
- *      about job titles (a rule about job titles is what quietly caught a
- *      fourth person, so it is asserted that no such rule is there);
- *   2. a consultant is sent no sales_company row at all;
- *   3. the narrow view carries none of the four, at either level, and is
- *      scoped to the reader's own company;
- *   4. but it still carries what Team performance and the payment request
- *      form need — department, monthly, target, dept, clients;
- *   5. on screen: Team performance stays, Department and the leaderboard go,
- *      and a typed link to either lands somewhere rather than opening it;
- *   6. Avin, Miraziz and Rana keep all three;
- *   7. Team performance still draws — a department name, a figure and more
- *      than one person in the table;
- *   8. the commission and invoice rules were not touched.
+ *   Commission          accounts and the owner, in the payload as well as on
+ *                       the screen.
  *
  *   node scripts/checkwider.mjs
  */
@@ -55,7 +50,6 @@ const T = {companies:'companies', employees:'staff_directory', private:'employee
  employee_files:'employee_files', company_docs:'company_docs', exits:'exits', exit_lines:'exit_lines',
  tickets:'ticket_entitlements', ticket_history:'ticket_history', ticket_rates:'ticket_rates',
  sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company',
- sales_company_mine:'sales_company_mine',
  sales_bands:'sales_bands', sales_uploads:'sales_uploads', sales_team:'sales_team_figures',
  sales_members:'sales_members',
  payment_requests:'payment_requests', payment_files:'payment_files'};
@@ -76,24 +70,22 @@ const ok = (what, pass, saw) => { checks++;
   fails++; console.log('  FAIL  ' + what + (saw === undefined ? '' : '  saw ' + JSON.stringify(saw))); };
 
 const who = n => json(`select coalesce(json_agg(t),'[]') from (select id,auth_user_id,full_name from employees where full_name='${n}') t`)[0];
-const AVIN = who('Avin Mascarenhas');
-const MIRA = who('Miraziz Makhamatzhanov');
-const RANA = who('Rana Amine');
-const SHOH = who('Shohruh Karimov');       // consultant, Corporate & Legal
-const ABDU = who('Abdunosir Kadirov');     // manages Accounting & Tax — a manager, and NOT one of the three
+const AVIN = who('Avin Mascarenhas');            // accounts
+const MIRA = who('Miraziz Makhamatzhanov');      // owner
+const RANA = who('Rana Amine');                  // manager, Corporate & Legal
+const SHOH = who('Shohruh Karimov');             // consultant, Corporate & Legal
+const FATI = who('Fatima Khaliqdad');            // Marketing — outside sales entirely
 
 const b = await pw.chromium.launch({executablePath: '/opt/pw-browsers/chromium'});
 async function open(name, tab){
   const U = who(name);
-  const cols = Object.entries(T);
   const D = buildData({settings: json(`select coalesce(json_agg(t),'[]') from (select key,value from settings) t`),
     ...json(`select coalesce(json_agg(t),'[]') from (select ` +
-      cols.map(([k, t]) => `(select coalesce(json_agg(x),'[]') from ${t} x) as "${k}"`).join(', ') + `) t`,
+      Object.entries(T).map(([k, t]) => `(select coalesce(json_agg(x),'[]') from ${t} x) as "${k}"`).join(', ') + `) t`,
       U.auth_user_id)[0]}, U.id);
   const p = await b.newPage({viewport: {width: 1700, height: 1200}});
   await p.route('**://fonts.*/**', x => x.abort());
-  const errs = [];
-  p.on('pageerror', e => errs.push(e.message));
+  const errs = []; p.on('pageerror', e => errs.push(e.message));
   await p.goto(O + '/index.html');
   await p.evaluate(([d, nm, r]) => { window.__DATA = d; window.__ME = nm; window.__ROLES = r; window.__saw = [];
     window.__db = new Proxy({}, {get: (_, k) => async (...a) => { window.__saw.push([String(k), ...a]); return true; }});
@@ -106,158 +98,142 @@ async function open(name, tab){
   return {p, errs, D};
 }
 const rail = p => p.evaluate(() => [...document.querySelectorAll('#nav button[data-tab]')].map(b => b.dataset.tab));
+const land = (p, id) => p.evaluate(t => { state.tab = t; render(); return state.tab; }, id);
 
-/* =============================================== 1. the rule, and its shape */
-console.log('\nthe rule on the company row');
+/* ======================= 1. the Department screen, for the sales staff */
+console.log('\nthe Department screen is for the sales staff');
 {
   const r = one(`select pg_get_expr(polqual, polrelid) from pg_policy
                   where polrelid='sales_company'::regclass and polname='read_sales_company'`);
-  ok('is exactly what it was before 0043', r === 'sees_company_sales(company)', r);
-  ok('and carries no "anybody active in this company" arm', !/employees/.test(r), r);
-  /* The rule that looks right and is not. Abdunosir manages Accounting & Tax
-     and Donia manages POA Operations; a policy keyed on the manager role
-     would hand both of them the Department screen, and neither is on Avin's
-     list of three. */
-  ok('nor a rule about job titles', !/role|manager/i.test(r), r);
+  ok('the rule lets any active person read their own company’s row', /e.active/.test(r), r);
+  ok('and the narrowed copy 0032 introduced is gone',
+     one(`select count(*) from pg_views where viewname='sales_company_mine'`) === '0');
 
-  const list = one(`select string_agg(e.full_name, ', ' order by e.full_name)
-                      from sales_viewers v join employees e on e.id=v.employee_id`);
-  ok('the sales-viewers list is the three, by name',
-     list === 'Avin Mascarenhas, Miraziz Makhamatzhanov, Rana Amine', list);
-}
-
-/* ================================================= 2. who is sent what */
-console.log('\nwho is sent the whole row');
-{
   const rows = u => +one(`select count(*) from sales_company`, u);
-  ok('Avin — the whole row',   rows(AVIN.auth_user_id) > 0, rows(AVIN.auth_user_id));
-  ok('Miraziz — the whole row', rows(MIRA.auth_user_id) > 0, rows(MIRA.auth_user_id));
-  ok('Rana — the whole row',   rows(RANA.auth_user_id) > 0, rows(RANA.auth_user_id));
-  ok('a consultant — none at all', rows(SHOH.auth_user_id) === 0, rows(SHOH.auth_user_id));
-  ok('a department manager who is not on the list — none either',
-     rows(ABDU.auth_user_id) === 0, rows(ABDU.auth_user_id));
+  ok('a consultant is sent it', rows(SHOH.auth_user_id) > 0, rows(SHOH.auth_user_id));
+  ok('and so is the manager', rows(RANA.auth_user_id) > 0);
+
+  {
+    const {p, errs} = await open('Shohruh Karimov', 'company');
+    const tabs = await rail(p);
+    ok('a consultant has the Department tab', tabs.includes('company'), tabs);
+    ok('the screen draws for them',
+       await p.evaluate(() => document.querySelectorAll('#view .panel').length) > 1);
+    ok('no page errors', !errs.length, errs[0]);
+    await p.close();
+  }
+  /* 'All employees' turned out to mean all SALES employees — asked, and
+     answered 'I meant sales staff'. So somebody in Marketing gets no sales
+     screen at all, and this is the line that keeps it that way. */
+  {
+    const {p, errs} = await open('Fatima Khaliqdad', 'home');
+    const tabs = await rail(p);
+    ok('somebody outside sales has no Department tab', !tabs.includes('company'), tabs);
+    ok('nor any of the sales screens',
+       !['dashboard','commission','invoices','team','leaderboard'].some(t => tabs.includes(t)), tabs);
+    ok('and a typed link to it lands on home',
+       (await land(p, 'company')) === 'home');
+    ok('no page errors', !errs.length, errs[0]);
+    await p.close();
+  }
 }
 
-/* ============================================ 3. what the narrow one drops */
-console.log('\nthe narrow row');
+/* ================== 2. the two screens that name colleagues stop at manager */
+console.log('\nthe team screens stop at the manager');
 {
-  const keys = u => json(`select coalesce(json_agg(k),'[]') from (
-      select distinct jsonb_object_keys(figures) as k from sales_company_mine) t`, u);
-  const atKeys = u => json(`select coalesce(json_agg(k),'[]') from (
-      select distinct jsonb_object_keys(figures->'atDept') as k from sales_company_mine
-       where jsonb_typeof(figures->'atDept')='object') t`, u);
-  const GONE = ['topClients', 'clientCount', 'statusMix', 'typeMonthly'];
-  const KEPT = ['department', 'monthly', 'target', 'dept', 'clients', 'totals'];
+  const peers = u => +one(`select count(distinct employee_id) from sales_team_figures`, u);
+  ok('a consultant is sent no roster at all', peers(SHOH.auth_user_id) === 0, peers(SHOH.auth_user_id));
+  ok('nor is anybody outside sales', peers(FATI.auth_user_id) === 0, peers(FATI.auth_user_id));
+  ok('the manager is', peers(RANA.auth_user_id) > 1, peers(RANA.auth_user_id));
+  /* Accounts and the owner do not read this view — they read sales_commission
+     itself, which is how they still see the commission columns. The view is
+     the narrower window the manager gets instead, so a count of one for Avin
+     (nobody else is in HR & Finance) says nothing about his screens. */
+  ok('accounts reads the table itself rather than the view',
+     +one(`select count(distinct employee_id) from sales_commission`, AVIN.auth_user_id) > 1);
 
-  const k = keys(SHOH.auth_user_id);
-  ok('a consultant is sent it at all', k.length > 0, k.length);
-  GONE.forEach(g => ok(`${g} is not in it`, !k.includes(g), k));
-  KEPT.forEach(g => ok(`${g} still is — Team performance and the payment form need it`, k.includes(g), k));
-
-  const a = atKeys(SHOH.auth_user_id);
-  ok('and the Accounting & Tax half is cut the same way',
-     a.length > 0 && !GONE.some(g => a.includes(g)), a);
-
-  ok('it is their own company only',
-     one(`select coalesce(string_agg(distinct company, ','), 'none') from sales_company_mine`, SHOH.auth_user_id) === 'corplex',
-     one(`select coalesce(string_agg(distinct company, ','), 'none') from sales_company_mine`, SHOH.auth_user_id));
-  ok('somebody signed out of everything gets nothing from it',
-     one(`select count(*) from sales_company_mine`, '00000000-0000-0000-0000-000000000000') === '0');
-}
-
-/* ====================================================== 4. and on the screen */
-console.log('\nthe rail');
-{
-  const {p, errs, D} = await open('Shohruh Karimov', 'team');
+  const {p, errs} = await open('Shohruh Karimov', 'dashboard');
   const tabs = await rail(p);
-  ok('a consultant keeps Team performance', tabs.includes('team'), tabs);
-  ok('and loses Team leaderboard', !tabs.includes('leaderboard'), tabs);
-  ok('and loses Department', !tabs.includes('company'), tabs);
+  ok('a consultant has no Team performance', !tabs.includes('team'), tabs);
+  ok('and no Team leaderboard', !tabs.includes('leaderboard'), tabs);
   ok('their own three are untouched',
      ['dashboard', 'commission', 'invoices'].every(t => tabs.includes(t)), tabs);
-  ok('the gate reads the database rather than a job title', D.fullFigures === false, D.fullFigures);
-
-  /* A tab that is gone from the rail and still opens on a typed link is not
-     gone. Both are tried the way somebody would arrive at them. */
-  for(const t of ['company', 'leaderboard']){
-    const landed = await p.evaluate(id => { state.tab = id; render(); return state.tab; }, t);
-    ok(`#${t} typed in refuses and lands on home`, landed === 'home', landed);
-  }
-  await p.close();
-}
-
-console.log('\nTeam performance still works for them');
-{
-  const {p, errs} = await open('Shohruh Karimov', 'team');
-  const r = await p.evaluate(() => ({
-    dept: (document.querySelector('#view .strip .stat .k') || {}).textContent || '',
-    net: (document.querySelector('#view .strip .stat .v') || {}).textContent || '',
-    rows: document.querySelectorAll('#view .teamtab tbody tr').length,
-    heads: [...document.querySelectorAll('#view .teamtab thead th')].map(t => t.textContent.trim())
-  }));
-  ok('the hero still names the department', /Corporate|Accounting/.test(r.dept), r.dept);
-  ok('and still carries a figure', /[1-9]/.test(r.net), r.net);
-  ok('and there is a team in the table', r.rows > 1, r.rows);
-  ok('with no commission column in it',
-     !r.heads.some(h => /Commission|Paid|Balance/.test(h)), r.heads);
+  for(const t of ['team', 'leaderboard'])
+    ok(`#${t} typed in refuses and lands on home`, (await land(p, t)) === 'home');
   ok('no page errors', !errs.length, errs[0]);
   await p.close();
 }
 
-console.log('\nthe payment request form still knows the clients');
+console.log('\nthe manager has all three');
 {
-  const {p, errs} = await open('Shohruh Karimov', 'payment');
-  /* A typeahead, not a picker: two letters of a client already on the book
-     have to come back with the client. This is the one screen outside the
-     sales section that reads the client list, which is why the narrow row
-     keeps it. */
-  const r = await p.evaluate(() => {
-    const names = Object.keys(DATA.clients || {});
-    const inp = document.getElementById('pqClient');
-    if(!inp || !names.length) return {names: names.length, hits: 0};
-    inp.value = names[0].slice(0, 3);
-    pqList();
-    return {names: names.length,
-            hits: document.querySelectorAll('#pqList button[data-client]').length};
-  });
-  ok('the client book reached them', r.names > 0, r.names);
-  ok('and three letters bring back a client', r.hits > 0, r);
-  ok('no page errors', !errs.length, errs[0]);
-  await p.close();
-}
-
-console.log('\nthe three still have all of it');
-for(const name of ['Avin Mascarenhas', 'Miraziz Makhamatzhanov', 'Rana Amine']){
-  const {p, errs, D} = await open(name, 'company');
+  const {p, errs, D} = await open('Rana Amine', 'team');
   const tabs = await rail(p);
-  ok(`${name.split(' ')[0]} keeps Department`, tabs.includes('company'), tabs);
-  ok(`${name.split(' ')[0]} keeps Team leaderboard`, tabs.includes('leaderboard'), tabs);
-  ok(`${name.split(' ')[0]} is sent the whole row`, D.fullFigures === true, D.fullFigures);
-  ok(`${name.split(' ')[0]} — the Department screen draws`,
-     await p.evaluate(() => document.querySelectorAll('#view .panel').length) > 1);
+  ['company', 'team', 'leaderboard'].forEach(t =>
+    ok(`Rana has ${t}`, tabs.includes(t), tabs));
+  const heads = await p.evaluate(() =>
+    [...document.querySelectorAll('#view .teamtab thead th')].map(t => t.textContent.trim()));
+  ok('Team performance draws a roster', heads.length > 0, heads);
+  ok('and has no Commission, Paid or Balance column',
+     !heads.some(h => /Commission|^Paid$|^Balance$/.test(h)), heads);
+  /* On the screen is not enough: the figures must not be in what her browser
+     was sent either. Coming off the sales-viewers list is what stops the
+     COMPANY's commission reaching her.
+
+     What is left is her own direct reports, and that is a different rule —
+     read_commission has always included manages(), which is the reporting
+     line rather than anything to do with these three screens. It predates all
+     of this and closing it is a separate decision, so it is asserted as it
+     stands rather than quietly changed: nobody outside her own reporting line
+     appears. */
+  const REPORTS = json(`select coalesce(json_agg(t),'[]') from (
+      select e.full_name from employees e where e.manager_id = '${RANA.id}') t`).map(x => x.full_name);
+  const leaked = await p.evaluate(mine => {
+    const out = [];
+    Object.entries(DATA.engine || {}).forEach(([nm, per]) => {
+      if(nm === state.user || mine.includes(nm)) return;
+      Object.values(per).forEach(y => Object.values(y).forEach(q =>
+        ['comm','paid','bal','newComm','exComm','pmComm','rate','band','lost']
+          .forEach(k => { if(q[k] !== undefined) out.push(nm + '.' + k); })));
+    });
+    return out.slice(0, 6);
+  }, REPORTS);
+  ok('and no earnings figure for anybody outside her own reporting line',
+     leaked.length === 0, leaked);
+  ok('the roster she compares is wider than her reporting line, and carries no earnings',
+     await p.evaluate(() => Object.keys(DATA.engine || {}).length) > REPORTS.length + 1);
+  ok('no page errors', !errs.length, errs[0]);
+  await p.close();
+}
+
+console.log('\nand the two of them have everything');
+for(const name of ['Avin Mascarenhas', 'Miraziz Makhamatzhanov']){
+  const {p, errs} = await open(name, 'team');
+  const tabs = await rail(p);
+  ['company', 'team', 'leaderboard'].forEach(t =>
+    ok(`${name.split(' ')[0]} has ${t}`, tabs.includes(t), tabs));
+  const heads = await p.evaluate(() =>
+    [...document.querySelectorAll('#view .teamtab thead th')].map(t => t.textContent.trim()));
+  ok(`${name.split(' ')[0]} still gets Commission, Paid and Balance`,
+     ['Commission','Paid','Balance'].every(c => heads.includes(c)), heads);
   ok(`${name.split(' ')[0]} — no page errors`, !errs.length, errs[0]);
   await p.close();
 }
 
-/* ===================================================== 5. nothing else moved */
-console.log('\nwhat was not touched');
+/* ============================================= 3. the list, and what is left */
+console.log('\nthe sales-viewers list');
 {
-  const c = one(`select pg_get_expr(polqual, polrelid) from pg_policy
-                  where polrelid='sales_commission'::regclass and polname='read_commission'`);
-  const i = one(`select pg_get_expr(polqual, polrelid) from pg_policy
-                  where polrelid='sales_invoices'::regclass and polname='read_invoices'`);
-  ok('the commission rule is unchanged', /employee_id = me\(\)/.test(c) && /manages/.test(c), c);
-  ok('the invoice rule is unchanged', /consultant = me\(\)/.test(i), i);
-  /* Coming off the viewers list narrows these two as well, which is the point
-     rather than a side effect: three people were being sent every colleague's
-     commission row and no screen ever showed it to them. */
-  ok('a consultant still cannot read a colleague’s commission',
-     +one(`select count(*) from sales_commission`, SHOH.auth_user_id) > 0
-     && +one(`select count(distinct employee_id) from sales_commission`, SHOH.auth_user_id) === 1,
-     one(`select count(distinct employee_id) from sales_commission`, SHOH.auth_user_id));
-  ok('and the team view still gives them their colleagues, without it',
-     +one(`select count(distinct employee_id) from sales_team_figures`, SHOH.auth_user_id) > 1,
-     one(`select count(distinct employee_id) from sales_team_figures`, SHOH.auth_user_id));
+  const list = one(`select coalesce(string_agg(e.full_name, ', ' order by e.full_name), 'nobody')
+                      from sales_viewers v join employees e on e.id=v.employee_id`);
+  /* Anybody on it is sent every colleague's commission and invoice rows.
+     Accounts and the owner have that through is_admin() anyway; nobody else
+     should be on it, or 'without commission' is untrue of the payload. */
+  ok('holds only accounts and the owner, if anybody',
+     list === 'nobody' || list === 'Avin Mascarenhas, Miraziz Makhamatzhanov', list);
+  ok('a consultant still reads only their own commission rows',
+     +one(`select count(distinct employee_id) from sales_commission`, SHOH.auth_user_id) === 1);
+  ok('and the manager reads her own and her reports’, not the company’s',
+     +one(`select count(distinct employee_id) from sales_commission`, RANA.auth_user_id)
+     < +one(`select count(distinct employee_id) from sales_commission`, AVIN.auth_user_id));
 }
 
 await b.close(); server.close();

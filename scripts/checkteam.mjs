@@ -25,13 +25,16 @@
  *
  *   2. THE SCOPE IS THE DEPARTMENT. Not the company, not everybody.
  *
- *   3. THE SCREENS WORK. A consultant gets the roster and the nine columns. A
+ *   3. THE SCREENS WORK. The manager gets the roster and the nine columns. A
  *      check that only proves nothing leaked would pass on a blank page.
  *
- *      The leaderboard was here too, until Avin said it was his mistake and
- *      that the ranking and the Department screen were for three people only.
- *      Both are now checked as CLOSED for a consultant, at the rail and at
- *      the link. checkwider.mjs proves the rest of that change.
+ *      Who the reader is has moved twice. It was every sales employee; then I
+ *      misread 'the department and Team leaderboard was for Me, Miraziz and
+ *      Manager (Rana) only' as shutting the Department screen. Avin's answer
+ *      settles it: the Department screen is for EVERYONE, and these two are
+ *      for manager and above. So the roster tests are asked of the manager,
+ *      and a consultant is checked as having neither — while still having the
+ *      Department screen. checkwider.mjs holds the whole ladder.
  *
  *   4. ACCOUNTS LOST NOTHING. Commission, Paid and Balance are still there
  *      for the two people who are meant to have them.
@@ -65,7 +68,7 @@ const T = {companies:'companies', employees:'staff_directory', private:'employee
  gratuity_rows:'gratuity_rows', gratuity_basic:'gratuity_basic', loans:'loans', letters:'letters',
  employee_files:'employee_files', company_docs:'company_docs', exits:'exits', exit_lines:'exit_lines',
  tickets:'ticket_entitlements', ticket_history:'ticket_history', ticket_rates:'ticket_rates',
- sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company', sales_company_mine:'sales_company_mine',
+ sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company',
  sales_bands:'sales_bands', sales_uploads:'sales_uploads', sales_team:'sales_team_figures',
  payment_requests:'payment_requests', payment_files:'payment_files'};
 
@@ -78,18 +81,45 @@ const ok = (what, pass, saw) => { n++;
 const who = nm => json(`select coalesce(json_agg(t),'[]') from (select id, auth_user_id, full_name, department
   from employees where full_name = '${nm}') t`)[0];
 const AVIN = who('Avin Mascarenhas');
-/* A consultant: sales figures of their own, no role above staff. */
-const CON = json(`select coalesce(json_agg(t),'[]') from (
+/* THE VIEW'S READER IS NOW THE MANAGER, NOT THE CONSULTANT.
+ *
+ *   'All employees - Department / manager - Team performance (without
+ *    commission), team leaderboard, department'                      -- Avin
+ *
+ * These two screens name colleagues and put figures beside each name, so they
+ * stop at manager. Everything this file was already asserting still has to
+ * hold — it just has to hold about her: she gets the roster, and not one
+ * figure of what anybody earned comes with it. */
+const MGR = json(`select coalesce(json_agg(t),'[]') from (
   select e.id, e.auth_user_id, e.full_name, e.department from employees e
    where e.active and e.auth_user_id is not null
      and e.department is not null and e.department <> ''
+     and exists (select 1 from employee_roles r where r.employee_id = e.id and r.role = 'manager')
+     and not exists (select 1 from employee_roles r where r.employee_id = e.id
+                       and r.role in ('accounts','owner'))
+     and exists (select 1 from sales_commission c join employees x on x.id = c.employee_id
+                  where x.company = e.company and x.department = e.department)
+   -- the manager of the department that actually has a team to compare
+   order by (select count(distinct c.employee_id) from sales_commission c
+               join employees x on x.id = c.employee_id
+              where x.company = e.company and x.department = e.department) desc,
+            e.full_name
+   limit 1) t`)[0];
+const CON = MGR;
+/* And the person it is now closed to. */
+const NOB = json(`select coalesce(json_agg(t),'[]') from (
+  select e.id, e.auth_user_id, e.full_name, e.department from employees e
+   where e.active and e.auth_user_id is not null
      and exists (select 1 from sales_commission c where c.employee_id = e.id)
      and not exists (select 1 from employee_roles r where r.employee_id = e.id
                        and r.role in ('accounts','owner','manager'))
    order by e.full_name limit 1) t`)[0];
 
 console.log('\n=== 1. what the database will and will not send ===\n');
-ok('there is a consultant to test with', !!CON, CON && CON.full_name);
+ok('there is a manager to test with', !!MGR, MGR && MGR.full_name);
+ok('and a consultant it is closed to', !!NOB, NOB && NOB.full_name);
+ok('the consultant is sent no roster at all',
+   one(`select count(*) from sales_team_figures`, NOB.auth_user_id) === '0');
 
 /* The view's own shape. If a commission column is ever added to it, this is
  * the line that says so — before anybody has to notice it on a screen. */
@@ -104,7 +134,7 @@ ok('but does carry the figures the screens draw',
 
 const seen = json(`select coalesce(json_agg(t),'[]') from (
   select distinct department, company from sales_team_figures) t`, CON.auth_user_id);
-ok('a consultant reads one department through it — their own',
+ok('the manager reads one department through it — her own',
    seen.length === 1 && seen[0].department === CON.department, seen);
 ok('and more than one person in it',
    Number(one(`select count(distinct employee_id) from sales_team_figures`, CON.auth_user_id)) > 1);
@@ -122,8 +152,8 @@ ok('read_invoices is untouched',
    '((consultant = me()) OR (filed_under = me()) OR (manager = me()) OR sees_company_sales(company))',
    (pol.find(x => x.polname === 'read_invoices') || {}).rule);
 ok('and the consultant still cannot read a colleague’s commission row',
-   one(`select count(*) from sales_commission where employee_id <> '${CON.id}'`,
-       CON.auth_user_id) === '0');
+   one(`select count(*) from sales_commission where employee_id <> '${NOB.id}'`,
+       NOB.auth_user_id) === '0');
 
 // --- the screens ----------------------------------------------------------
 const TYPES = {'.html':'text/html', '.js':'text/javascript', '.png':'image/png',
@@ -170,25 +200,30 @@ console.log('\n=== 2. what reaches the browser ===\n');
 let p = await open(CON);
 
 /* THE assertion. Not 'the column is hidden' — 'the number is not there.' */
-const leak = await p.evaluate(() => {
+const REPORTS = json(`select coalesce(json_agg(t),'[]') from (
+  select full_name from employees where manager_id = '${CON.id}') t`).map(x => x.full_name);
+const leak = await p.evaluate(mine => {
   const out = [], me = state.user;
   Object.entries(DATA.engine || {}).forEach(([nm, per]) => {
-    if(nm === me) return;
+    if(nm === me || mine.includes(nm)) return;
     Object.values(per).forEach(y => Object.values(y).forEach(q =>
       ['comm','paid','bal','newComm','exComm','pmComm','rate','band','lost']
         .forEach(k => { if(q[k] !== undefined) out.push(nm + '.' + k + ' = ' + q[k]); })));
   });
   return {peers: Object.keys(DATA.engine || {}).length, leaked: out.slice(0, 8)};
-});
-ok('the consultant’s own data holds figures for the whole department',
+}, REPORTS);
+ok('the manager’s own data holds figures for the whole department',
    leak.peers > 1, leak.peers);
-ok('and not one earnings figure for anybody but themselves',
+/* Her own direct reports come through the reporting line — read_commission
+   has always included manages() — which is a different rule from these two
+   screens and predates them. Everybody else is the assertion. */
+ok('and not one earnings figure for anybody outside her own reporting line',
    leak.leaked.length === 0, leak.leaked);
 
 console.log('\n=== 3. and the screens work ===\n');
 const TEAMCOLS = ['Consultant','Role','Invoices','Invoiced','Costs','Net sales','Eligible','Not counted','Outstanding'];
 let S = await screen(p, 'team');
-ok('Team performance opens for a consultant', S.rows > 1, S.rows);
+ok('Team performance opens for the manager', S.rows > 1, S.rows);
 ok('with the nine columns and no more',
    S.cols.join('|') === TEAMCOLS.join('|'), S.cols);
 ok('and the roster is their own department',
@@ -208,13 +243,26 @@ ok('the invoice count is a real number, not a nought from unreadable rows',
  * ranks the figures the table above already shows, so it is checked at the
  * rail and at the link rather than pretended to be more. checkwider.mjs is
  * where the whole of that change is proved. */
-ok('the leaderboard is not in the rail for a consultant',
-   !(await p.evaluate(() => [...document.querySelectorAll('#nav button[data-tab]')]
+ok('the manager keeps the leaderboard',
+   (await p.evaluate(() => [...document.querySelectorAll('#nav button[data-tab]')]
        .map(x => x.dataset.tab))).includes('leaderboard'));
-ok('and a typed link does not open it',
-   (await p.evaluate(() => { state.tab = 'leaderboard'; render(); return state.tab; })) === 'home');
-ok('nor does one to the Department screen',
-   (await p.evaluate(() => { state.tab = 'company'; render(); return state.tab; })) === 'home');
+await p.close();
+
+/* And the same two questions of the person they are now closed to. The
+ * Department screen is NOT one of them: it is the screen everybody gets. */
+p = await open(NOB);
+{
+  const tabs = await p.evaluate(() => [...document.querySelectorAll('#nav button[data-tab]')]
+    .map(x => x.dataset.tab));
+  ok('a consultant has neither team screen',
+     !tabs.includes('team') && !tabs.includes('leaderboard'), tabs);
+  ok('but does have the Department screen', tabs.includes('company'), tabs);
+  for(const t of ['team', 'leaderboard'])
+    ok(`a typed link to #${t} does not open it`,
+       (await p.evaluate(id => { state.tab = id; render(); return state.tab; }, t)) === 'home');
+  ok('and one to #company does',
+     (await p.evaluate(() => { state.tab = 'company'; render(); return state.tab; })) === 'company');
+}
 await p.close();
 
 console.log('\n=== 4. accounts lost nothing ===\n');

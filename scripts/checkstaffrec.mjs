@@ -60,7 +60,7 @@ const T = {companies:'companies', employees:'staff_directory', private:'employee
  gratuity_rows:'gratuity_rows', gratuity_basic:'gratuity_basic', loans:'loans', letters:'letters',
  employee_files:'employee_files', company_docs:'company_docs', exits:'exits', exit_lines:'exit_lines',
  tickets:'ticket_entitlements', ticket_history:'ticket_history', ticket_rates:'ticket_rates',
- sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company', sales_company_mine:'sales_company_mine',
+ sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company',
  sales_bands:'sales_bands', sales_uploads:'sales_uploads', sales_team:'sales_team_figures',
  payment_requests:'payment_requests', payment_files:'payment_files', sales_members:'sales_members'};
 
@@ -554,8 +554,10 @@ console.log('\nthe tick opens the sales pages, whatever the last upload said');
   let subject = null;
   for(const c of V){
     const {p} = await open(c.full_name, {id:'home'});
-    const has = await p.evaluate(() => !!DATA.dept[state.user]);
+    const has = await p.evaluate(() => !!DATA.dept[state.user] || canSeeTeam(state.user));
     await p.close();
+    /* Not a manager either: a manager gets the team screens from her role, so
+       ticking one proves nothing about what the tick opens. */
     if(!has){ subject = c; break; }
   }
   ok('there is somebody the workbook does not name', !!subject, subject);
@@ -578,16 +580,17 @@ console.log('\nthe tick opens the sales pages, whatever the last upload said');
         nav: [...document.querySelectorAll('.rail [data-tab]')].map(x => x.textContent.trim())}));
       await p.close(); return Object.assign(r, {errs});
     })();
-    /* The tick opens the sales section: their own three screens and Team
-       performance. It does NOT open the Department screen or the leaderboard,
-       which since 0032 are the sales-viewers list and nothing else — a tick is
-       'this person sells', not 'this person may see the whole company'. */
-    ok('one tick, and the sales pages open', after.sees
-       && ['My dashboard', 'My commission', 'My invoices', 'Team performance']
+    /* The tick opens the sales section: their own three screens. It does NOT
+       open Team performance or the leaderboard, which stop at manager — a
+       tick says 'this person sells', not 'this person may see what everybody
+       else sold'. The Department screen is not evidence either way: since
+       0034 everybody has it, ticked or not. */
+    ok('one tick, and their own sales pages open', after.sees
+       && ['My dashboard', 'My commission', 'My invoices']
             .every(w => after.nav.some(x => x.includes(w))), after.nav);
-    ok('but not the Department screen or the leaderboard',
+    ok('but not the two that name colleagues',
        !after.nav.some(x => /leaderboard/i.test(x))
-       && !after.nav.some(x => /^Department$/.test(x)), after.nav);
+       && !after.nav.some(x => /Team performance/.test(x)), after.nav);
     ok('and it is the tick that did it, not the workbook', after.extra && !after.dept, after);
     ok('no page errors', !after.errs.length, after.errs[0]);
 

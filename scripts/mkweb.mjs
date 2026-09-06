@@ -17030,50 +17030,70 @@ app = swap(app,
 `          <td class="cname"\${full(r[IC.client])}>\${esc(r[IC.client])}\${r[IC.forfeit]>0?' <span class="pill bad"><span class="dt"></span>Late</span>':''}</td>`,
 'and so is the company name');
 
-/* ===================================== the wider picture, narrowed =========
+/* ===================================== who gets the wider picture ==========
  *
- *   'My Mistake: The department and Team leaderboard was for Me, Miraziz and
- *    Manager (Rana) only. Please revert this'                         -- Avin
+ *   'I wanted everyone to see the Department.
+ *      All employees        - Department
+ *      manager              - Team performance (without commission),
+ *                             team leaderboard, department
+ *      Me and miraziz       - everything'                             -- Avin
  *
- * Both had been opened to everybody the department's figures reach, which
- * since 0043 is every active sales employee.
+ * The message before this one said 'the department and Team leaderboard was
+ * for Me, Miraziz and Manager (Rana) only', and I read 'the department' as
+ * the Department screen and shut it. It is the opposite way round: the
+ * Department screen is the one thing EVERYBODY gets, and the two screens that
+ * name colleagues and rank them are the ones that stop at manager.
  *
- * The gate does NOT ask what somebody's job title is. 'Any department
- * manager' is the rule that looks right and quietly catches a fourth person —
- * there is a manager of Accounting & Tax and a manager of POA Operations, and
- * neither is on Avin's list of three. It asks instead which of the two
- * company rows the database sent: 0032 keeps sales_company for accounts, the
- * owner and the sales-viewers list, and hands everybody else
- * sales_company_mine with the four things only this screen draws taken out.
- * DATA.fullFigures is which one arrived, so the gate and the policy cannot
- * drift apart, and 'who' is a list Avin can read and change rather than a
- * rule he has to work out.
+ * So there are three rungs, and each is enforced in the database as well as
+ * on the rail, because a hidden tab is not a rule:
  *
- * Team performance is deliberately NOT touched. It was asked for separately
- * and has not been withdrawn, so it keeps the gate it has: the department's
- * figures arrived, and there is somebody in them besides you.
+ *   Department          every SALES employee of a company that sells. 'All
+ *                       employees' meant all sales employees — asked, and
+ *                       answered 'I meant sales staff'. It is commercial and
+ *                       not personal: no salary, no commission, nobody's name
+ *                       against a figure. 0034 hands the whole company row
+ *                       back and drops the narrowed copy 0032 introduced.
  *
- * The leaderboard is the honest exception. It ranks the same names and net
- * sales that Team performance puts in a table, so hiding it is a decision
- * about a page and nothing more. Said out loud rather than implied.
+ *   Team performance    manager, accounts, owner, or a named sales lead.
+ *   Team leaderboard    Both name colleagues and put figures beside them, so
+ *                       0034 closes sales_team_figures to the same people —
+ *                       a consultant is no longer sent the roster at all.
+ *
+ *   The commission columns on Team performance stay accounts and owner, as
+ *   they always were. With Rana off the sales-viewers list in 0034 they are
+ *   now absent from what her browser receives, not merely from what it draws.
+ *
+ * This reverses 'every sales employee gets Team performance', asked for on 5
+ * September. That is deliberate — this message replaces it.
  */
+app = swap(app,
+`  {id:'team',        group:'wider', label:'Team performance', title:'Team performance',
+   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+`  // Manager and above. The roster test stays underneath: a comparison needs
+  // somebody to compare with.
+  {id:'team',        group:'wider', label:'Team performance', title:'Team performance',
+   gate:u => canSeeTeam(u) && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+  'Team performance stops at the manager');
+
 app = swap(app,
 `  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
    gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
-`  // Back to the few it was for. The roster test stays underneath it: a
-  // ranking of one person is not a ranking.
-  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
-   gate:u => DATA.fullFigures && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
-  'the leaderboard is for whoever the database sends the whole company row');
+`  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
+   gate:u => canSeeTeam(u) && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+  'and so does the leaderboard');
 
-app = swap(app,
-`  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},`,
-`  // And the Department screen with it. 0032 takes the top clients, the client
-  // count, the status mix and the new/existing split out of what everybody
-  // else is sent, so the tab going is not the only thing keeping them out.
-  {id:'company',     group:'wider', label:'Department',       title:'Department',
-   gate:u => DATA.fullFigures && seesDeptSales(u)},`,
-  'and so is the Department screen');
+/* 'All employees' means all SALES employees — asked, and answered 'I meant
+   sales staff'. So Marketing, HR and Operations do not get a sales screen,
+   and the gate is the one it always was: this person is on the sales roster
+   (named by the workbook or given the sales tick) and their company sells.
+
+   Worth being straight about what this is and is not. The tab is hidden from
+   somebody outside sales; the company row itself still reaches every employee
+   of that company, because the payment request form — which everybody has —
+   is built from the client list inside it. Closing the row properly would
+   take the client typeahead off that form for anybody not in sales. */
+/* Which is the gate the source already carries, so there is nothing to swap
+   here — only the note above, so the next person does not re-open it. */
 
 /* =========================== the Department screen follows the quarter =====
  *
