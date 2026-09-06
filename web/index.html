@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609060928">
+<link rel="manifest" href="manifest.webmanifest?v=202609061147">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -680,6 +680,11 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   border-radius:var(--r) var(--r) 0 0}
 .srpanel > header h3{color:var(--c3)}
 .srpanel .srsales{margin-top:0;padding-top:0;border-top:0}
+.srelse{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:4px;
+  padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)}
+.srelse span{font-size:13px;color:var(--ink2)}
+.srelse span b{color:var(--ink);font-weight:600;margin-right:5px}
+.srelse .btn{margin-left:auto}
 .srnew{display:flex;gap:7px;align-items:center}
 .srnew input{min-width:0}
 .srnew .btn{flex:none;white-space:nowrap}
@@ -1467,7 +1472,13 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
     letter-spacing:0;color:var(--ink3);opacity:.8;font-size:9.5px;line-height:1}
   /* one kind of column stops and the next begins */
   .paytable td.rule, .paytable th.rule{border-right:1px solid var(--line)}
-  .paytable th{font-size:10px;line-height:1.25;white-space:normal;vertical-align:bottom}
+  /* The register carries more columns than any other screen, which is why its
+     headings were set at 10px. That is the size Avin was complaining about,
+     and the width argument does not hold: the headings wrap between words and
+     the table scrolls inside .tw, so the cost of reading them is one taller
+     header row, not a wider table. */
+  .paytable th{font-size:12.5px;line-height:1.25;white-space:normal;vertical-align:bottom}
+  .paytable .autoc{font-size:10.5px}
   .paytable td, .paytable th{padding-left:6px;padding-right:6px}
   /* The register's headings wrap between words rather than being cut. They
      inherit nowrap and a 36px line-height from .invtable, which is right for
@@ -2049,8 +2060,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609060928';</script>
-<script src="config.js?v=202609060928"></script>
-<script type="module" src="boot.js?v=202609060928"></script>
+<script>window.__BUILD = '202609061147';</script>
+<script src="config.js?v=202609061147"></script>
+<script type="module" src="boot.js?v=202609061147"></script>
 </body>
 </html>

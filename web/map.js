@@ -741,7 +741,10 @@ export function buildData(db, meId){
       standard: !!r.standard})).sort((a, b) => a.country.localeCompare(b.country)),
     ratesArePlaceholder: !!tp.placeholder,
     paid: [], due: [], upcoming: [], backlogLapses: [], lastRun: '',
-    excluded: S.ticket_excluded || [],
+    /* Was a list in settings, kept by hand and keyed by name. Everybody off
+       the scheme now carries the reason on their own entitlement, which is
+       what the screen reads — see migration 0026. */
+    excluded: [],
     // what each person has already had, keyed by staff number the way the
     // screen reads it
     history: (() => {

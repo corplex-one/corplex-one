@@ -763,6 +763,9 @@ window.__db = {
         p_paid_by: p.paidBy || null, p_legal_name: p.legal || null,
         p_manager: p.manager || null, p_shift: p.shift || 'S2',
         p_country: p.country || null, p_ticket_rate: p.rate || null,
+        // A remote or commission joiner never gets an entitlement created, so
+        // there is nothing to take away from them afterwards.
+        p_works_remote: p.remote === 'remote' || p.remote === true,
         // Left blank, the database picks the next in the series — which is the
         // only place that knows where the series has got to, leavers included.
         p_staff_no: p.staffNo || null});
@@ -1290,7 +1293,11 @@ window.__db = {
         p_title: r.title ?? null, p_department: r.department ?? null,
         p_company: r.company ?? null, p_visa_company: r.visa ?? null,
         p_paid_by: r.paidBy ?? null, p_shift: r.shift ?? null,
-        p_manager: r.manager ?? null, p_staff_no: r.staffNo ?? null});
+        p_manager: r.manager ?? null, p_staff_no: r.staffNo ?? null,
+        /* Null means leave it alone; only a real change is sent, so saving
+           somebody's phone number cannot quietly move them off remote. The
+           database starts or stops the air ticket to match. */
+        p_works_remote: r.remote ?? null});
       if(error) throw error;
       await reload();
       return data;

@@ -55,7 +55,23 @@ const seesDeptSales = u => (!!DATA.dept[u] || !!SALESEXTRA(u)) && companyOf(u).s
 const hasOwnSales = u => !!(DATA.engine || {})[u];
 const inSales = u => seesDeptSales(u) || hasOwnSales(u);
 const isPartner = u => (HR().partners||[]).includes(u);
-const noGratuity = u => (HR().noGratuity||[]).includes(u);
+/* Gratuity accrues on the basic, so no basic is no gratuity — it is the
+   arithmetic rather than a rule, which is why the list was decoration. This
+   reads the salary actually on file, not the figure inferred from a payroll
+   line, so it answers the same as the database. */
+const noGratuity = u => !(((DATA.master || {}).parts || {})[u] || {}).basic;
+/* Why somebody is off the air ticket scheme, or '' if they are on it. The same
+   four tests as ticket_reason() in the database, in the same order, so the
+   screen and the record cannot give different answers. */
+const tkReason = u => {
+  const e = USERS.find(x => x.name === u);
+  if(e && e.left) return 'Left the firm';
+  if(isRemote(u)) return 'Works remotely';
+  const b = BASISOF(u);
+  return b === 'commission' ? 'Commission only'
+       : b === 'director'   ? 'Director'
+       : b === 'off'        ? 'Not on payroll' : '';
+};
 /* What a person wants to be called. Every record in the portal shows this once they
    set it; payslips, salary certificates and letters keep the name on the visa,
    because those are legal documents and a bank or an embassy has to match them. */
@@ -6957,7 +6973,7 @@ function vTickets(){
     const c=(typeof av==='number'&&typeof bv==='number')?av-bv:String(av||'￿').localeCompare(String(bv||'￿'));
     return c*so.dir;
   });
-  const active = all.filter(r=>!r.lwd && r.status!=='Remote — not eligible');
+  const active = all.filter(r=>!r.lwd && r.status!=='Not in the scheme');
   const due = all.filter(r=>r.status==='Due This Month');
   const dueVal = due.reduce((s,r)=>s+r.rate,0);
   const backlog = all.reduce((s,r)=>s+r.backlog,0);
@@ -7068,7 +7084,7 @@ function vTickets(){
     <header><h3>Entitlement register</h3><span class="pill mute">as at ${esc(T.asOf)}</span>
       <span style="margin-left:auto;color:var(--ink3);font-size:12.5px">${rows.length} of ${all.length} people</span></header>
     <div class="filterbar">
-      ${sel('atst', f.status, [['all','All statuses'],['Due This Month','Due this month'],['Upcoming','Upcoming'],['Remote — not eligible','Not eligible'],['Left - no further tickets','Left the firm']])}
+      ${sel('atst', f.status, [['all','All statuses'],['Due This Month','Due this month'],['Upcoming','Upcoming'],['Not in the scheme','Not in the scheme'],['Left - no further tickets','Left the firm']])}
       ${sel('atco', f.country, [['all','All countries']].concat(uniqC.map(c=>[c,c])))}
       <input id="attext" class="ff" placeholder="Search name, employee ID, country" value="${esc(f.text)}">
       <button class="btn ghost fclear${act?'':' off'}" id="atclear" type="button">Clear${act?' ('+act+')':''}</button>
@@ -7129,9 +7145,7 @@ function vTickets(){
       <header><h3>Not in the scheme</h3><span class="hint">on payroll, no entitlement accruing</span></header>
       <div class="tw"><table>
         <thead><tr><th>Name</th><th>Why</th></tr></thead>
-        <tbody>${(T.excluded||[]).map(e=>`<tr><td class="nw">${nm(e.name)}</td>
-          <td style="color:var(--ink2)">${esc(e.why)}</td></tr>`).join('')}
-          ${all.filter(r=>r.note).map(r=>`<tr><td class="nw">${nm(r.name)}</td>
+        <tbody>${all.filter(r=>r.note).map(r=>`<tr><td class="nw">${nm(r.name)}</td>
             <td style="color:var(--ink2)">${esc(r.note)}</td></tr>`).join('')}
         </tbody></table></div>
       <p class="cap">These names appear on the payroll but never on the due list, so the annual entitlement above excludes them.</p>
@@ -7678,7 +7692,7 @@ function vMyTicket(){
   const isDue = me.status==='Due This Month';
   const left = !!me.lwd;
   const statusLine = left ? 'You have left the firm — the balance below is settled on exit.'
-    : me.status==='Remote — not eligible' ? (me.note||'Not currently accruing.')
+    : me.status==='Not in the scheme' ? (me.note ? me.note + ' \u2014 no air ticket is accruing.' : 'No air ticket is accruing.')
     : isDue ? (air ? `Your ticket is due now and has been paid in the ${T.procMonth} payroll run.` : `Your ticket is due now and is being processed in the ${T.procMonth} run.`)
     : (me.lastPaid==='31 Aug 2026'
         ? `Your ticket was paid in the August 2026 payroll run. The next one falls due on ${me.next}, and is processed in the ${me.proc} run.`
@@ -8103,6 +8117,7 @@ const JF = () => state.jf || (state.jf = {name:'', legal:'', email:'', email2:''
    Australia — and then what he types becomes that country's rate, not a
    private number on one person's record. */
 function jCountryFields(){
+  const f = JF();
   const co = JF().country, known = co ? rateFor(co) : null;
   const fresh = !!co && known === null;
   const off = JF().noTicket;
@@ -8118,7 +8133,11 @@ function jCountryFields(){
           + '. Change it on the <b>Air ticket</b> screen and it changes for everybody from there.'
         : 'Pick a country and its rate fills in. Leave it unchosen without ticking the box below and no '
           + 'entitlement is ever created &mdash; not in eleven months, not ever.')
-      + ' The first ticket falls due eleven months after joining.</p>';
+      + ' The first ticket falls due eleven months after joining.'
+      + (f.remote === 'remote' || f.basis === 'commission'
+          ? ' <b>This joiner is ' + (f.remote === 'remote' ? 'working remotely' : 'on commission only')
+            + ', so no entitlement is created whatever is chosen here.</b>' : '')
+      + '</p>';
   return '<label><span>Home country &mdash; for the air ticket</span>'
     + '<select id="jCountry"' + (off ? ' disabled' : '') + '>'
     + '<option value="">Choose a country</option>' + COUNTRIES().map(opt).join('')
@@ -8319,6 +8338,7 @@ function srNow(n){
     title: titleOf(n) || '',
     department: orgDeptOf(n) || '',
     shift: (shiftOf(n) || {}).id || '',
+    remote: isRemote(n) ? 'yes' : 'no',
     manager: mgrName(n) || '',
     email: emailOf(n) || '',
     phone: phoneOf(n) || '',
@@ -8357,6 +8377,11 @@ function srSays(k, was, now, who){
       + (now ? nm(now) : 'nobody') + ' from now on, including any waiting right now.';
     case 'email': return 'This is what they sign in with. The database refuses the change if they have already signed in once — that has to be moved in Supabase Auth first.';
     case 'shift': return 'Their working hours change, which is what the late-arrival nudge and the attendance day are measured against.';
+    case 'remote': return now === 'yes'
+      ? 'This <b>stops their air ticket</b> from today. Anything already earned and not taken stays owed '
+        + 'and is settled when they take it or when they leave.'
+      : 'This <b>starts an air ticket</b> again, counted from today rather than from their joining date '
+        + '&mdash; so the first one falls due in eleven months.';
     case 'sales': return now === 'yes'
       ? 'Team performance, the leaderboard and Department open for them, and their figures count towards the company they are set to.'
       : 'Those three pages close for them again, and their figures stop being counted.';
@@ -8372,6 +8397,7 @@ const SRFIELDS = [
   {k:'title',      label:'Designation'},
   {k:'department', label:'Department'},
   {k:'shift',      label:'Shift',      pick:'shift'},
+  {k:'remote',     label:'Based',      pick:'based'},
   {k:'manager',    label:'Reports to', pick:'people'},
   {k:'email',      label:'Work email'},
   {k:'phone',      label:'Work phone'}
@@ -8383,6 +8409,7 @@ const srShow = (k, v) => {
   if(['company','visa','paidBy','salesCo'].includes(k)) return (DATA.companies[v] || {}).name || v;
   if(k === 'shift'){ const s = SHIFTS().find(x => x.id === v);
     return s ? s.label + ' · ' + s.start + '–' + s.end : v; }
+  if(k === 'remote') return v === 'yes' ? 'working remotely' : 'in the office';
   if(k === 'manager') return NM(v);
   return String(v);
 };
@@ -8423,6 +8450,10 @@ function vStaffRec(){
       ? '<select data-sr="' + f.k + '">' + srCo().map(k =>
           '<option value="' + esc(k) + '"' + (k === v ? ' selected' : '') + '>'
           + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select>'
+      : f.pick === 'based'
+      ? '<select data-sr="' + f.k + '">'
+          + '<option value="no"' + (v === 'no' ? ' selected' : '') + '>In the office</option>'
+          + '<option value="yes"' + (v === 'yes' ? ' selected' : '') + '>Works remotely</option></select>'
       : f.pick === 'shift'
       ? '<select data-sr="' + f.k + '">' + SHIFTS().map(s =>
           '<option value="' + esc(s.id) + '"' + (s.id === v ? ' selected' : '') + '>'
@@ -8558,9 +8589,18 @@ function vStaffRec(){
     ${F.done ? `<div class="edok">${esc(F.done)}</div>` : ''}
     <div class="pad">
       <div class="jform">${SRFIELDS.map(box).join('')}</div>
-      <p class="cap" style="padding:16px 0 0">Nothing is written until you press Save and agree to the list of
+      <div class="srelse">
+        <span><b>Paid how</b> ${esc(BASIS[BASISOF(who)] || BASISOF(who))}</span>
+        <span><b>Air ticket</b> ${(() => { const why = tkReason(who);
+          return why ? esc(why) + ' — not on the scheme' : 'on the scheme'; })()}</span>
+        <span><b>Gratuity</b> ${noGratuity(who) ? 'none — no basic on file' : 'accruing on the basic'}</span>
+        <button class="btn ghost sm" data-go="onpay" data-mode="console" type="button">Change how they are paid</button>
+      </div>
+      <p class="cap" style="padding:14px 0 0">Nothing is written until you press Save and agree to the list of
         changes. A joining date, a salary and the air ticket are not here: those are
-        <b>Payroll</b>, <b>Revisions</b> and <b>Air ticket</b>, because each of them writes more than a field.</p>
+        <b>Payroll</b>, <b>Revisions</b> and <b>Air ticket</b>, because each of them writes more than a field.
+        The air ticket and the gratuity above are not settings either &mdash; they are worked out from
+        <b>Based</b> and from how somebody is paid, so they follow the record rather than a list.</p>
     </div>
   </section>
 
@@ -8646,6 +8686,10 @@ function vAdmin(){
         <label><span>Shift</span><select id="jShift">${
           (SHIFTS().length?SHIFTS():[{id:'S2',label:'S2'}]).map(s=>`<option value="${esc(s.id)}"${JF().shift===s.id?' selected':''}>${esc(s.id)}${s.from?' · '+esc(s.from)+'–'+esc(s.to):''}</option>`).join('')}</select></label>
 
+        <label><span>Based</span><select id="jBased">
+          <option value="office"${JF().remote?'':' selected'}>In the office</option>
+          <option value="remote"${JF().remote?' selected':''}>Works remotely</option>
+        </select></label>
         <label><span>Paid how</span><select id="jBasis">
           <option value="salaried"${JF().basis!=='commission'?' selected':''}>A fixed salary</option>
           <option value="commission"${JF().basis==='commission'?' selected':''}>Commission only, no fixed salary</option>
@@ -9786,7 +9830,7 @@ function render(){
       b.disabled=true; window.__db.forgetOfficeIp(b.dataset.offdrop); }); }
   [['jName','name'],['jLegal','legal'],['jEmail','email'],['jEmail2','email2'],
    ['jDoj','doj'],['jNo','staffNo'],['jCo','company'],['jVisa','visa'],['jPay','paidBy'],
-   ['jTitle','title'],['jDept','dept'],['jMgr','manager'],['jBasis','basis'],
+   ['jTitle','title'],['jDept','dept'],['jMgr','manager'],['jBasis','basis'],['jBased','remote'],
    ['jBasic','basic'],['jAllow','allow'],['jShift','shift'],['jCountry','country'],
    ['jRate','rate']].forEach(([id,key])=>{
     const el = document.getElementById(id); if(!el) return;
@@ -9947,7 +9991,7 @@ function render(){
       /* The tick is its own function, because it is its own table. Order
          matters: the record first, so a rename lands before anything keyed to
          the person is written beside it. */
-      const rec = ['name','staffNo','company','visa','paidBy','title','department','shift','email','phone']
+      const rec = ['name','staffNo','company','visa','paidBy','title','department','shift','email','phone','remote']
         .some(k => k in d) || ('manager' in d);
       let ok = true;
       if(rec) ok = !!await window.__db.saveStaffRecord({
@@ -9955,6 +9999,7 @@ function render(){
         name: d.name, staffNo: d.staffNo, company: d.company, visa: d.visa,
         paidBy: d.paidBy, title: d.title, department: d.department, shift: d.shift,
         email: d.email, phone: d.phone,
+        remote: 'remote' in d ? d.remote === 'yes' : null,
         manager: 'manager' in d ? ((HR().ids || {})[d.manager] || null) : null});
       if(ok && ('sales' in d || 'salesCo' in d || 'salesDept' in d)){
         const on = 'sales' in d ? d.sales === 'yes' : now.sales;
