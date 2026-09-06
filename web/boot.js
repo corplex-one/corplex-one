@@ -795,11 +795,25 @@ window.__db = {
     }catch(e){ oops(e, 'The decision'); await reload(); }
   },
 
-  async decideLetter(ref, status){
+  /* Issuing a letter writes down what it says.
+   *
+   * The wording used to be looked up from the template every time the letter
+   * was opened, so rewording a template reworded every letter of that kind
+   * already issued — the record of what the company had certified, changed
+   * after the fact. A letter now carries its own finished text from the moment
+   * it goes out, and the screen draws that. Declining or withdrawing one
+   * writes nothing: only an issued letter has words of its own.
+   *
+   * `said` is the filled text and the heading, worked out by the screen, which
+   * is the only place that knows how to fill a placeholder. */
+  async decideLetter(ref, status, said){
     try{
-      const {error} = await sb.from('letters')
-        .update({status, decided_on: new Date().toISOString().slice(0,10), issued_by: ME.id})
-        .eq('ref', ref);
+      const row = {status, decided_on: new Date().toISOString().slice(0,10), issued_by: ME.id};
+      if(status === 'Issued' && said){
+        row.body_at_issue = said.body || null;
+        row.label_at_issue = said.label || null;
+      }
+      const {error} = await sb.from('letters').update(row).eq('ref', ref);
       if(error) throw error;
     }catch(e){ oops(e, 'The decision'); await reload(); }
   },

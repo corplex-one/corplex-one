@@ -745,7 +745,13 @@ export function buildData(db, meId){
     id: l.ref, who: name(l.employee_id), type: l.kind, to: l.addressee || '',
     why: l.why || '', status: l.status,
     asked: l.asked_on ? String(l.asked_on).slice(0,10) : '',
-    decided: l.decided_on ? String(l.decided_on).slice(0,10) : ''
+    decided: l.decided_on ? String(l.decided_on).slice(0,10) : '',
+    /* What it said when it went out. A letter issued before the templates
+       became editable has this filled in from the template as it stood then,
+       which is what it said. A draft has none and follows the template until
+       it is sent. */
+    said: l.body_at_issue || '',
+    saidLabel: l.label_at_issue || ''
   }, revByLetter[l.ref] ? {
     by: name(revByLetter[l.ref].issued_by),
     eff: String(revByLetter[l.ref].effective_from).slice(0,10),

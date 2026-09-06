@@ -2500,6 +2500,15 @@ function effLabel(iso){
   return d === 1 ? `${MONFULL[m-1]} ${y}` : `${dayLabel(iso)} ${y}`;
 }
 const LTYPE = id => (HR().letterTypes||[]).find(t=>t.id===id) || {label:id, body:''};
+/* What a letter says. Once it has been issued that is a fact about the past,
+   so it is read off the letter; before then it follows the template, because a
+   draft has no wording of its own yet. */
+function letterSays(l){
+  return l.said || letterFill(l);
+}
+function letterTitle(l){
+  return l.saidLabel || LTYPE(l.type).label;
+}
 function letterFill(l){
   const r = payrollRowFor(l.who) || {};
   const ent = visaEnt(l.who);
@@ -3455,7 +3464,7 @@ function vLetters(){
       <thead><tr>${adm?'<th>Who</th>':''}<th>Reference</th><th>Letter</th><th>Addressed to</th><th>Asked</th><th>Status</th><th></th></tr></thead>
       <tbody>${(adm?L:mine).length?(adm?L:mine).map(x=>`<tr>
         ${adm?`<td class="nw">${nm(x.who)}</td>`:''}
-        <td class="n nw">${esc(x.id)}</td><td class="nw">${esc(LTYPE(x.type).label)}</td>
+        <td class="n nw">${esc(x.id)}</td><td class="nw">${esc(letterTitle(x))}</td>
         <td class="nw" style="color:var(--ink2)">${esc(x.to||'—')}</td>
         <td class="n nw">${esc(dayLabel(x.asked))}</td><td>${stPill(x.status)}</td>
         <td class="r">${x.status==='Issued'
@@ -3469,7 +3478,7 @@ function vLetters(){
 
   ${open && open.status==='Issued'?`
   <section class="panel">
-    <header><h3>${esc(LTYPE(open.type).label)}</h3><span class="pill mute">${esc(open.id)}</span>
+    <header><h3>${esc(letterTitle(open))}</h3><span class="pill mute">${esc(open.id)}</span>
       <span class="pill mute" style="margin-left:auto">A4</span>
       <button class="btn" id="slPrint" type="button" style="padding:6px 14px;font-size:13px">Print or save as PDF</button></header>
     <div class="slwrap">${letterHTML(open)}</div>
@@ -3493,85 +3502,116 @@ const LTFIELDS = [
 
 function ltTemplates(){
   const live = (HR().letterTypes || []).filter(t => !t.issueOnly);
-  const draft = state.ltT || live.map(t => ({id: t.id, label: t.label, body: t.body,
-                                             needsAddressee: !!t.needsAddressee, was: true}));
-  const editing = !!state.ltT;
   const used = {};
   (HR().letters || []).forEach(l => { used[l.type] = (used[l.type] || 0) + 1; });
+  const open = state.ltWho;                       // an id, '__new', or null
 
-  const changed = () => {
-    const out = [];
-    live.forEach(t => { const d = draft.find(x => x.id === t.id);
-      if(!d) return out.push(['Removed', t.label, 'no longer offered']);
-      if(d.label !== t.label) out.push(['Renamed', t.label, 'now &ldquo;' + esc(d.label) + '&rdquo;']);
-      if(d.body !== t.body) out.push(['Reworded', d.label, 'the text of the letter changes']);
-      if(!!d.needsAddressee !== !!t.needsAddressee)
-        out.push(['Addressee', d.label, d.needsAddressee
-          ? 'now asks who it is addressed to' : 'now goes out to whom it may concern']);
-    });
-    draft.filter(d => !live.some(t => t.id === d.id))
-      .forEach(d => out.push(['New letter', d.label || '(no name)', 'staff can ask for it from today']));
-    return out;
-  };
-  const list = changed();
-
-  const row = (d, i) => {
-    const t = live.find(x => x.id === d.id);
-    const n = used[d.id] || 0;
-    return '<div class="lttpl">'
-      + '<div class="lttop">'
-        + '<label class="ltname"><span>Name of the letter</span>'
-          + '<input data-lt-lab="' + i + '" value="' + esc(d.label || '') + '"'
-          + (editing ? '' : ' disabled') + '></label>'
-        + '<label class="ltadd"><span>Addressed to</span>'
-          + '<select data-lt-adr="' + i + '"' + (editing ? '' : ' disabled') + '>'
-          + '<option value="no"' + (d.needsAddressee ? '' : ' selected') + '>To whom it may concern</option>'
-          + '<option value="yes"' + (d.needsAddressee ? ' selected' : '') + '>Ask who it is for</option>'
-          + '</select></label>'
-        + (editing && t
-            ? (n ? '<span class="ltused">' + n + ' on file</span>'
-                 : '<button class="btn ghost bad ltdel" data-lt-del="' + i + '" type="button">Remove</button>')
-            : (editing ? '<button class="btn ghost bad ltdel" data-lt-del="' + i + '" type="button">Remove</button>'
-                       : (n ? '<span class="ltused">' + n + ' on file</span>' : '')))
-      + '</div>'
-      + '<textarea data-lt-body="' + i + '" rows="3"' + (editing ? '' : ' disabled')
-        + ' placeholder="The letter, with the fields below where the details go">'
-        + esc(d.body || '') + '</textarea>'
-      + '<p class="cap ltprev"><b>Reads as:</b> ' + esc(ltSample(d.body || '')) + '</p>'
-      + '</div>';
+  const row = t => {
+    const n = used[t.id] || 0;
+    return '<tr data-lt-open="' + esc(t.id) + '">'
+      + '<td class="s1 nw"><b>' + esc(t.label) + '</b></td>'
+      + '<td class="ltsay">' + esc((t.body || '').replace(/\s+/g, ' ').slice(0, 96))
+        + ((t.body || '').length > 96 ? '&hellip;' : '') + '</td>'
+      + '<td class="nw" style="color:var(--ink2)">'
+        + (t.needsAddressee ? 'Asks who it is for' : 'To whom it may concern') + '</td>'
+      + '<td class="n r" style="color:var(--ink3)">' + (n || '&mdash;') + '</td>'
+      + '<td class="r"><button class="btn ghost" data-lt-open="' + esc(t.id) + '" type="button"'
+        + ' style="padding:3px 10px;font-size:12.5px">Edit</button></td></tr>';
   };
 
   return '<section class="panel">'
     + '<header><h3>Letter templates</h3>'
       + '<span class="hint">what each letter says, and which letters can be asked for</span>'
-      + (editing ? '' : '<button class="btn ghost" id="ltEdit" type="button" style="margin-left:auto">Edit</button>')
+      + '<button class="btn ghost" id="ltNew" type="button" style="margin-left:auto">Add a letter</button>'
       + '</header>'
     + '<div class="pad">'
     + '<p class="cap" style="padding-top:0">A letter is written once here and filled in from the record'
-      + ' every time it is issued &mdash; nobody types a name or a salary into a letter. The salary'
-      + ' revision letter is not on this list: its wording comes from the revision that raises it.</p>'
+      + ' every time it is issued &mdash; nobody types a name or a salary into a letter. Click one to change'
+      + ' its wording. The salary revision letter is not on this list: its wording comes from the revision'
+      + ' that raises it.</p>'
+    + '<div class="tw"><table class="invtable lttab2">'
+    + '<colgroup><col style="width:22%"><col style="width:44%"><col style="width:18%">'
+      + '<col style="width:8%"><col style="width:8%"></colgroup>'
+    + '<thead><tr><th class="s1">Letter</th><th>What it says</th><th>Addressed to</th>'
+      + '<th class="r">Issued</th><th></th></tr></thead>'
+    + '<tbody>' + (live.length ? live.map(row).join('')
+        : '<tr><td colspan="5" style="color:var(--ink3)">No letters yet.</td></tr>') + '</tbody>'
+    + '</table></div></div></section>'
+    + (open ? ltEditor(open) : '');
+}
+
+/* The one being edited, over the page.
+ *
+ *   'Let me click on each letter and then i get a pop up where I can edit it
+ *    rather than what we have now'                                   -- Avin
+ *
+ * Drawn as part of the view rather than pushed into the modal box by hand, so
+ * a re-render redraws it where it is instead of wiping a half-written letter
+ * off the screen. Everything typed lives in state for the same reason. */
+function ltEditor(id){
+  const isNew = id === '__new';
+  const live = (HR().letterTypes || []).filter(t => !t.issueOnly);
+  const was = isNew ? null : live.find(t => t.id === id);
+  if(!isNew && !was) return '';
+  const d = state.ltD || {id: isNew ? '' : was.id, label: isNew ? '' : was.label,
+                          body: isNew ? '' : was.body, needsAddressee: isNew ? false : !!was.needsAddressee};
+  const n = isNew ? 0 : ((HR().letters || []).filter(l => l.type === id).length);
+
+  const changes = [];
+  if(isNew){ changes.push(['New letter', d.label || '(no name)', 'staff can ask for it from today']); }
+  else {
+    if(d.label !== was.label) changes.push(['Renamed', was.label, 'now &ldquo;' + esc(d.label) + '&rdquo;']);
+    if(d.body !== was.body) changes.push(['Reworded', d.label, 'the text of the letter changes']);
+    if(!!d.needsAddressee !== !!was.needsAddressee)
+      changes.push(['Addressed to', d.label, d.needsAddressee
+        ? 'now asks who it is for' : 'now goes out to whom it may concern']);
+  }
+  const ready = !!(d.label || '').trim() && !!(d.body || '').trim() && changes.length;
+
+  const fields = '<div class="ltform">'
+    + '<label><span>Name of the letter</span>'
+      + '<input id="ltLab" value="' + esc(d.label || '') + '" placeholder="What you pick it by"></label>'
+    + '<label><span>Addressed to</span><select id="ltAdr">'
+      + '<option value="no"' + (d.needsAddressee ? '' : ' selected') + '>To whom it may concern</option>'
+      + '<option value="yes"' + (d.needsAddressee ? ' selected' : '') + '>Ask who it is for</option>'
+      + '</select></label>'
+    + '<label class="wide"><span>What the letter says</span>'
+      + '<textarea id="ltBody" rows="6" placeholder="The letter, with the fields below where the details go">'
+      + esc(d.body || '') + '</textarea></label>'
+    + '</div>'
     + '<div class="ltfields">' + LTFIELDS.map(f =>
-        '<span><code>' + f[0] + '</code> ' + f[1] + '</span>').join('') + '</div>'
-    + draft.map(row).join('')
-    + (editing
-       ? '<div class="btns" style="margin-top:14px">'
-         + '<button class="btn ghost" id="ltAdd" type="button">Add another letter</button>'
-         + '<button class="btn" id="ltSee" type="button"' + (list.length ? '' : ' disabled') + '>'
-           + (list.length ? 'Review ' + list.length + ' change' + (list.length === 1 ? '' : 's') : 'Nothing changed') + '</button>'
-         + '<button class="btn ghost" id="ltCancel" type="button">Cancel</button></div>'
-       : '')
-    + (editing && state.ltOK
-       ? '<div class="edconf" style="margin-top:16px"><h4>These are the changes</h4>'
-         + '<table class="edtab"><tbody>'
-         + list.map(c => '<tr><td>' + c[0] + '</td><td><b>' + esc(c[1]) + '</b></td><td>' + c[2] + '</td></tr>').join('')
-         + '</tbody></table>'
-         + '<div class="edconfb"><button class="btn" id="ltGo" type="button">Yes, save '
-           + (list.length === 1 ? 'it' : 'them') + '</button>'
-         + '<button class="btn ghost" id="ltBack" type="button">Back</button>'
-         + '<span>Nothing has been written yet. A letter already issued keeps the wording it went out with.</span>'
-         + '</div></div>'
-       : '')
-    + '</div></section>';
+        '<button class="ltchip" data-lt-put="' + f[0] + '" type="button" title="Put this in the letter">'
+        + '<code>' + f[0] + '</code> ' + f[1] + '</button>').join('') + '</div>'
+    + '<div class="ltpreview"><span class="ltpk">Reads as</span>'
+      + '<p id="ltPrev">' + esc(ltSample(d.body || '')) + '</p></div>';
+
+  const confirm = '<div class="edconf"><h4>' + (isNew ? 'Adding this letter does this'
+      : 'Changing &ldquo;' + esc(was.label) + '&rdquo; does this') + '</h4>'
+    + '<table class="edtab"><tbody>'
+    + changes.map(c => '<tr><td>' + c[0] + '</td><td><b>' + esc(c[1]) + '</b></td><td>' + c[2] + '</td></tr>').join('')
+    + (n ? '<tr><td>Already issued</td><td><b>' + n + '</b></td><td>'
+         + (n === 1 ? 'letter of this kind is' : 'letters of this kind are')
+         + ' on file and keep the wording they went out with</td></tr>' : '')
+    + '</tbody></table>'
+    + '<div class="edconfb"><button class="btn" id="ltGo" type="button">Yes, save '
+      + (changes.length === 1 ? 'it' : 'them') + '</button>'
+    + '<button class="btn ghost" id="ltBack" type="button">Back</button>'
+    + '<span>Nothing has been written yet.</span></div></div>';
+
+  return '<div class="lookwrap ltmodal">'
+    + '<div class="lookbg" data-ltclose="1"></div>'
+    + '<div class="look ltlook" role="dialog" aria-modal="true" aria-label="Letter template">'
+    + '<header><b>' + (isNew ? 'A new letter' : esc(was.label)) + '</b>'
+      + '<span>' + (n ? n + (n === 1 ? ' issued so far' : ' issued so far') : 'none issued yet') + '</span>'
+      + (isNew || n ? '' : '<button class="btn ghost" id="ltDel" type="button">Remove this letter</button>')
+      + '<button class="btn ghost" data-ltclose="1" type="button">Close</button></header>'
+    + '<div class="lookbody ltbody">'
+      + (state.ltOK ? confirm : fields)
+      + (state.ltOK ? '' : '<div class="btns" style="margin-top:16px">'
+          + '<button class="btn" id="ltSee" type="button"' + (ready ? '' : ' disabled') + '>'
+            + (changes.length ? 'Review the change' + (changes.length === 1 ? '' : 's') : 'Nothing changed') + '</button>'
+          + '<button class="btn ghost" data-ltclose="1" type="button">Cancel</button></div>')
+    + '</div></div></div>';
 }
 
 /* What the template will read as, against a real person, so a placeholder that
@@ -3638,8 +3678,8 @@ function letterHTML(l){
     </header>
     <div class="slbody">
       <p class="ltto">${esc(l.to || 'To whom it may concern')}</p>
-      <h5 class="lttitle">${esc(LTYPE(l.type).label)}</h5>
-      <p class="ltbody">${esc(letterFill(l))}</p>
+      <h5 class="lttitle">${esc(letterTitle(l))}</h5>
+      <p class="ltbody">${esc(letterSays(l))}</p>
       <p class="ltbody">This certificate is issued at the request of the employee and carries no financial obligation on the part of the company.</p>
       <div class="ltsig">
         <span>For and on behalf of</span>
@@ -10519,7 +10559,8 @@ function render(){
     b.disabled = true;
     await window.__db.withdrawRevision(b.dataset.rvdrop, 'withdrawn before sending'); render(); });
   document.querySelectorAll('[data-lt-ok]').forEach(b=>b.onclick=()=>{
-    const x=HR().letters.find(y=>y.id===b.dataset.ltOk); if(x){x.status='Issued'; x.decided=HDATE(); window.__db.decideLetter(x.id,'Issued'); state.ltOpen=x.id;} render(); });
+    const x=HR().letters.find(y=>y.id===b.dataset.ltOk); if(x){x.status='Issued'; x.decided=HDATE(); window.__db.decideLetter(x.id,'Issued',
+      {body: letterFill(x), label: LTYPE(x.type).label}); state.ltOpen=x.id;} render(); });
   document.querySelectorAll('[data-lt-no]').forEach(b=>b.onclick=()=>{
     const x=HR().letters.find(y=>y.id===b.dataset.ltNo); if(x){x.status='Declined'; x.decided=HDATE(); window.__db.decideLetter(x.id,'Declined');} render(); });
   document.querySelectorAll('[data-lt-view]').forEach(b=>b.onclick=()=>{
@@ -10728,47 +10769,76 @@ function render(){
     render(); });
   document.querySelectorAll('[data-expay]').forEach(b=>b.onclick=async ()=>{
     b.disabled = true; await window.__db.decideExit(b.dataset.expay, b.dataset.mode); render(); });
-  const ltStart = () => { if(state.ltT) return;
-    state.ltT = (HR().letterTypes||[]).filter(t=>!t.issueOnly)
-      .map(t=>({id:t.id, label:t.label, body:t.body, needsAddressee:!!t.needsAddressee}));
-    state.ltOK = false; };
-  const ltE = document.getElementById('ltEdit');
-  if(ltE) ltE.onclick = () => { ltStart(); render(); };
-  const ltC = document.getElementById('ltCancel');
-  if(ltC) ltC.onclick = () => { state.ltT = null; state.ltOK = false; render(); };
-  const ltS = document.getElementById('ltSee');
-  if(ltS) ltS.onclick = () => { state.ltOK = true; render(); };
-  const ltB = document.getElementById('ltBack');
-  if(ltB) ltB.onclick = () => { state.ltOK = false; render(); };
-  const ltA = document.getElementById('ltAdd');
-  if(ltA) ltA.onclick = () => { ltStart();
-    /* An id the letters on file will refer to for as long as they exist, so it
-       is made once from the name and never touched again. */
-    state.ltT.push({id:'', label:'', body:'', needsAddressee:false});
-    state.ltOK = false; render(); };
-  document.querySelectorAll('[data-lt-lab]').forEach(el=>{ el.oninput = () => {
-    const d = state.ltT[+el.dataset.ltLab]; if(!d) return;
-    d.label = el.value;
-    if(!d.was && !d.id) d.id = (el.value.toLowerCase().replace(/[^a-z0-9]+/g,'_')
-      .replace(/^[^a-z]+/,'').replace(/_+$/,'')) || '';
-    const see = document.getElementById('ltSee'); if(see) see.disabled = false; }; });
-  document.querySelectorAll('[data-lt-adr]').forEach(el=>{ el.onchange = () => {
-    const d = state.ltT[+el.dataset.ltAdr]; if(d) d.needsAddressee = el.value === 'yes'; render(); }; });
-  document.querySelectorAll('[data-lt-body]').forEach(el=>{ el.oninput = () => {
-    const d = state.ltT[+el.dataset.ltBody]; if(!d) return;
-    d.body = el.value;
-    const p = el.parentElement.querySelector('.ltprev');
-    if(p) p.innerHTML = '<b>Reads as:</b> ' + esc(ltSample(el.value));
-    const see = document.getElementById('ltSee'); if(see) see.disabled = false; }; });
-  document.querySelectorAll('[data-lt-del]').forEach(b=>b.onclick=()=>{
-    state.ltT.splice(+b.dataset.ltDel, 1); state.ltOK = false; render(); });
-  const ltG = document.getElementById('ltGo');
-  if(ltG) ltG.onclick = async () => { ltG.disabled = true;
-    const out = await window.__db.setLetterTypes(state.ltT.map(d=>({
-      id: d.id, label: d.label, body: d.body, needsAddressee: !!d.needsAddressee})));
-    if(out){ state.ltT = null; state.ltOK = false; }
-    render(); };
-
+  /* Opening a letter, typing in it, and the two steps before anything is
+     written. The draft lives in state.ltD so a re-render redraws the popup
+     with what has been typed still in it. */
+  const ltShut = () => { state.ltWho = null; state.ltD = null; state.ltOK = false; render(); };
+  const ltDraft = () => {
+    const g = i => { const el = document.getElementById(i); return el ? el.value : undefined; };
+    if(!state.ltD) return;
+    const lab = g('ltLab'); if(lab !== undefined) state.ltD.label = lab;
+    const bod = g('ltBody'); if(bod !== undefined) state.ltD.body = bod;
+    const adr = g('ltAdr'); if(adr !== undefined) state.ltD.needsAddressee = adr === 'yes';
+    if(state.ltWho === '__new')
+      state.ltD.id = (state.ltD.label || '').toLowerCase().replace(/[^a-z0-9]+/g,'_')
+        .replace(/^[^a-z]+/,'').replace(/_+$/,'');
+    const pv = document.getElementById('ltPrev');
+    if(pv) pv.textContent = ltSample(state.ltD.body || '');
+    /* Re-enabled in place: a full redraw on every keystroke would take the
+       cursor out of the box being typed in. */
+    const see = document.getElementById('ltSee');
+    if(see) see.disabled = !((state.ltD.label||'').trim() && (state.ltD.body||'').trim());
+  };
+  const ltOpen = id => {
+    const t = (HR().letterTypes||[]).find(x => x.id === id);
+    state.ltWho = id; state.ltOK = false;
+    state.ltD = id === '__new'
+      ? {id:'', label:'', body:'', needsAddressee:false}
+      : (t ? {id:t.id, label:t.label, body:t.body, needsAddressee:!!t.needsAddressee} : null);
+    render();
+  };
+  document.querySelectorAll('[data-lt-open]').forEach(el=>{
+    el.onclick = ev => { ev.stopPropagation(); ltOpen(el.dataset.ltOpen); }; });
+  const ltN = document.getElementById('ltNew'); if(ltN) ltN.onclick = () => ltOpen('__new');
+  document.querySelectorAll('[data-ltclose]').forEach(b=>b.onclick = ltShut);
+  ['ltLab','ltBody'].forEach(i=>{ const el = document.getElementById(i);
+    if(el) el.oninput = ltDraft; });
+  const ltAdrEl = document.getElementById('ltAdr');
+  if(ltAdrEl) ltAdrEl.onchange = () => { ltDraft(); };
+  /* A placeholder is put in at the cursor rather than typed by hand, because
+     {allow} mistyped as {allowance} is a letter that goes out with a brace in
+     the middle of it. */
+  document.querySelectorAll('[data-lt-put]').forEach(b=>b.onclick=()=>{
+    const el = document.getElementById('ltBody'); if(!el) return;
+    const a = el.selectionStart ?? el.value.length, z = el.selectionEnd ?? a;
+    el.value = el.value.slice(0, a) + b.dataset.ltPut + el.value.slice(z);
+    el.focus(); el.selectionStart = el.selectionEnd = a + b.dataset.ltPut.length;
+    ltDraft(); });
+  const ltS2 = document.getElementById('ltSee');
+  if(ltS2) ltS2.onclick = () => { ltDraft(); state.ltOK = true; render(); };
+  const ltB2 = document.getElementById('ltBack');
+  if(ltB2) ltB2.onclick = () => { state.ltOK = false; render(); };
+  const ltD2 = document.getElementById('ltDel');
+  if(ltD2) ltD2.onclick = async () => {
+    const t = (HR().letterTypes||[]).find(x => x.id === state.ltWho); if(!t) return;
+    if(!confirm('Remove "' + t.label + '"?\n\nStaff will no longer be able to ask for it.')) return;
+    ltD2.disabled = true;
+    const out = await window.__db.setLetterTypes((HR().letterTypes||[])
+      .filter(x => !x.issueOnly && x.id !== state.ltWho)
+      .map(x => ({id:x.id, label:x.label, body:x.body, needsAddressee:!!x.needsAddressee})));
+    if(out) ltShut(); else render(); };
+  const ltG2 = document.getElementById('ltGo');
+  if(ltG2) ltG2.onclick = async () => { ltG2.disabled = true;
+    const d = state.ltD;
+    const rest = (HR().letterTypes||[]).filter(x => !x.issueOnly && x.id !== d.id)
+      .map(x => ({id:x.id, label:x.label, body:x.body, needsAddressee:!!x.needsAddressee}));
+    const mine = {id:d.id, label:d.label, body:d.body, needsAddressee:!!d.needsAddressee};
+    /* Kept where it was in the list, so editing a letter does not shuffle the
+       order somebody picks from. */
+    const at = (HR().letterTypes||[]).filter(x=>!x.issueOnly).findIndex(x => x.id === d.id);
+    const out = await window.__db.setLetterTypes(
+      at < 0 ? rest.concat([mine]) : [...rest.slice(0, at), mine, ...rest.slice(at)]);
+    if(out) ltShut(); else render(); };
   document.querySelectorAll('[data-frnew]').forEach(b=>b.onclick=()=>{
     state.frOpen = b.dataset.frnew; state.frOK = false;
     state.frDoj = ''; state.frBasis = 'salaried'; state.frBasic = undefined;
