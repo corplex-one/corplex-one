@@ -358,8 +358,26 @@ export function runEngine(invoices, masters, people){
 /* The company-wide aggregates the dashboards read. Split by department,
  * because Corporate & Legal and Accounting & Tax are reported apart and only
  * merged where a screen asks for both. */
-export function aggregate(invoices, masters, dept){
-  const rows = dept ? invoices.filter(i => (i.sellerDept || '') === dept) : invoices;
+/* A quarter can be asked for as well as a department.
+ *
+ *   'Key indicators, top clients, collection status does not change with Year
+ *    and quarter selected / All figures should change based on the year and
+ *    quarter selected'                                                 -- Avin
+ *
+ * The monthly series already carried invoiced, net, eligible and the invoice
+ * count month by month, so those four could always have been added up for a
+ * quarter. Four could not: what is still outstanding, who the top clients
+ * were, the paid / part-paid / unpaid mix, and how many clients were billed —
+ * each of those needs the invoice rows, not a monthly total, and only the
+ * year's worth was ever kept.
+ *
+ * So this now runs once per quarter as well as once for the year, off the
+ * same rows in the same pass. Quarters add up to the year because they are
+ * the same arithmetic on the same list, rather than a second method that
+ * happens to agree today. */
+export function aggregate(invoices, masters, dept, quarter){
+  let rows = dept ? invoices.filter(i => (i.sellerDept || '') === dept) : invoices;
+  if(quarter) rows = rows.filter(i => i.quarter === quarter);
 
   const totals = {inv: 0, net: 0, elig: 0, outstanding: 0, count: 0};
   const monthly = {}, typeMonthly = {}, clients = {}, statusMix = {};
@@ -497,9 +515,25 @@ export function toPayload(w){
   // screens have always asked for it.
   const cl = w.byDept.find(d => d.department === 'Corporate & Legal') || w.all;
   const at = w.byDept.find(d => d.department === 'Accounting & Tax') || null;
+  /* Per quarter, the four things a monthly series cannot give you: what is
+     still outstanding, the client book, the paid / part-paid / unpaid mix and
+     how many clients were billed. Invoiced, net sales, the invoice count and
+     the new-versus-existing split are all in `monthly` and `typeMonthly`
+     already, month by month, so the screen adds those up itself rather than
+     storing the same figures a second time. */
+  const byQuarter = dept => Object.fromEntries(QUARTERS.map(q => {
+    const a = aggregate(w.invoices, w.masters, dept, q);
+    return [q, {totals: a.totals, clients: a.clients, topClients: a.topClients,
+                clientCount: a.clientCount, statusMix: a.statusMix}];
+  }));
+  /* Whatever department `cl` actually came from — for POA and Lex the
+     headline department is Sales, and asking for Corporate & Legal's quarters
+     there would have stored four empty blocks that looked like four quarters
+     with no sales in them. */
   const figures = {
     ...cl,
-    atDept: at,
+    byQuarter: byQuarter(cl.department || null),
+    atDept: at && {...at, byQuarter: byQuarter(at.department)},
     dept: w.masters.dept,
     deptOf: {'Accounting & Tax': 'at', 'Corporate & Legal': 'cl'},
     partners: Object.entries(w.masters.partner).map(([name, rate]) => ({name, rate})),

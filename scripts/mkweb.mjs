@@ -17075,6 +17075,478 @@ app = swap(app,
    gate:u => DATA.fullFigures && seesDeptSales(u)},`,
   'and so is the Department screen');
 
+/* =========================== the Department screen follows the quarter =====
+ *
+ *   '1. Target % is not working (200k per month, 2.4m per year) — it should
+ *       change based on year and Quarter selected
+ *    2. Key indicators, top clients, collection status does not change with
+ *       Year and quarter selected
+ *    3. All figures should change based on the year and quarter selected'
+ *                                                                    -- Avin
+ *
+ * Two separate faults.
+ *
+ * The target was nought. Not rounded to nought, not failing to display —
+ * stored as {"year":0,"month":0,"quarter":0} by every workbook upload, with
+ * nothing anywhere ever putting 200,000 in it. So the ring divided by nought
+ * and said 0%, which was the truth about a target that did not exist. 0033
+ * gives it a home in settings, per company and per department, as ONE monthly
+ * figure: the quarter is three of them and the year is twelve, so the three
+ * numbers cannot drift apart. Accounts edits it on the console.
+ *
+ * The quarter was read by exactly one panel. Everything else on the screen —
+ * the four-tile strip, key indicators, top clients, collection status — was
+ * the whole year whatever button was pressed. Invoiced, net sales, the
+ * invoice count and the new-versus-existing split are kept month by month, so
+ * a quarter is an addition the screen can do itself. The other four could not
+ * be: what is outstanding, the top clients, the status mix and how many
+ * clients were billed were only ever stored for the year. 0033 backfills them
+ * per quarter and web/sales.js now writes them on every upload.
+ */
+app = swap(app,
+`const REVDEPT = co => (HR().revDept || {})[co] || [];`,
+`const REVDEPT = co => (HR().revDept || {})[co] || [];
+/* The monthly net-sales target for a department, and the quarter and year
+   that follow from it. One number: 200,000 a month is 600,000 a quarter and
+   2.4m a year, and they cannot be edited into disagreeing with each other.
+   Nought back means no target has been set for that department — which is
+   true of Accounting & Tax and was true of everything until 0033. */
+const TARGETOF = (co, dept) => +(((HR().salesTarget || {})[co] || {})[dept] || 0) || 0;
+const TARGETS = m => ({month: m, quarter: m * 3, year: m * 12});`,
+  'a target that is a number somebody set');
+
+/* The merged view of both departments was worked out once and kept for the
+   life of the page, so switching year left it showing the year it was first
+   built for. It is cached per year now. And it carries the quarter blocks, so
+   'Both' follows the quarter like either department on its own. */
+app = swap(app,
+`let _MERGED = null;
+function mergedDept(){
+  if(_MERGED) return _MERGED;`,
+`let _MERGED = {};
+function mergedDept(){
+  const CK = state.year + '|' + (DATA.department || '');
+  if(_MERGED[CK]) return _MERGED[CK];`,
+  'the merged department is remembered per year, not once for ever');
+
+app = swap(app,
+`  _MERGED = {department:'Both departments', monthly:monS, typeMonthly:tm, topClients:top,
+    clients:cl, clientCount:Object.keys(cl).length, statusMix:sm, target:null, totals:tot,
+    combined:true};
+  return _MERGED;
+}`,
+`  /* The quarter blocks, merged the same way: two departments' outstanding
+     added, two client books folded together, two status mixes summed. A
+     quarter one department has and the other does not still comes through,
+     because a quarter with no Accounting & Tax invoices in it is a quarter,
+     not a missing one. */
+  const bq = {};
+  ['Q1','Q2','Q3','Q4'].forEach(q => {
+    const a = ((A.byQuarter || {})[q]) || null, b = ((B.byQuarter || {})[q]) || null;
+    if(!a && !b) return;
+    const parts = [a, b].filter(Boolean);
+    const t2 = {};
+    ['inv','net','elig','outstanding','count'].forEach(k =>
+      t2[k] = Math.round(parts.reduce((s,x)=>s+(+((x.totals||{})[k])||0),0)*100)/100);
+    const cl2 = {};
+    parts.forEach(x => Object.keys(x.clients || {}).forEach(k => {
+      const c = x.clients[k];
+      if(!cl2[k]) cl2[k] = c.slice();
+      else { cl2[k][0]=Math.round((cl2[k][0]+c[0])*100)/100;
+             cl2[k][1]=Math.round((cl2[k][1]+c[1])*100)/100; cl2[k][2]+=c[2]; }
+    }));
+    const sm2 = {};
+    parts.forEach(x => Object.keys(x.statusMix || {}).forEach(k => sm2[k]=(sm2[k]||0)+x.statusMix[k]));
+    bq[q] = {totals:t2, clients:cl2,
+      topClients: Object.keys(cl2).map(k=>[k, cl2[k][0], cl2[k][1], cl2[k][2]])
+                    .sort((x,y)=>y[1]-x[1]).slice(0,10),
+      clientCount: Object.keys(cl2).length, statusMix: sm2};
+  });
+  _MERGED[CK] = {department:'Both departments', monthly:monS, typeMonthly:tm, topClients:top,
+    clients:cl, clientCount:Object.keys(cl).length, statusMix:sm, target:null, totals:tot,
+    byQuarter:bq, combined:true};
+  return _MERGED[CK];
+}`,
+  'and it carries the quarters with it');
+
+/* ---- one department, one period.
+ *
+ * deptData answers 'what did this department do this year'. This answers
+ * 'this quarter', and it is the whole of items 2 and 3: every panel on the
+ * Department screen reads it instead of the year block, so pressing Q2
+ * changes the figures rather than only the heading.
+ *
+ * Two sources, deliberately:
+ *
+ *   invoiced, net sales, eligible, the invoice count and the new/existing
+ *   split come from the MONTHLY series by adding up the quarter's three
+ *   months. Those add to the year exactly, because they are the year's own
+ *   numbers regrouped.
+ *
+ *   what is outstanding, the client book, the top ten and the status mix come
+ *   from the quarter blocks, because a monthly total cannot tell you who owes
+ *   what. Those are written by the workbook reader from this upload onwards
+ *   and were backfilled by 0033 for the years already stored.
+ *
+ * When a year predates the backfill there are no blocks, and the four say so
+ * rather than showing the year's figure under a quarter's heading — a number
+ * that is quietly the wrong period is worse than a gap.
+ */
+app = swap(app,
+`const deptOf = u => DATA.dept[u] || DATA.department;`,
+`const QOF = k => 'Q' + (Math.floor((parseInt(String(k).slice(5), 10) - 1) / 3) + 1);
+function deptFor(u, per){
+  const D = deptData(u);
+  if(per === 'FY' || !per) return Object.assign({}, D, {period:'FY', quarterKnown:true});
+  const keep = o => { const r = {}; Object.keys(o || {}).forEach(k => { if(QOF(k) === per) r[k] = o[k]; }); return r; };
+  const monthly = keep(D.monthly), typeMonthly = keep(D.typeMonthly);
+  const sum = i => Math.round(Object.values(monthly).reduce((s,m)=>s+(+m[i]||0),0)*100)/100;
+  const B = (D.byQuarter || {})[per] || null;
+  return Object.assign({}, D, {
+    period: per, quarterKnown: !!B, monthly, typeMonthly,
+    totals: {inv:sum(0), net:sum(1), elig:sum(2), count:sum(3),
+             outstanding: B ? (+((B.totals||{}).outstanding) || 0) : null},
+    clients:     B ? (B.clients || {})    : {},
+    topClients:  B ? (B.topClients || []) : [],
+    clientCount: B ? B.clientCount        : null,
+    statusMix:   B ? (B.statusMix || {})  : {}
+  });
+}
+/* The monthly target for the department being looked at, and the quarter and
+   year that follow from it. 'Both' is the two departments added, which is why
+   a company with a target on one department and none on the other still shows
+   a sensible figure for Both. */
+function deptTargetFor(u){
+  const co = activeCo().key, s = scopeOf(u);
+  const m = s === 'all'
+    ? REVDEPT(co).reduce((t, d) => t + TARGETOF(co, d), 0)
+    : TARGETOF(co, s);
+  return TARGETS(m);
+}
+const deptOf = u => DATA.dept[u] || DATA.department;`,
+  'a department, for the period being looked at');
+
+/* And the screen reads it. DD is the period; YD stays the whole year, because
+   two things on the page are genuinely about the year and should not shrink
+   to three bars when a quarter is pressed: the performance chart, which is
+   the shape of the year, and the run-rate note under the target. */
+app = swap(app,
+`function vCompany(){
+  const DD = deptData(state.user);
+  const months = Object.keys(DD.monthly);`,
+`function vCompany(){
+  const YD = deptData(state.user);                    // the whole year
+  const DD = deptFor(state.user, state.period);       // the period being looked at
+  const months = Object.keys(DD.monthly);
+  const yMonths = Object.keys(YD.monthly);
+  const PLAB = state.period === 'FY' ? state.year : QLABEL[state.period] + ' ' + state.year;`,
+  'the Department screen reads the period');
+
+app = swap(app,
+`  const T = DD.target || {month:0,quarter:0,year:0};
+  const HASTGT = !!DD.target;
+  const qsum = {Q1:[0,0,0,0],Q2:[0,0,0,0],Q3:[0,0,0,0],Q4:[0,0,0,0]};
+  months.forEach(k=>{ const m=parseInt(k.slice(5),10)-1, q='Q'+(Math.floor(m/3)+1);
+    for(let i=0;i<4;i++) qsum[q][i]+=DD.monthly[k][i]; });
+  const t = DD.totals;
+  const ytdNet = months.reduce((s,k)=>s+DD.monthly[k][1],0);
+  const nMonths = months.length;
+  const above = months.filter(k=>DD.monthly[k][1] >= T.month).length;`,
+`  /* Nought means nobody has set one, which is different from missing it. It
+     was ALWAYS nought until 0033 — the workbook reader wrote zeros over it on
+     every upload — which is why the ring read 0%. */
+  const T = deptTargetFor(state.user);
+  const HASTGT = T.month > 0;
+  const qsum = {Q1:[0,0,0,0],Q2:[0,0,0,0],Q3:[0,0,0,0],Q4:[0,0,0,0]};
+  yMonths.forEach(k=>{ const m=parseInt(k.slice(5),10)-1, q='Q'+(Math.floor(m/3)+1);
+    for(let i=0;i<4;i++) qsum[q][i]+=YD.monthly[k][i]; });
+  const t = DD.totals;
+  const ytdNet = months.reduce((s,k)=>s+DD.monthly[k][1],0);
+  const yearNet = yMonths.reduce((s,k)=>s+YD.monthly[k][1],0);
+  const nMonths = months.length;
+  const nYearMonths = yMonths.length;
+  const above = months.filter(k=>DD.monthly[k][1] >= T.month).length;
+  /* Outstanding, the client book, the top ten and the status mix are the four
+     a monthly series cannot give you. For a year before 0033 they are not
+     there, and the panels that draw them say so instead of showing the whole
+     year under a quarter's heading. */
+  const KNOWN = DD.quarterKnown;
+  const noQ = what => '<p class="note">The ' + esc(QLABEL[state.period]) + ' figures for '
+    + what + ' are not on file for ' + esc(state.year) + '. They are written on every upload from '
+    + 'now on, so re-uploading the ' + esc(state.year) + ' workbook fills them in. '
+    + 'Switch to <b>Year</b> for the figures that are held.</p>';`,
+  'and the target is the one somebody set');
+
+/* The chart is the year. Bars outside the quarter being looked at are dimmed
+   rather than removed: three bars on their own lose the thing a chart is for,
+   which is where this quarter sits against the others. */
+app = swap(app,
+`  let items, aria, thresholds = [];
+  if(grain==='month'){
+    items = months.map(k=>{
+      const m = DD.monthly[k], idx = parseInt(k.slice(5),10)-1, v = m[mi];`,
+`  let items, aria, thresholds = [];
+  const inPer = k => state.period === 'FY' || QOF(k) === state.period;
+  if(grain==='month'){
+    items = yMonths.map(k=>{
+      const m = YD.monthly[k], idx = parseInt(k.slice(5),10)-1, v = m[mi];`,
+  'the chart keeps the whole year');
+
+app = swap(app,
+`      const under = showTarget && m[1] < T.month;
+      return {label:MONTHNAME[idx], value:v, color: under ? 'var(--warn)' : 'var(--c1)',`,
+`      const under = showTarget && m[1] < T.month;
+      return {label:MONTHNAME[idx], value:v,
+        color: !inPer(k) ? 'var(--line)' : (under ? 'var(--warn)' : 'var(--c1)'),`,
+  'and says which months the figures above are about');
+
+app = swap(app,
+`    items = QS.map(q=>{
+      const under = showTarget && qsum[q][3]>0 && qsum[q][1] < T.quarter;
+      return {label:q, value:qsum[q][mi], color: under ? 'var(--warn)' : 'var(--c1)',`,
+`    items = QS.map(q=>{
+      const under = showTarget && qsum[q][3]>0 && qsum[q][1] < T.quarter;
+      return {label:q, value:qsum[q][mi],
+        color: (state.period !== 'FY' && q !== state.period) ? 'var(--line)'
+             : (under ? 'var(--warn)' : 'var(--c1)'),`,
+  'the quarterly chart marks the one being looked at');
+
+app = swap(app,
+`    items = [{label:'2026 to date', value: metric==='inv'?t.inv:ytdNet, color:'var(--c1)',
+      tip:\`<b>\${money(ytdNet)}</b> net sales · \${t.count} invoices\`}];`,
+`    items = [{label:esc(state.year)+' to date', value: metric==='inv'?YD.totals.inv:yearNet, color:'var(--c1)',
+      tip:\`<b>\${money(yearNet)}</b> net sales · \${YD.totals.count} invoices\`}];`,
+  'and the yearly bar says which year');
+
+/* The words on the screen name the period as well. A figure that changed and
+   a heading that did not is how somebody concludes the figure did not change
+   either. */
+[
+  [`    targetVal = T.year; actualVal = ytdNet; periodLabel = '2026 year to date';`,
+   `    targetVal = T.year; actualVal = ytdNet; periodLabel = state.year + ' year to date';`,
+   'the year to date is the year being looked at'],
+  [`    <div class="stat"><span class="k">Invoiced \${esc(state.year)}\${state.year === HDATE().slice(0,4) ? ' YTD' : ''}</span>`,
+   `    <div class="stat"><span class="k">Invoiced \${esc(PLAB)}\${state.period === 'FY' && state.year === HDATE().slice(0,4) ? ' YTD' : ''}</span>`,
+   'the first tile names the period'],
+  [`    <header><h3>Key indicators</h3><span class="hint">2026 to date</span></header>`,
+   `    <header><h3>Key indicators</h3><span class="hint">\${esc(PLAB)}</span></header>`,
+   'key indicators say which period'],
+  [`      <header><h3>Top clients</h3><span class="hint">by net sales, 2026</span></header>`,
+   `      <header><h3>Top clients</h3><span class="hint">by net sales, \${esc(PLAB)}</span></header>`,
+   'and so do the top clients'],
+  [`  const nMonths = months.length;`,
+   `  const nMonths = months.length;`, null]
+].filter(x => x[2]).forEach(([from, to, what]) => { app = swap(app, from, to, what); });
+
+/* The run rate is a statement about the year, so it is worked out from the
+   year even when a quarter is on screen. */
+app = swap(app,
+`  const ytdTarget = T.month*nMonths;
+  const runRate = ytdNet/nMonths*12;`,
+`  const ytdTarget = T.month*nMonths;
+  const runRate = nYearMonths ? yearNet/nYearMonths*12 : 0;`,
+  'the run rate is the year, whatever quarter is showing');
+
+/* Collected and Outstanding are two of the four that need the quarter blocks.
+   Without them the tiles show a dash rather than the year's figure under a
+   quarter's heading. */
+app = swap(app,
+`    <div class="stat"><span class="k">Collected</span><span class="v" style="color:var(--good)"><span class="cur">AED</span>\${money(t.inv-t.outstanding)}</span><span class="n">\${pct(1-t.outstanding/t.inv,1)} of invoiced value</span></div>
+    <div class="stat"><span class="k">Outstanding</span><span class="v" style="color:var(--bad)"><span class="cur">AED</span>\${money(t.outstanding)}</span><span class="n">\${pct(t.outstanding/t.inv,1)} of invoiced value</span></div>`,
+`    <div class="stat"><span class="k">Collected</span><span class="v" style="color:var(--good)"><span class="cur">AED</span>\${KNOWN?money(t.inv-t.outstanding):'&mdash;'}</span><span class="n">\${KNOWN?pct(1-t.outstanding/t.inv,1)+' of invoiced value':'not on file for this quarter'}</span></div>
+    <div class="stat"><span class="k">Outstanding</span><span class="v" style="color:var(--bad)"><span class="cur">AED</span>\${KNOWN?money(t.outstanding):'&mdash;'}</span><span class="n">\${KNOWN?pct(t.outstanding/t.inv,1)+' of invoiced value':'not on file for this quarter'}</span></div>`,
+  'collected and outstanding follow the quarter, or say they cannot');
+
+/* Key indicators: four of the eight need the quarter blocks. DD.topClients[0]
+   was read without checking there was one, which on a quarter with nothing on
+   file is a crash rather than a gap. */
+app = swap(app,
+`        \${kpi('Collection rate', pct(1-t.outstanding/t.inv,1), money(t.inv-t.outstanding)+' collected')}`,
+`        \${kpi('Collection rate', KNOWN?pct(1-t.outstanding/t.inv,1):'&mdash;', KNOWN?money(t.inv-t.outstanding)+' collected':'not on file for this quarter')}`,
+  'the collection rate follows the quarter');
+
+app = swap(app,
+`        \${kpi('Active clients', money(DD.clientCount), 'billed at least once in 2026')}
+        \${kpi('Largest client', pct(topNet/ytdNet,1), 'of net sales — '+esc(DD.topClients[0][0].slice(0,26))+(DD.topClients[0][0].length>26?'…':''), topNet/ytdNet>0.15?'var(--warn)':null)}`,
+`        \${kpi('Active clients', KNOWN?money(DD.clientCount):'&mdash;', KNOWN?'billed at least once in '+esc(PLAB):'not on file for this quarter')}
+        \${DD.topClients[0]
+          ? kpi('Largest client', pct(topNet/ytdNet,1), 'of net sales — '+esc(DD.topClients[0][0].slice(0,26))+(DD.topClients[0][0].length>26?'…':''), topNet/ytdNet>0.15?'var(--warn)':null)
+          : kpi('Largest client', '&mdash;', KNOWN?'no client billed in this period':'not on file for this quarter')}`,
+  'and so do the client counts');
+
+/* The closing line under Key indicators reads two of those figures out loud,
+   so it goes when they are not there rather than saying NaN% twice. */
+app = swap(app,
+`    <p class="cap">\${DD.combined?'Corporate &amp; Legal and Accounting &amp; Tax combined':esc(DD.department)+' only'} &mdash; staff see their own department alone. Two of these are worth watching. <b>New-client work at \${pct(newNet/ytdNet,1)}</b> means almost everything is repeat business — comfortable, but it is not growth. And a single client at <b>\${pct(topNet/ytdNet,1)}</b> of net sales is concentration risk if that relationship ends.</p>`,
+`    <p class="cap">\${DD.combined?'Corporate &amp; Legal and Accounting &amp; Tax combined':esc(DD.department)+' only'} &mdash; staff see their own department alone.\${
+      DD.topClients[0] ? ' Two of these are worth watching. <b>New-client work at '+pct(newNet/ytdNet,1)+'</b> means almost everything is repeat business — comfortable, but it is not growth. And a single client at <b>'+pct(topNet/ytdNet,1)+'</b> of net sales is concentration risk if that relationship ends.' : ''}</p>`,
+  'and the line under them only says what it can see');
+
+/* Top clients and Collection status are made entirely of the quarter blocks. */
+app = swap(app,
+`      <div class="pad">\${hbars(DD.topClients.map(c=>({label:c[0].length>38?c[0].slice(0,36)+'…':c[0], value:c[2], color:'var(--c2)'})),{})}</div>`,
+`      <div class="pad">\${DD.topClients.length
+        ? hbars(DD.topClients.map(c=>({label:c[0].length>38?c[0].slice(0,36)+'…':c[0], value:c[2], color:'var(--c2)'})),{})
+        : (KNOWN ? '<p class="note">No invoices in '+esc(PLAB)+'.</p>' : noQ('the top clients'))}</div>`,
+  'top clients follow the quarter');
+
+app = swap(app,
+`      <div class="pad" style="display:flex;flex-direction:column;gap:14px">
+        \${stacked(smParts)}\${legend(smParts)}
+        <dl class="kv">
+          <dt>Outstanding balance</dt><dd>\${money(t.outstanding)}</dd>
+          <dt>Collected</dt><dd>\${money(t.inv - t.outstanding)}</dd>
+          <div class="sep"></div>
+          <dt><b>Collection rate</b></dt><dd class="big">\${pct(1-t.outstanding/t.inv,1)}</dd>
+        </dl>`,
+`      <div class="pad" style="display:flex;flex-direction:column;gap:14px">
+        \${!KNOWN ? noQ('the collection status') : \`
+        \${stacked(smParts)}\${legend(smParts)}
+        <dl class="kv">
+          <dt>Outstanding balance</dt><dd>\${money(t.outstanding)}</dd>
+          <dt>Collected</dt><dd>\${money(t.inv - t.outstanding)}</dd>
+          <div class="sep"></div>
+          <dt><b>Collection rate</b></dt><dd class="big">\${pct(1-t.outstanding/t.inv,1)}</dd>
+        </dl>\`}`,
+  'and so does the collection status');
+
+/* CLDEPT lists the fields the headline department hands to a screen, so a
+   field that is not on the list does not exist as far as the screen is
+   concerned — which is why the quarter blocks arrived in the browser and the
+   page still could not see them. */
+app = swap(app,
+`  statusMix: DATA.statusMix, target: DATA.target, totals: DATA.totals });`,
+`  statusMix: DATA.statusMix, target: DATA.target, totals: DATA.totals,
+  byQuarter: DATA.byQuarter });`,
+  'the quarter blocks reach the screen');
+
+/* ---- and somewhere to set it.
+ *
+ * A target only I can change is a target that goes stale the first time it
+ * moves. One monthly figure per revenue department, the house Edit → change →
+ * confirm → Save, and the quarter and the year are shown beside it as what
+ * they will become — because 200,000 a month meaning 2.4m a year is the whole
+ * reason there is one box and not three. */
+app = swap(app,
+`  carry: {
+    title: 'Carried-forward leave',`,
+`  target: {
+    title: 'Sales targets',
+    now:  k => { const i = k.indexOf('|'); const v = TARGETOF(k.slice(0, i), k.slice(i + 1));
+                 return v ? String(v) : ''; },
+    name: k => { const i = k.indexOf('|');
+                 return (DATA.companies[k.slice(0, i)] || {name: k.slice(0, i)}).name
+                      + ' \\u2014 ' + k.slice(i + 1) + ', net sales a month'; },
+    fmt:  v => String(v).trim() === '' || !(+v) ? 'no target set'
+             : 'AED ' + money(+v, 0) + ' a month \\u00b7 ' + money(+v * 3, 0) + ' a quarter \\u00b7 '
+               + money(+v * 12, 0) + ' a year',
+    same: (a, b) => (+a || 0) === (+b || 0),
+    save: d => window.__db.setSalesTargets(d)
+  },
+  carry: {
+    title: 'Carried-forward leave',`,
+  'the target is an editable table');
+
+app = swap(app,
+`      <header><h3>Referral partners</h3>`,
+`      <header><h3>Sales targets</h3>
+        <span class="hint">\${EDITING('target') ? 'net sales a month \\u2014 the quarter and the year follow from it'
+                                              : 'net sales a month'}</span>
+        \${edBar('target')}</header>
+      \${edSaved('target')}\${edConfirm('target')}
+      <div class="tw"><table>
+        \${colsOf([22, 30, 16, 16, 16])}
+        <thead><tr><th>Company</th><th>Department</th><th class="r">A month</th>
+          <th class="r">A quarter</th><th class="r">A year</th></tr></thead>
+        <tbody>\${Object.keys(DATA.companies).flatMap(co => REVDEPT(co).map(d => {
+          const k = co + '|' + d, m = TARGETOF(co, d);
+          return '<tr><td>' + esc((DATA.companies[co]||{name:co}).name) + '</td><td>' + esc(d) + '</td>'
+            + '<td class="n r">' + edCell('target', k,
+                v => '<input class="ff cfin" type="number" step="1000" min="0"' + edAttr('target', k)
+                     + ' value="' + esc(String(v)) + '" placeholder="\\u2014">',
+                v => String(v).trim() === '' || !(+v)
+                     ? '<span class="edread none">\\u2014</span>'
+                     : '<span class="edread">' + money(+v, 0) + '</span>')
+            + '</td>'
+            + '<td class="n r">' + (m ? money(m * 3, 0) : '<span style="color:var(--ink3)">\\u2014</span>') + '</td>'
+            + '<td class="n r">' + (m ? money(m * 12, 0) : '<span style="color:var(--ink3)">\\u2014</span>') + '</td></tr>';
+        })).join('')}</tbody>
+      </table></div>
+      <p class="cap">One figure a department. A quarter is three months of it and a year is twelve,
+        so the three can never be edited into disagreeing with each other &mdash; which is what
+        200,000 a month, 600,000 a quarter and 2.4 million a year are. A department with no target
+        shows its figures without a percentage rather than against nought. Only departments that
+        earn revenue are listed; that list is <b>Departments that earn revenue</b> on the staff
+        accounts screen.</p>
+    </section>
+
+    <section class="panel">
+      <header><h3>Referral partners</h3>`,
+  'and there is a screen to set it on');
+
+app = swap(app,
+`  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:isAccounts, con:true},`,
+`  {id:'salestgt',   group:'con', sec:'sales',  label:'Sales targets',  title:'Sales targets', gate:isAccounts, con:true},
+  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:isAccounts, con:true},`,
+  'the console has a Sales targets screen');
+
+app = swap(app,
+`  salesptr:   ['admin',   ['Referral partners']],`,
+`  salestgt:   ['admin',   ['Sales targets']],
+  salesptr:   ['admin',   ['Referral partners']],`,
+  'and it is carved out of the admin page');
+
+/* ---- three things the screenshots showed once the quarter worked.
+ *
+ * 1. The bars in Top clients were not in order. The list is sorted by
+ *    INVOICED value and the bars draw NET sales, which are two different
+ *    orders, so 50,400 sat fourth behind 23,751. The panel says 'by net
+ *    sales', so it is sorted by the number it draws. True of the year as much
+ *    as the quarter — it has been out of order the whole time. */
+app = swap(app,
+`      <div class="pad">\${DD.topClients.length
+        ? hbars(DD.topClients.map(c=>({label:c[0].length>38?c[0].slice(0,36)+'…':c[0], value:c[2], color:'var(--c2)'})),{})`,
+`      <div class="pad">\${DD.topClients.length
+        ? hbars(DD.topClients.slice().sort((a,b)=>b[2]-a[2])
+            .map(c=>({label:c[0].length>38?c[0].slice(0,36)+'…':c[0], value:c[2], color:'var(--c2)'})),{})`,
+  'the top clients are in the order the bars are drawn in');
+
+/* 2. Dimming the months outside the quarter collided with the colour that
+ *    already means something on that chart: a pale September at 470,679 read
+ *    as 'below target' beside a blue December at 214,450. The bars keep their
+ *    own meaning and the panel says in words that it is the whole year. */
+app = swap(app,
+`      return {label:MONTHNAME[idx], value:v,
+        color: !inPer(k) ? 'var(--line)' : (under ? 'var(--warn)' : 'var(--c1)'),`,
+`      return {label:MONTHNAME[idx], value:v, color: under ? 'var(--warn)' : 'var(--c1)',`,
+  'the chart keeps one meaning for its colours');
+
+app = swap(app,
+`    items = QS.map(q=>{
+      const under = showTarget && qsum[q][3]>0 && qsum[q][1] < T.quarter;
+      return {label:q, value:qsum[q][mi],
+        color: (state.period !== 'FY' && q !== state.period) ? 'var(--line)'
+             : (under ? 'var(--warn)' : 'var(--c1)'),`,
+`    items = QS.map(q=>{
+      const under = showTarget && qsum[q][3]>0 && qsum[q][1] < T.quarter;
+      return {label:q, value:qsum[q][mi], color: under ? 'var(--warn)' : 'var(--c1)',`,
+  'and so does the quarterly one');
+
+app = swap(app,
+`    <header><h3>\${esc(DD.department)} performance</h3>`,
+`    <header><h3>\${esc(DD.department)} performance</h3>
+      <span class="hint" style="margin-left:0">the whole of \${esc(state.year)}\${
+        state.period === 'FY' ? '' : ' \\u2014 the figures above are ' + esc(QLABEL[state.period])}</span>`,
+  'and says which period it is not');
+
+/* 3. The run-rate note mixed the two: quarters counted across the year,
+ *    months counted inside the quarter, in one sentence. It is a statement
+ *    about the year, so both halves are the year. */
+app = swap(app,
+`        <p class="note" style="margin-top:14px"><b>\${QS.filter(q=>qsum[q][3]>0 && qsum[q][1]>=T.quarter).length} of \${QS.filter(q=>qsum[q][3]>0).length} quarters</b> have cleared \${money(T.quarter)}, and <b>\${above} of \${nMonths} months</b> cleared \${money(T.month)}.`,
+`        <p class="note" style="margin-top:14px"><b>\${QS.filter(q=>qsum[q][3]>0 && qsum[q][1]>=T.quarter).length} of \${QS.filter(q=>qsum[q][3]>0).length} quarters</b> in \${esc(state.year)} have cleared \${money(T.quarter)}, and <b>\${yMonths.filter(k=>YD.monthly[k][1] >= T.month).length} of \${nYearMonths} months</b> cleared \${money(T.month)}.`,
+  'the run-rate note counts one thing, the year');
+
 fs.writeFileSync(path.join(OUT,'index.html'),
 `<!doctype html>
 <html lang="en">

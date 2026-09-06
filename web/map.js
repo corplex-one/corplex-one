@@ -87,6 +87,12 @@ export function buildData(db, meId){
     // the rules that decide who counts as sales. Empty here reads as "nobody
     // qualifies", which is why these must come from settings, not a placeholder.
     revDept:     S.rev_dept     || {},
+    /* The monthly net-sales target, per company and department. It lives here
+       rather than in the workbook because the workbook reader wrote nought
+       into it on every upload — 200,000 a month is a decision, not something
+       read off a spreadsheet. The quarter is three of these and the year is
+       twelve, so the three can never disagree. */
+    salesTarget: S.sales_target || {},
     /* Who is treated as sales staff whatever their department says. It was a
        settings blob keyed by full name, which would orphan itself the first
        time Staff Records corrected somebody's spelling; it is a row keyed by

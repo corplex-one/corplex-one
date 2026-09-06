@@ -1280,6 +1280,28 @@ window.__db = {
   /* The letter templates, all of them at once, having been shown what changes.
      The database refuses to drop a kind that letters on file refer to, so the
      error a person sees here is the one it raises, in its words. */
+  /* The monthly net-sales target, per company and department. The draft comes
+     off the table keyed 'corplex|Corporate & Legal', which is the shape the
+     setting is stored in one level down, so it is regrouped rather than sent
+     row by row — one call, one thing that either happened or did not. An empty
+     box means no target, and is sent as nought rather than left out, or
+     clearing one would silently keep the old figure. */
+  async setSalesTargets(draft){
+    try{
+      const p = {};
+      Object.keys(draft || {}).forEach(k => {
+        const i = k.indexOf('|'); if(i < 0) return;
+        const co = k.slice(0, i), dept = k.slice(i + 1);
+        (p[co] || (p[co] = {}))[dept] = +draft[k] || 0;
+      });
+      if(!Object.keys(p).length) return true;
+      const {data, error} = await sb.rpc('set_sales_target', {p});
+      if(error) throw error;
+      await reload();
+      return data;
+    }catch(e){ oops(e, 'The sales target'); await reload(); return null; }
+  },
+
   async setLetterTypes(types){
     try{
       const {data, error} = await sb.rpc('set_letter_types', {p_types: types});

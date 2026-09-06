@@ -172,10 +172,12 @@ function mgrOf(u,p){
 const CLDEPT = () => ({
   department: DATA.department, monthly: DATA.monthly, typeMonthly: DATA.typeMonthly,
   topClients: DATA.topClients, clients: DATA.clients, clientCount: DATA.clientCount,
-  statusMix: DATA.statusMix, target: DATA.target, totals: DATA.totals });
-let _MERGED = null;
+  statusMix: DATA.statusMix, target: DATA.target, totals: DATA.totals,
+  byQuarter: DATA.byQuarter });
+let _MERGED = {};
 function mergedDept(){
-  if(_MERGED) return _MERGED;
+  const CK = state.year + '|' + (DATA.department || '');
+  if(_MERGED[CK]) return _MERGED[CK];
   const A = CLDEPT(), B = DATA.atDept;
   const mon = {};
   [A,B].forEach(D=>Object.keys(D.monthly).forEach(k=>{
@@ -203,16 +205,79 @@ function mergedDept(){
   ['inv','net','elig','outstanding','count'].forEach(k=>tot[k]=Math.round((A.totals[k]+B.totals[k])*100)/100);
   const keys = Object.keys(mon).sort();
   const monS = {}; keys.forEach(k=>monS[k]=mon[k]);
-  _MERGED = {department:'Both departments', monthly:monS, typeMonthly:tm, topClients:top,
+  /* The quarter blocks, merged the same way: two departments' outstanding
+     added, two client books folded together, two status mixes summed. A
+     quarter one department has and the other does not still comes through,
+     because a quarter with no Accounting & Tax invoices in it is a quarter,
+     not a missing one. */
+  const bq = {};
+  ['Q1','Q2','Q3','Q4'].forEach(q => {
+    const a = ((A.byQuarter || {})[q]) || null, b = ((B.byQuarter || {})[q]) || null;
+    if(!a && !b) return;
+    const parts = [a, b].filter(Boolean);
+    const t2 = {};
+    ['inv','net','elig','outstanding','count'].forEach(k =>
+      t2[k] = Math.round(parts.reduce((s,x)=>s+(+((x.totals||{})[k])||0),0)*100)/100);
+    const cl2 = {};
+    parts.forEach(x => Object.keys(x.clients || {}).forEach(k => {
+      const c = x.clients[k];
+      if(!cl2[k]) cl2[k] = c.slice();
+      else { cl2[k][0]=Math.round((cl2[k][0]+c[0])*100)/100;
+             cl2[k][1]=Math.round((cl2[k][1]+c[1])*100)/100; cl2[k][2]+=c[2]; }
+    }));
+    const sm2 = {};
+    parts.forEach(x => Object.keys(x.statusMix || {}).forEach(k => sm2[k]=(sm2[k]||0)+x.statusMix[k]));
+    bq[q] = {totals:t2, clients:cl2,
+      topClients: Object.keys(cl2).map(k=>[k, cl2[k][0], cl2[k][1], cl2[k][2]])
+                    .sort((x,y)=>y[1]-x[1]).slice(0,10),
+      clientCount: Object.keys(cl2).length, statusMix: sm2};
+  });
+  _MERGED[CK] = {department:'Both departments', monthly:monS, typeMonthly:tm, topClients:top,
     clients:cl, clientCount:Object.keys(cl).length, statusMix:sm, target:null, totals:tot,
-    combined:true};
-  return _MERGED;
+    byQuarter:bq, combined:true};
+  return _MERGED[CK];
+}
+const QOF = k => 'Q' + (Math.floor((parseInt(String(k).slice(5), 10) - 1) / 3) + 1);
+function deptFor(u, per){
+  const D = deptData(u);
+  if(per === 'FY' || !per) return Object.assign({}, D, {period:'FY', quarterKnown:true});
+  const keep = o => { const r = {}; Object.keys(o || {}).forEach(k => { if(QOF(k) === per) r[k] = o[k]; }); return r; };
+  const monthly = keep(D.monthly), typeMonthly = keep(D.typeMonthly);
+  const sum = i => Math.round(Object.values(monthly).reduce((s,m)=>s+(+m[i]||0),0)*100)/100;
+  const B = (D.byQuarter || {})[per] || null;
+  return Object.assign({}, D, {
+    period: per, quarterKnown: !!B, monthly, typeMonthly,
+    totals: {inv:sum(0), net:sum(1), elig:sum(2), count:sum(3),
+             outstanding: B ? (+((B.totals||{}).outstanding) || 0) : null},
+    clients:     B ? (B.clients || {})    : {},
+    topClients:  B ? (B.topClients || []) : [],
+    clientCount: B ? B.clientCount        : null,
+    statusMix:   B ? (B.statusMix || {})  : {}
+  });
+}
+/* The monthly target for the department being looked at, and the quarter and
+   year that follow from it. 'Both' is the two departments added, which is why
+   a company with a target on one department and none on the other still shows
+   a sensible figure for Both. */
+function deptTargetFor(u){
+  const co = activeCo().key, s = scopeOf(u);
+  const m = s === 'all'
+    ? REVDEPT(co).reduce((t, d) => t + TARGETOF(co, d), 0)
+    : TARGETOF(co, s);
+  return TARGETS(m);
 }
 const deptOf = u => DATA.dept[u] || DATA.department;
 /* Which company's sales a person belongs to. It follows the sales department, not
    the payroll - Miraziz is paid out of POA but sells for CorpLex. Anyone with no
    sales department is in no sales team at all and never appears in these tables. */
 const REVDEPT = co => (HR().revDept || {})[co] || [];
+/* The monthly net-sales target for a department, and the quarter and year
+   that follow from it. One number: 200,000 a month is 600,000 a quarter and
+   2.4m a year, and they cannot be edited into disagreeing with each other.
+   Nought back means no target has been set for that department — which is
+   true of Accounting & Tax and was true of everything until 0033. */
+const TARGETOF = (co, dept) => +(((HR().salesTarget || {})[co] || {})[dept] || 0) || 0;
+const TARGETS = m => ({month: m, quarter: m * 3, year: m * 12});
 const SALESEXTRA = n => (HR().salesExtra || {})[n] || null;
 /* Which company's sales a person counts towards. Support departments - Marketing,
    HR & Finance, Operations - earn nothing and never appear in a performance table,
@@ -875,6 +940,19 @@ const OPENAT = u => { const d = (HR().leavePolicy || {}).openingAt || '2026-08-3
  * editable cell the key carries which, as 's|Rana Amine' or 'Rana|passport'.
  */
 const EDTABLES = {
+  target: {
+    title: 'Sales targets',
+    now:  k => { const i = k.indexOf('|'); const v = TARGETOF(k.slice(0, i), k.slice(i + 1));
+                 return v ? String(v) : ''; },
+    name: k => { const i = k.indexOf('|');
+                 return (DATA.companies[k.slice(0, i)] || {name: k.slice(0, i)}).name
+                      + ' \u2014 ' + k.slice(i + 1) + ', net sales a month'; },
+    fmt:  v => String(v).trim() === '' || !(+v) ? 'no target set'
+             : 'AED ' + money(+v, 0) + ' a month \u00b7 ' + money(+v * 3, 0) + ' a quarter \u00b7 '
+               + money(+v * 12, 0) + ' a year',
+    same: (a, b) => (+a || 0) === (+b || 0),
+    save: d => window.__db.setSalesTargets(d)
+  },
   carry: {
     title: 'Carried-forward leave',
     now:  k => { const b = (HR().balances||{})[k] || {}; return b.carriedSet ? String(b.carried) : ''; },
@@ -5239,21 +5317,38 @@ function kpi(k,v,n,color){
   return `<div class="stat"><span class="k">${k}</span><span class="v" style="font-size:21px${color?';color:'+color:''}">${v}</span><span class="n">${n}</span></div>`;
 }
 function vCompany(){
-  const DD = deptData(state.user);
+  const YD = deptData(state.user);                    // the whole year
+  const DD = deptFor(state.user, state.period);       // the period being looked at
   const months = Object.keys(DD.monthly);
+  const yMonths = Object.keys(YD.monthly);
+  const PLAB = state.period === 'FY' ? state.year : QLABEL[state.period] + ' ' + state.year;
   const grain = state.companyGrain;
   const metric = state.companyMetric || 'net';
   const MIDX = {inv:0, net:1};
   const mi = MIDX[metric];
-  const T = DD.target || {month:0,quarter:0,year:0};
-  const HASTGT = !!DD.target;
+  /* Nought means nobody has set one, which is different from missing it. It
+     was ALWAYS nought until 0033 — the workbook reader wrote zeros over it on
+     every upload — which is why the ring read 0%. */
+  const T = deptTargetFor(state.user);
+  const HASTGT = T.month > 0;
   const qsum = {Q1:[0,0,0,0],Q2:[0,0,0,0],Q3:[0,0,0,0],Q4:[0,0,0,0]};
-  months.forEach(k=>{ const m=parseInt(k.slice(5),10)-1, q='Q'+(Math.floor(m/3)+1);
-    for(let i=0;i<4;i++) qsum[q][i]+=DD.monthly[k][i]; });
+  yMonths.forEach(k=>{ const m=parseInt(k.slice(5),10)-1, q='Q'+(Math.floor(m/3)+1);
+    for(let i=0;i<4;i++) qsum[q][i]+=YD.monthly[k][i]; });
   const t = DD.totals;
   const ytdNet = months.reduce((s,k)=>s+DD.monthly[k][1],0);
+  const yearNet = yMonths.reduce((s,k)=>s+YD.monthly[k][1],0);
   const nMonths = months.length;
+  const nYearMonths = yMonths.length;
   const above = months.filter(k=>DD.monthly[k][1] >= T.month).length;
+  /* Outstanding, the client book, the top ten and the status mix are the four
+     a monthly series cannot give you. For a year before 0033 they are not
+     there, and the panels that draw them say so instead of showing the whole
+     year under a quarter's heading. */
+  const KNOWN = DD.quarterKnown;
+  const noQ = what => '<p class="note">The ' + esc(QLABEL[state.period]) + ' figures for '
+    + what + ' are not on file for ' + esc(state.year) + '. They are written on every upload from '
+    + 'now on, so re-uploading the ' + esc(state.year) + ' workbook fills them in. '
+    + 'Switch to <b>Year</b> for the figures that are held.</p>';
   const showTarget = metric==='net' && HASTGT;
 
   // Target achievement follows the Q1–Q4 / Year selector in the header
@@ -5261,7 +5356,7 @@ function vCompany(){
   const qMonths = q => months.filter(k=>('Q'+(Math.floor((parseInt(k.slice(5),10)-1)/3)+1))===q).length;
   let targetVal, actualVal, periodLabel, periodNote;
   if(per === 'FY'){
-    targetVal = T.year; actualVal = ytdNet; periodLabel = '2026 year to date';
+    targetVal = T.year; actualVal = ytdNet; periodLabel = state.year + ' year to date';
     periodNote = `${nMonths} of 12 months invoiced — a straight-line target of AED ${money(T.month*nMonths)} by now.`;
   } else {
     targetVal = T.quarter; actualVal = qsum[per][1]; periodLabel = QLABEL[per];
@@ -5272,9 +5367,10 @@ function vCompany(){
   }
 
   let items, aria, thresholds = [];
+  const inPer = k => state.period === 'FY' || QOF(k) === state.period;
   if(grain==='month'){
-    items = months.map(k=>{
-      const m = DD.monthly[k], idx = parseInt(k.slice(5),10)-1, v = m[mi];
+    items = yMonths.map(k=>{
+      const m = YD.monthly[k], idx = parseInt(k.slice(5),10)-1, v = m[mi];
       const under = showTarget && m[1] < T.month;
       return {label:MONTHNAME[idx], value:v, color: under ? 'var(--warn)' : 'var(--c1)',
         tip:`<b>${money(v)}</b> ${metric==='net'?'net sales':'invoiced'}<br>${MONTHNAME[idx]} 2026 · ${m[3]} invoices${showTarget?`<br>${under?'below':'above'} target by ${money(Math.abs(m[1]-T.month))}`:''}`};
@@ -5290,8 +5386,8 @@ function vCompany(){
     if(showTarget) thresholds = [{v:T.quarter, label:'Target'}];
     aria = 'Net sales by quarter against the quarterly target, 2026';
   } else {
-    items = [{label:'2026 to date', value: metric==='inv'?t.inv:ytdNet, color:'var(--c1)',
-      tip:`<b>${money(ytdNet)}</b> net sales · ${t.count} invoices`}];
+    items = [{label:esc(state.year)+' to date', value: metric==='inv'?YD.totals.inv:yearNet, color:'var(--c1)',
+      tip:`<b>${money(yearNet)}</b> net sales · ${YD.totals.count} invoices`}];
     if(showTarget) thresholds = [{v:T.year, label:'Target 2.4M'}];
     aria = 'Net sales against the annual target';
   }
@@ -5306,14 +5402,14 @@ function vCompany(){
   const newNet = Object.values(DD.typeMonthly).reduce((s,v)=>s+v[0],0);
   const topNet = DD.topClients[0] ? DD.topClients[0][2] : 0;
   const ytdTarget = T.month*nMonths;
-  const runRate = ytdNet/nMonths*12;
+  const runRate = nYearMonths ? yearNet/nYearMonths*12 : 0;
 
   return `
   <div class="strip">
-    <div class="stat"><span class="k">Invoiced ${esc(state.year)}${state.year === HDATE().slice(0,4) ? ' YTD' : ''}</span><span class="v"><span class="cur">AED</span>${money(t.inv)}</span><span class="n">${t.count} invoices, excl. VAT</span></div>
+    <div class="stat"><span class="k">Invoiced ${esc(PLAB)}${state.period === 'FY' && state.year === HDATE().slice(0,4) ? ' YTD' : ''}</span><span class="v"><span class="cur">AED</span>${money(t.inv)}</span><span class="n">${t.count} invoices, excl. VAT</span></div>
     <div class="stat"><span class="k">Net sales</span><span class="v"><span class="cur">AED</span>${money(ytdNet)}</span><span class="n">after cost and partner commission</span></div>
-    <div class="stat"><span class="k">Collected</span><span class="v" style="color:var(--good)"><span class="cur">AED</span>${money(t.inv-t.outstanding)}</span><span class="n">${pct(1-t.outstanding/t.inv,1)} of invoiced value</span></div>
-    <div class="stat"><span class="k">Outstanding</span><span class="v" style="color:var(--bad)"><span class="cur">AED</span>${money(t.outstanding)}</span><span class="n">${pct(t.outstanding/t.inv,1)} of invoiced value</span></div>
+    <div class="stat"><span class="k">Collected</span><span class="v" style="color:var(--good)"><span class="cur">AED</span>${KNOWN?money(t.inv-t.outstanding):'&mdash;'}</span><span class="n">${KNOWN?pct(1-t.outstanding/t.inv,1)+' of invoiced value':'not on file for this quarter'}</span></div>
+    <div class="stat"><span class="k">Outstanding</span><span class="v" style="color:var(--bad)"><span class="cur">AED</span>${KNOWN?money(t.outstanding):'&mdash;'}</span><span class="n">${KNOWN?pct(t.outstanding/t.inv,1)+' of invoiced value':'not on file for this quarter'}</span></div>
   </div>
 
   ${HASTGT ? `
@@ -5328,7 +5424,7 @@ function vCompany(){
           ${kpi('Target','<span class="cur">AED</span>'+money(targetVal), per==='FY'?'full year':'per quarter')}
           ${kpi(diff>=0?'Ahead by':'Remaining','<span class="cur">AED</span>'+money(Math.abs(diff)), diff>=0?'above target':'still to earn', diff>=0?'var(--good)':'var(--accent2)')}
         </div>
-        <p class="note" style="margin-top:14px"><b>${QS.filter(q=>qsum[q][3]>0 && qsum[q][1]>=T.quarter).length} of ${QS.filter(q=>qsum[q][3]>0).length} quarters</b> have cleared ${money(T.quarter)}, and <b>${above} of ${nMonths} months</b> cleared ${money(T.month)}. At the current run rate the year lands near <b>AED ${money(runRate)}</b> against the ${money(T.year)} target &mdash; ${runRate>=T.year?'ahead':'short'} by ${money(Math.abs(runRate-T.year))}.</p>
+        <p class="note" style="margin-top:14px"><b>${QS.filter(q=>qsum[q][3]>0 && qsum[q][1]>=T.quarter).length} of ${QS.filter(q=>qsum[q][3]>0).length} quarters</b> in ${esc(state.year)} have cleared ${money(T.quarter)}, and <b>${yMonths.filter(k=>YD.monthly[k][1] >= T.month).length} of ${nYearMonths} months</b> cleared ${money(T.month)}. At the current run rate the year lands near <b>AED ${money(runRate)}</b> against the ${money(T.year)} target &mdash; ${runRate>=T.year?'ahead':'short'} by ${money(Math.abs(runRate-T.year))}.</p>
       </div>
     </div>
   </section>` : `
@@ -5348,6 +5444,8 @@ function vCompany(){
 
   <section class="panel">
     <header><h3>${esc(DD.department)} performance</h3>
+      <span class="hint" style="margin-left:0">the whole of ${esc(state.year)}${
+        state.period === 'FY' ? '' : ' \u2014 the figures above are ' + esc(QLABEL[state.period])}</span>
       <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
         <div class="seg" id="metricSeg">
           ${[['net','Net sales'],['inv','Invoiced']].map(([k,l])=>`<button data-m="${k}" aria-pressed="${metric===k}" type="button">${l}</button>`).join('')}
@@ -5363,42 +5461,49 @@ function vCompany(){
   </section>
 
   <section class="panel">
-    <header><h3>Key indicators</h3><span class="hint">2026 to date</span></header>
+    <header><h3>Key indicators</h3><span class="hint">${esc(PLAB)}</span></header>
     <div>
       <div class="strip kpirow" style="border:0;box-shadow:none;border-radius:0;border-bottom:1px solid var(--line2)">
         ${kpi('Net sales margin', pct(ytdNet/t.inv,1), 'of invoiced value survives cost and partner fees')}
-        ${kpi('Collection rate', pct(1-t.outstanding/t.inv,1), money(t.inv-t.outstanding)+' collected')}
+        ${kpi('Collection rate', KNOWN?pct(1-t.outstanding/t.inv,1):'&mdash;', KNOWN?money(t.inv-t.outstanding)+' collected':'not on file for this quarter')}
         ${kpi('Average invoice', '<span class="cur">AED</span>'+money(t.inv/t.count), t.count+' invoices raised')}
         ${kpi('Invoices per month', money(t.count/nMonths,0), 'across '+nMonths+' months')}
       </div>
       <div class="strip kpirow" style="border:0;box-shadow:none;border-radius:0">
-        ${kpi('Active clients', money(DD.clientCount), 'billed at least once in 2026')}
-        ${kpi('Largest client', pct(topNet/ytdNet,1), 'of net sales — '+esc(DD.topClients[0][0].slice(0,26))+(DD.topClients[0][0].length>26?'…':''), topNet/ytdNet>0.15?'var(--warn)':null)}
+        ${kpi('Active clients', KNOWN?money(DD.clientCount):'&mdash;', KNOWN?'billed at least once in '+esc(PLAB):'not on file for this quarter')}
+        ${DD.topClients[0]
+          ? kpi('Largest client', pct(topNet/ytdNet,1), 'of net sales — '+esc(DD.topClients[0][0].slice(0,26))+(DD.topClients[0][0].length>26?'…':''), topNet/ytdNet>0.15?'var(--warn)':null)
+          : kpi('Largest client', '&mdash;', KNOWN?'no client billed in this period':'not on file for this quarter')}
         ${kpi('New-client work', pct(newNet/ytdNet,1), 'of net sales — '+money(newNet)+' from new clients', newNet/ytdNet<0.05?'var(--warn)':null)}
         ${HASTGT
           ? kpi('Months on target', above+' of '+nMonths, 'at or above AED '+money(T.month), above/nMonths>=0.75?'var(--good)':'var(--warn)')
           : kpi('Best month','<span class="cur">AED</span>'+money(Math.max(...months.map(k=>DD.monthly[k][1]))), MONTHNAME[months.reduce((bi,k,i)=>DD.monthly[k][1]>DD.monthly[months[bi]][1]?i:bi,0)]+' 2026')}
       </div>
     </div>
-    <p class="cap">${DD.combined?'Corporate &amp; Legal and Accounting &amp; Tax combined':esc(DD.department)+' only'} &mdash; staff see their own department alone. Two of these are worth watching. <b>New-client work at ${pct(newNet/ytdNet,1)}</b> means almost everything is repeat business — comfortable, but it is not growth. And a single client at <b>${pct(topNet/ytdNet,1)}</b> of net sales is concentration risk if that relationship ends.</p>
+    <p class="cap">${DD.combined?'Corporate &amp; Legal and Accounting &amp; Tax combined':esc(DD.department)+' only'} &mdash; staff see their own department alone.${
+      DD.topClients[0] ? ' Two of these are worth watching. <b>New-client work at '+pct(newNet/ytdNet,1)+'</b> means almost everything is repeat business — comfortable, but it is not growth. And a single client at <b>'+pct(topNet/ytdNet,1)+'</b> of net sales is concentration risk if that relationship ends.' : ''}</p>
   </section>
 
   <div class="grid g2">
     <section class="panel">
-      <header><h3>Top clients</h3><span class="hint">by net sales, 2026</span></header>
-      <div class="pad">${hbars(DD.topClients.map(c=>({label:c[0].length>38?c[0].slice(0,36)+'…':c[0], value:c[2], color:'var(--c2)'})),{})}</div>
+      <header><h3>Top clients</h3><span class="hint">by net sales, ${esc(PLAB)}</span></header>
+      <div class="pad">${DD.topClients.length
+        ? hbars(DD.topClients.slice().sort((a,b)=>b[2]-a[2])
+            .map(c=>({label:c[0].length>38?c[0].slice(0,36)+'…':c[0], value:c[2], color:'var(--c2)'})),{})
+        : (KNOWN ? '<p class="note">No invoices in '+esc(PLAB)+'.</p>' : noQ('the top clients'))}</div>
       <p class="cap">Net sales, not invoiced value — so a large invoice carrying heavy cost or a 20% partner fee sits lower here than it would on turnover.</p>
     </section>
     <section class="panel">
       <header><h3>Collection status</h3><span class="hint">${t.count} invoices</span></header>
       <div class="pad" style="display:flex;flex-direction:column;gap:14px">
+        ${!KNOWN ? noQ('the collection status') : `
         ${stacked(smParts)}${legend(smParts)}
         <dl class="kv">
           <dt>Outstanding balance</dt><dd>${money(t.outstanding)}</dd>
           <dt>Collected</dt><dd>${money(t.inv - t.outstanding)}</dd>
           <div class="sep"></div>
           <dt><b>Collection rate</b></dt><dd class="big">${pct(1-t.outstanding/t.inv,1)}</dd>
-        </dl>
+        </dl>`}
         <p class="note">Every dirham in the unpaid column is commission nobody can be paid yet. This panel is the reason the team chases their own invoices.</p>
       </div>
     </section>
@@ -9139,6 +9244,38 @@ function vAdmin(){
 
   <div class="grid g2">
     <section class="panel">
+      <header><h3>Sales targets</h3>
+        <span class="hint">${EDITING('target') ? 'net sales a month \u2014 the quarter and the year follow from it'
+                                              : 'net sales a month'}</span>
+        ${edBar('target')}</header>
+      ${edSaved('target')}${edConfirm('target')}
+      <div class="tw"><table>
+        ${colsOf([22, 30, 16, 16, 16])}
+        <thead><tr><th>Company</th><th>Department</th><th class="r">A month</th>
+          <th class="r">A quarter</th><th class="r">A year</th></tr></thead>
+        <tbody>${Object.keys(DATA.companies).flatMap(co => REVDEPT(co).map(d => {
+          const k = co + '|' + d, m = TARGETOF(co, d);
+          return '<tr><td>' + esc((DATA.companies[co]||{name:co}).name) + '</td><td>' + esc(d) + '</td>'
+            + '<td class="n r">' + edCell('target', k,
+                v => '<input class="ff cfin" type="number" step="1000" min="0"' + edAttr('target', k)
+                     + ' value="' + esc(String(v)) + '" placeholder="\u2014">',
+                v => String(v).trim() === '' || !(+v)
+                     ? '<span class="edread none">\u2014</span>'
+                     : '<span class="edread">' + money(+v, 0) + '</span>')
+            + '</td>'
+            + '<td class="n r">' + (m ? money(m * 3, 0) : '<span style="color:var(--ink3)">\u2014</span>') + '</td>'
+            + '<td class="n r">' + (m ? money(m * 12, 0) : '<span style="color:var(--ink3)">\u2014</span>') + '</td></tr>';
+        })).join('')}</tbody>
+      </table></div>
+      <p class="cap">One figure a department. A quarter is three months of it and a year is twelve,
+        so the three can never be edited into disagreeing with each other &mdash; which is what
+        200,000 a month, 600,000 a quarter and 2.4 million a year are. A department with no target
+        shows its figures without a percentage rather than against nought. Only departments that
+        earn revenue are listed; that list is <b>Departments that earn revenue</b> on the staff
+        accounts screen.</p>
+    </section>
+
+    <section class="panel">
       <header><h3>Referral partners</h3>
         <span class="pill mute">${esc(coNameInView())}</span>
         <span class="hint" style="margin-left:auto">Company Master</span></header>
@@ -9235,6 +9372,7 @@ const TABS = [
   {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:isAccounts, con:true},
   {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:isAccounts, con:true},
   {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:isAccounts, con:true},
+  {id:'salestgt',   group:'con', sec:'sales',  label:'Sales targets',  title:'Sales targets', gate:isAccounts, con:true},
   {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:isAccounts, con:true},
   // ---- Documents: the hero stays put as you move between these four
   {id:'staffrec',   group:'con', sec:'docs',   label:'Staff Records',  title:'Staff records', gate:isAccounts, con:true},
@@ -9845,6 +9983,7 @@ const PAGE = {
   salestpl:   ['admin',   ['Upload template']],
   salesrules: ['admin',   ['Commission rules']],
   salesstaff: ['admin',   ['Staff accounts', 'Moving somebody between departments']],
+  salestgt:   ['admin',   ['Sales targets']],
   salesptr:   ['admin',   ['Referral partners']],
   hradmin:    ['hradmin', ['attendance'], true],
   shifts:     ['hradmin', ['Shifts and reporting lines']],
