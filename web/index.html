@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609062133">
+<link rel="manifest" href="manifest.webmanifest?v=202609062149">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -1044,22 +1044,28 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .availtable{table-layout:auto;width:100%}
 .availtable th.r{text-align:center;font-weight:600;padding:6px 0;min-width:34px}
 /* ---------- Team availability: one month, full width ---------- */
-/* The day columns are given a width and the name column takes what is left,
-   rather than both being percentages of a table nobody has measured. 34px is
-   the 40% cut off the fortnight strip's 57px, and thirty-one of them is about
-   1,050px — so on any screen this page opens at, the name column gets several
-   hundred pixels and a full name fits without being cut. */
+/* WHICH COLUMN ABSORBS THE SURPLUS.
+ *
+ *   'Why have you given so much space for names - this looks so odd and you
+ *    were saying the columns will be tight. With that space, i add 10 long
+ *    names. narrow the names columns by 150% and use the width for dates
+ *    column equally'                                                 -- Avin
+ *
+ * It was the wrong way round: the days were pinned at 34px and the name
+ * column was width:auto, so on a wide screen the names took six hundred
+ * pixels to hold two hundred pixels of text while the days stayed cramped.
+ * That is the wasted-column-width fault, written into the stylesheet.
+ *
+ * The name column is fixed at what the longest name actually measures and the
+ * DAYS take what is left, shared equally — which is what fixed layout does
+ * with columns that have no width of their own.
+ *
+ * 250px is not a guess. The longest name on the roster, 'Donia Mohamed
+ * Mahmoud Ahmed', is 217px at this size, plus 26px of padding: 243. The
+ * remaining seven are headroom for a longer one arriving, and the column
+ * cannot go below that without cutting a name, which is the other rule. */
 .availtable.avmonth{table-layout:fixed}
-.availtable.avmonth th.r,.availtable.avmonth td.av{width:34px}
-/* On a laptop the same sum does not come out: thirty-one days at 34px plus a
-   name column leaves nothing for the name, and 'Abdulkhamid Makhamatjanov' is
-   twenty-five characters. The day gives up six pixels there rather than the
-   name being cut — a single letter reads the same at 28px, and a name that is
-   half a name does not. */
-@media screen and (max-width:1700px){
-  .availtable.avmonth th.r,.availtable.avmonth td.av{width:28px}
-}
-.availtable.avmonth th.s1{min-width:200px}
+.availtable.avmonth th.s1{width:250px}
 .availtable.avmonth th.r{min-width:0;padding:5px 0}
 /* 11px is the portal's floor for type somebody has to read, and a weekday
    initial is no exception — it was 9px here, which is the same mistake as the
@@ -1069,7 +1075,10 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .availtable.avmonth th.r b{font-size:12px;font-weight:600;line-height:1.2}
 .availtable.avmonth th.av-off{background:var(--sunk)}
 .availtable.avmonth td.av{font-size:11px;padding:7px 0}
-.availtable.avmonth td.s1,.availtable.avmonth th.s1{width:auto;padding-right:10px}
+/* Padding only. This line used to carry width:auto as well, and sitting
+   below the 250px rule at the same specificity it quietly won — which is how
+   the name column came to take six hundred pixels. */
+.availtable.avmonth td.s1,.availtable.avmonth th.s1{padding-right:10px}
 /* One hairline down each side of today rather than two heavy bars — beside a
    shaded weekend the old two-pixel pair read as something being wrong. */
 .availtable.avmonth .av-today{box-shadow:inset 1px 0 0 var(--accent),inset -1px 0 0 var(--accent)}
@@ -2222,8 +2231,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609062133';</script>
-<script src="config.js?v=202609062133"></script>
-<script type="module" src="boot.js?v=202609062133"></script>
+<script>window.__BUILD = '202609062149';</script>
+<script src="config.js?v=202609062149"></script>
+<script type="module" src="boot.js?v=202609062149"></script>
 </body>
 </html>

@@ -104,6 +104,16 @@ const snap = p => p.evaluate(() => {
     over: tw ? tw.scrollWidth - tw.clientWidth : null,
     dayW: t ? Math.round((t.querySelectorAll('thead th')[1] || {getBoundingClientRect:()=>({width:0})})
                 .getBoundingClientRect().width) : 0,
+    nameW: t ? Math.round((t.querySelector('thead th.s1') || {getBoundingClientRect:()=>({width:0})})
+                 .getBoundingClientRect().width) : 0,
+    /* The widest name actually in the table, measured rather than assumed. */
+    nameNeeds: t ? Math.ceil(Math.max(0, ...[...t.querySelectorAll('tbody td.s1')].map(td => {
+        const a = td.firstElementChild || td;
+        return a.getBoundingClientRect().width
+             + parseFloat(getComputedStyle(td).paddingLeft)
+             + parseFloat(getComputedStyle(td).paddingRight); }))) : 0,
+    dayWidths: t ? [...t.querySelectorAll('thead th.r')]
+                     .map(x => Math.round(x.getBoundingClientRect().width)) : [],
     nameCut: t ? [...t.querySelectorAll('tbody td.s1')].filter(x => x.scrollWidth > x.clientWidth + 1).length : 0,
     wide: document.querySelector('main').classList.contains('wide')
   };
@@ -218,10 +228,20 @@ for(const w of [1440, 1920]){
   ok(`${w} — 31 columns and the table does not scroll sideways`,
      s.days === 31 && s.over <= 0, s);
   /* He asked for 40% off the fortnight strip's day column, which was 57px. */
-  /* 34px on a wide screen, 28 on a laptop where the name column needs the
-     difference. Either way well under the 57px the fortnight strip used. */
-  ok(`${w} — a day column is 28-34px, not the old 57`,
-     s.dayW >= 26 && s.dayW <= 36, s.dayW);
+  /* The surplus goes to the DAYS, not to the names.
+   *
+   *   'Why have you given so much space for names ... narrow the names
+   *    columns by 150% and use the width for dates column equally'  -- Avin
+   *
+   * It was the other way round and the names took six hundred pixels to hold
+   * two hundred of text. So: the name column is no wider than the longest
+   * name in it needs, and every day column is the same width as every other,
+   * which is what 'equally' means. */
+  ok(`${w} — the name column is no wider than the longest name needs`,
+     s.nameW <= s.nameNeeds + 40, {is: s.nameW, needs: s.nameNeeds});
+  ok(`${w} — and the days share what is left, equally`,
+     new Set(s.dayWidths).size <= 2 && s.dayW > 28,
+     {day: s.dayW, distinct: [...new Set(s.dayWidths)]});
   ok(`${w} — no name is cut off`, s.nameCut === 0, s.nameCut);
   ok(`${w} — no page errors`, !errs.length, errs[0]);
   await p.close();
