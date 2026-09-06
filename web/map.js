@@ -134,8 +134,11 @@ export function buildData(db, meId){
     set(hr.visaCo,  n, e.visa_company);
     /* Whether they have ever signed in. correct_joining refuses to move the
        work address of somebody who has, and the screen has to say so before
-       they type rather than after they press Save. */
-    if(e.auth_user_id) hr.signedIn[n] = true;
+       they type rather than after they press Save.
+       The roster is a view now and answers this as a flag rather than handing
+       over the auth id; the second half is the fallback for a portal deployed
+       before 0025 has been run. */
+    if(e.signed_in || e.auth_user_id) hr.signedIn[n] = true;
     if(e.last_day) hr.left[n] = e.last_day;
     if(e.no_leave)      hr.noLeave.push(n);
     if(e.works_remote)  hr.remote.push(n);
@@ -262,6 +265,26 @@ export function buildData(db, meId){
                   flagged: !!w.flagged} : null
     });
   });
+  /* Everybody else's day, without a clock on it.
+   *
+   *   'employees should just know if their colleague is at work or away.
+   *    Timings are not needed'                                        -- Avin
+   *
+   * The rows above are the ones this person may see in full — their own, their
+   * reports', or all of them for accounts. For everybody else the portal still
+   * has to draw the fortnight strip on People and count who is working from
+   * home today, so the day arrives as a status and a count of segments and
+   * nothing more. `shown` is what dayStatus() reads in place of segs.length;
+   * segs stays empty, so no total, no open segment, and no time can be derived
+   * from it by any screen that forgets to ask.
+   */
+  (db.attendance_public || []).forEach(a => {
+    const who = name(a.employee_id); if(!who) return;
+    const d = String(a.on_date).slice(0,10), k = `${who}|${d}`;
+    if(days.has(k)) return;                      // already here in full
+    days.set(k, {who, d, kind: a.kind || 'Office', segs: [], shown: +a.segments || 0});
+  });
+
   // ------------------------------------------------------- regularization
   // A person sees their own; a manager sees their reports'; accounts sees all.
   // The list is simply whatever the database sent, so what shows on screen and

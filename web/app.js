@@ -766,7 +766,7 @@ function dayStatus(u, ds){
   if(r && r.type!=='WFH') return {k:r.type, label:reqLabel(r.type)};
   const a = attOf(u, ds);
   if(a && a.kind==='WFH') return {k:'WFH', label:'Working from home'};
-  if(a && a.segs.length) return {k:'Office', label:'In the office'};
+  if(a && (a.segs.length || a.shown)) return {k:'Office', label:'In the office'};
   return {k:'Absent', label:'No record'};
 }
 const STCOL = {Office:'var(--c1)', WFH:'var(--c3)', Annual:'var(--accent)', Sick:'var(--bad)',
@@ -2087,7 +2087,9 @@ function vPeople(){
          are, and neither are document numbers, personal mobiles, or the year of somebody&rsquo;s birth.`
       : `Everyone in the group can see this page. Documents, document numbers, pay and the year of somebody&rsquo;s
          birth are not on it and never are &mdash; those are accounts&rsquo; and the person&rsquo;s own. Personal
-         mobiles are not on it either: colleagues get the work number.
+         mobiles are not on it either: colleagues get the work number. Nor is the time somebody
+         checked in or out &mdash; only whether they are at work today. The working hours above are
+         the shift they are on, which is how you know when to reach them.
          ${SEESALL(who) ? '' : `If something here is wrong about you, it is yours to fix on <b>My profile</b>.`}`}</p>`;
   }
 

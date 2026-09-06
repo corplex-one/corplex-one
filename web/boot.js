@@ -59,7 +59,17 @@ function busy(on, label){
 // permission failure, it is a screen with nothing on it.
 const TABLES = {
   companies:    ['companies', 'sort'],
-  employees:    ['employees'],
+  /* The roster everybody reads. A view, not the table: the table now answers
+     only accounts and yourself, because four of its columns — the visa company,
+     who pays them, the payroll basis and the auth id — were reaching every
+     browser and no screen draws them. Optional until 0025 has been run, so a
+     deploy that lands first does not close the portal; the fallback below picks
+     up the table in that case. */
+  employees:    ['staff_directory', null, true],
+  /* Whether somebody was at work that day and whether it was the office or
+     home — no times, no location, no notes. The attendance table itself is now
+     yours, your manager's and accounts'. Optional for the same reason. */
+  attendance_public: ['attendance_public', null, true],
   private:      ['employee_private'],
   roles:        ['employee_roles'],
   opening:      ['leave_opening'],
@@ -142,6 +152,12 @@ async function loadAll(){
   await Promise.all(Object.entries(TABLES).map(async ([k, [table, order, optional]]) => {
     out[k] = await readAll(table, order, optional);
   }));
+  /* Deployed before 0025 has been run, staff_directory does not exist yet and
+     the roster comes back empty — which would be a portal with nobody in it.
+     Fall back to the table, which is still open to everybody until the
+     migration closes it. The build works either way, and the day the migration
+     runs the fallback simply stops being used. */
+  if(!out.employees.length) out.employees = await readAll('employees', null, true);
   return out;
 }
 
