@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609061513">
+<link rel="manifest" href="manifest.webmanifest?v=202609061621">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -202,7 +202,7 @@ main{min-width:0;display:flex;flex-direction:column}
 .g3{grid-template-columns:repeat(3,minmax(0,1fr))}
 .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .grid.gtop{align-items:start}
-.grid.hrow > .panel{display:flex;flex-direction:column;height:352px}
+.grid.hrow > .panel{display:flex;flex-direction:column;height:auto;min-height:180px}
 .hbody{flex:1;display:flex;flex-direction:column;gap:14px;overflow:hidden}
 .hbody .feed{margin-top:-2px}
 .hfoot{margin:auto 0 0;padding-top:12px;border-top:1px solid var(--line2);color:var(--ink2);font-size:12.5px}
@@ -708,6 +708,14 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
 /* Letter templates: a list you click into, and the one you clicked over the
    page. The overlay is drawn by the view rather than pushed into the modal box
    by hand, so a redraw redraws it instead of wiping what has been typed. */
+/* The bar carried the page name at one end and two controls at the other with
+   the width of the screen between them. The name now has a line under it, and
+   the controls are one group rather than two things adrift. */
+.topbar .ttl{line-height:1.2}
+.topbar .ttl small{margin-top:2px}
+.topbar .tbend{display:flex;align-items:center;gap:8px;margin-left:auto}
+.topbar .bell{margin-left:0}
+@media screen and (max-width:900px){.topbar .ttl small{display:none}}
 .lttab2 tbody tr{cursor:pointer}
 .lttab2 tbody tr:hover td{background:color-mix(in srgb, var(--accent) 5%, transparent)}
 .lttab2 td.ltsay{color:var(--ink2);font-size:13px}
@@ -2086,6 +2094,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h8M8 16.5h5"/></svg>
         <span>Accounts console</span></button>
+      <div class="tbend">
       <button class="bell hidden" id="bell" type="button" title="Payment requests waiting">
         <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
@@ -2096,6 +2105,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
       <div class="seg" id="themeSeg">
         <button data-t="light" type="button">Light</button>
         <button data-t="dark" type="button">Dark</button>
+      </div>
       </div>
     </div>
     <div class="content" id="view"></div>
@@ -2114,8 +2124,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609061513';</script>
-<script src="config.js?v=202609061513"></script>
-<script type="module" src="boot.js?v=202609061513"></script>
+<script>window.__BUILD = '202609061621';</script>
+<script src="config.js?v=202609061621"></script>
+<script type="module" src="boot.js?v=202609061621"></script>
 </body>
 </html>

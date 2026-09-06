@@ -4572,9 +4572,9 @@ function vHome(){
   const empty = t => `<p style="margin:0;color:var(--ink3);font-size:13.5px">${esc(t)}</p>`;
 
   // --- celebrations today and this week
-  const cTod = celebsOn(today), cSoon = celebsWithin(today, 7).filter(x=>x.in>0);
+  const cTod = celebsOn(today);
   const celebStrip = (()=>{
-    if(!cTod.any && !cSoon.length) return '';
+    if(!cTod.any) return '';
     const first = n => esc(n.split(' ')[0]);
     const line = [];
     cTod.bdays.forEach(b=> line.push(b.n===u
@@ -4583,25 +4583,15 @@ function vHome(){
     cTod.annis.forEach(a=> line.push(a.n===u
       ? `<b>${a.years} year${a.years===1?'':'s'} with ${esc(companyOf(u).name)} today.</b>`
       : `<b>${esc(a.n)}</b> is ${a.years} year${a.years===1?'':'s'} with ${esc(companyOf(a.n).name)} today.`));
-    const whenOf = d => d.in===1 ? 'tomorrow' : d.in>=7 ? 'on '+esc(dayLabel(d.d)) : 'on '+esc(dayLong(d.d));
-    const soon = cSoon.slice(0,3).map(d=>{
-      const who = d.bdays.map(b=>`${first(b.n)}'s birthday`)
-        .concat(d.annis.map(a=>`${first(a.n)} at ${a.years} year${a.years===1?'':'s'}`));
-      return `${who.join(' and ')} ${whenOf(d)}`;
-    });
-    const soonHead = cSoon.length ? (()=>{ const d = cSoon[0];
-      const who = d.bdays.map(b=>`<b>${esc(b.n)}</b>'s birthday`)
-        .concat(d.annis.map(a=>`<b>${esc(a.n)}</b>'s ${a.years} year${a.years===1?'':'s'}`));
-      return `${who.join(' and ')} ${who.length>1?'are':'is'} ${whenOf(d)}.`; })() : '';
+
     const mine = cTod.bdays.some(b=>b.n===u);
     const bookedHalf = HR().requests.some(r=>r.who===u && r.type==='Birthday' && r.from===today && r.status!=='Declined');
     const workday = !['Holiday','Weekend'].includes(dayStatus(u,today).k);
-    return `<section class="celeb${cTod.any?'':' quiet'}">
-      <span class="cmark">${cmark(cTod.bdays.length?'cake':cTod.annis.length?'medal':'cal')}</span>
+    return `<section class="celeb">
+      <span class="cmark">${cmark(cTod.bdays.length?'cake':'medal')}</span>
       <div class="ctext">
-        <span class="ck">${cTod.any?'Today':'Coming up'}</span>
-        <p>${line.length?line.join(' '):soonHead}</p>
-        ${!line.length && soon.length>1?`<span class="cnext">Then ${soon.slice(1).join(', then ')}.</span>`:''}
+        <span class="ck">Today</span>
+        <p>${line.join(' ')}</p>
       </div>
       ${mine && workday && !bookedHalf
         ? `<button class="btn" data-go="requests" type="button">Take your half-day</button>`
@@ -4616,12 +4606,12 @@ function vHome(){
     const n = PD.missing.length;
     const first = PD.missing.slice(0, 3).map(esc).join(', ');
     const rest  = n > 3 ? ` and ${n - 3} more` : '';
-    return `<div class="nudge${PD.pct < 60 ? ' loud' : ''}">
+    return `<div class="nudge">
       <span class="ndot"></span>
-      <div><b>Your file is ${PD.pct}% complete</b>
-        <span>Still needed: ${first}${rest}. It takes a couple of minutes, and it is what the
-          company has to show when somebody asks \u2014 a visa renewal, an insurance claim, or a
-          hospital at two in the morning.</span></div>
+      <div><b>${n === 1 ? 'One detail is missing from your profile'
+                         : n + ' details are missing from your profile'}</b>
+        <span>${first}${rest}. Two minutes, and it saves being asked for them later &mdash;
+          these are what the company is asked for on a visa renewal or an insurance claim.</span></div>
       <button class="btn" data-go="profile" type="button">Finish it</button>
     </div>`;
   })();
@@ -4640,7 +4630,7 @@ function vHome(){
     <div class="pad">
       <span class="hgreet">Welcome back</span>
       <h2>${nm(u)}</h2>
-      <p>${esc(titleOf(u) || ROLELABEL[role])} &middot; ${esc(companyOf(u).name)}${orgDeptOf(u) ? ' \u00b7 '+esc(orgDeptOf(u)) : ''} &nbsp;&middot;&nbsp; ${esc(dayName(today))} ${esc(dayLabel(today))} ${ty}</p>
+      <p>${esc(titleOf(u) || ROLELABEL[role])}${orgDeptOf(u) ? ' &middot; '+esc(orgDeptOf(u)) : ''}</p>
       ${(!MOBILE() && todo.length)?`<div class="htodo">${todo.map(([t,tab,con])=>
         `<button data-go="${esc(tab)}"${con?' data-mode="console"':''} type="button"><i></i>${esc(t)}</button>`).join('')}</div>`:''}
     </div>
@@ -4691,16 +4681,20 @@ function vHome(){
     </section>
 
     <section class="panel">
-      <header><h3>Away soon</h3><span class="hint">everyone &middot; next two months</span></header>
+      <header><h3>Announcements</h3>
+        ${adm?'<button class="btn ghost" id="annNew" type="button" style="margin-left:auto;padding:3px 10px;font-size:12px">Post one</button>':'<span class="hint">from accounts</span>'}</header>
+      ${adm && state.annNew ? `<div class="pad" style="padding-bottom:4px">
+        <div class="field"><label for="annT">Title</label><input id="annT" value="${esc(state.annT||'')}" placeholder="Short and plain"></div>
+        <div class="field"><label for="annB">Message</label><input id="annB" value="${esc(state.annB||'')}" placeholder="A sentence or two"></div>
+        <button class="btn" id="annPost" type="button"${(state.annT&&state.annB)?'':' disabled'}>Post</button>
+        <button class="btn ghost" id="annCancel" type="button" style="margin-left:8px">Cancel</button>
+      </div>`:''}
       <div class="pad hbody">
-        ${away.length?`<ul class="feed">${away.slice(0,4).map(r=>{
-          const n = daysTo(r.from), on = n<=0;
-          return `<li><i style="background:${STCOL[r.type]||'var(--line)'}"></i>
-            <div><b>${whoLink(r.who)}</b><span>${esc(reqLabel(r.type))} &middot; ${esc(dayLabel(r.from))}${r.from!==r.to?' – '+esc(dayLabel(r.to)):''}</span></div>
-            <em>${on?'away now':soonLabel(n)}</em></li>`;}).join('')}</ul>`
-        :empty('Nobody is booked off in the next two months.')}
+        ${anns.length?`<ul class="anns">${anns.slice(0,2).map(x=>`<li${x.pinned?' class="pin"':''}>
+          <div class="ah"><b>${esc(x.title)}</b><span>${esc(dayLabel(x.date))}</span></div>
+          <p>${esc(x.body)}</p>
+          <span class="ab">${esc(x.by)}</span></li>`).join('')}</ul>`:empty('Nothing posted yet.')}
       </div>
-      ${away.length?`<p class="cap">The full picture is on <b>Who is in</b>.</p>`:''}
     </section>
 
     <section class="panel">
@@ -4719,20 +4713,16 @@ function vHome(){
 
   <div class="grid g3 hrow">
     <section class="panel">
-      <header><h3>Announcements</h3>
-        ${adm?'<button class="btn ghost" id="annNew" type="button" style="margin-left:auto;padding:3px 10px;font-size:12px">Post one</button>':'<span class="hint">from accounts</span>'}</header>
-      ${adm && state.annNew ? `<div class="pad" style="padding-bottom:4px">
-        <div class="field"><label for="annT">Title</label><input id="annT" value="${esc(state.annT||'')}" placeholder="Short and plain"></div>
-        <div class="field"><label for="annB">Message</label><input id="annB" value="${esc(state.annB||'')}" placeholder="A sentence or two"></div>
-        <button class="btn" id="annPost" type="button"${(state.annT&&state.annB)?'':' disabled'}>Post</button>
-        <button class="btn ghost" id="annCancel" type="button" style="margin-left:8px">Cancel</button>
-      </div>`:''}
+      <header><h3>Who&rsquo;s on leave</h3><span class="hint">booked and away now &middot; next two months</span></header>
       <div class="pad hbody">
-        ${anns.length?`<ul class="anns">${anns.slice(0,2).map(x=>`<li${x.pinned?' class="pin"':''}>
-          <div class="ah"><b>${esc(x.title)}</b><span>${esc(dayLabel(x.date))}</span></div>
-          <p>${esc(x.body)}</p>
-          <span class="ab">${esc(x.by)}</span></li>`).join('')}</ul>`:empty('Nothing posted yet.')}
+        ${away.length?`<ul class="feed">${away.slice(0,4).map(r=>{
+          const n = daysTo(r.from), on = n<=0;
+          return `<li><i style="background:${STCOL[r.type]||'var(--line)'}"></i>
+            <div><b>${whoLink(r.who)}</b><span>${esc(reqLabel(r.type))} &middot; ${esc(dayLabel(r.from))}${r.from!==r.to?' – '+esc(dayLabel(r.to)):''}</span></div>
+            <em>${on?'away now':soonLabel(n)}</em></li>`;}).join('')}</ul>`
+        :empty('Nobody is booked off in the next two months.')}
       </div>
+      ${away.length?`<p class="cap">The full picture is on <b>Who is in</b>.</p>`:''}
     </section>
 
     <section class="panel">
@@ -9756,7 +9746,15 @@ function renderChrome(){
   if(t.id==='company') t = Object.assign({}, t, {title: deptData(state.user).department});
   const ttl = (state.tab === 'payapprove' || state.tab === 'paypast') ? 'Payment request'
             : MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;
-  document.getElementById('pageTitle').innerHTML = `${esc(ttl)}${(periodic && !MOBILE())?`<small>${esc(PLABEL[state.period]+' · '+state.year)}</small>`:''}`;
+  /* What goes under the name. A period picker owns that line where there is
+     one; everywhere else it is the day and the company, which is the answer to
+     'where am I and as of when' that the bar was not giving. */
+  const sub = MOBILE() ? ''
+    : periodic ? PLABEL[state.period] + ' \u00b7 ' + state.year
+    : state.mode === 'console' ? ''
+    : dLong(HDATE()) + ' \u00b7 ' + companyOf(state.user).name;
+  document.getElementById('pageTitle').innerHTML =
+    `${esc(ttl)}${sub ? `<small>${esc(sub)}</small>` : ''}`;
 }
 function tabHash(){ return (state.mode === 'console' ? 'c/' : '') + state.tab; }
 const LP = () => HR().leavePolicy || {};
