@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609062209">
+<link rel="manifest" href="manifest.webmanifest?v=202609062239">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -203,6 +203,10 @@ main{min-width:0;display:flex;flex-direction:column}
 .g4{grid-template-columns:repeat(4,minmax(0,1fr))}
 /* Was align-items:start. Panels in a row stretch to the tallest, and what
    closes the card goes to the bottom of it. */
+.srfail{border-left:3px solid var(--bad);background:var(--badBg);color:var(--ink);
+  padding:11px 14px;border-radius:0 8px 8px 0;margin:0 0 12px;font-size:13.5px;max-width:110ch}
+.srfail b{color:var(--bad)}
+.srfail em{display:block;font-style:normal;color:var(--ink2);font-size:12.5px;margin-top:5px}
 .grid.gtop > .panel{display:flex;flex-direction:column}
 .grid.gtop > .panel > .pad{flex:1;display:flex;flex-direction:column}
 .grid.gtop > .panel > .tw{flex:1}
@@ -2231,8 +2235,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609062209';</script>
-<script src="config.js?v=202609062209"></script>
-<script type="module" src="boot.js?v=202609062209"></script>
+<script>window.__BUILD = '202609062239';</script>
+<script src="config.js?v=202609062239"></script>
+<script type="module" src="boot.js?v=202609062239"></script>
 </body>
 </html>

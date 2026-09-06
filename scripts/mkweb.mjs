@@ -17210,6 +17210,64 @@ app = swap(app,
   shows who they report to.</p>\`;`,
   'and the caption says what is there');
 
+/* ===================== a Save that fails has to say so ====================
+ *
+ *   'I still cant save the designation'                              -- Avin
+ *
+ * The database function is not the problem — called directly with his exact
+ * case, a person with no joining date and no title, it writes the designation
+ * and returns. What is wrong is that when the call DOES fail, this screen says
+ * nothing about it: the only signal is a red toast that removes itself after
+ * six seconds, and the confirm panel simply stays open looking untouched.
+ * 'Click only, nothing saves' is exactly what that looks like.
+ *
+ * So the reason is kept and shown, in the panel, until the next attempt. It
+ * does not vanish, it is not somewhere else on the screen, and it carries the
+ * database's own words rather than a friendly summary of them — because the
+ * next person reading it needs the actual message.
+ */
+/* (oops() itself lives in web/boot.js, which mkweb does not generate — the
+   keeping of the reason is done there.) */
+
+/* Nothing left over from an earlier failure: the reason shown has to belong to
+   the button that was just pressed. */
+app = swap(app,
+`      const F = SRF(), who = F.who, d = F.draft, now = srNow(who);
+      F.busy = true; render();`,
+`      const F = SRF(), who = F.who, d = F.draft, now = srNow(who);
+      window.__oops = null;
+      F.busy = true; F.err = ''; render();`,
+  'the reason shown belongs to this attempt');
+
+app = swap(app,
+`    + '<div class="edconfb"><button class="btn" id="srGo" type="button"' + (F.busy ? ' disabled' : '')`,
+`    + (F.err ? '<div class="srfail"><b>It did not save.</b> ' + esc(F.err)
+        + '<em>Nothing was written. Your changes are still here \\u2014 press the button again once that is '
+        + 'dealt with, or press Back to keep editing.</em></div>' : '')
+    + '<div class="edconfb"><button class="btn" id="srGo" type="button"' + (F.busy ? ' disabled' : '')`,
+  'and the staff record shows it where the button is');
+
+app = swap(app,
+`      state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false, newDept: ok ? false : F.newDept,
+                  done: ok ? 'Saved.' : ''};`,
+`      /* The database's own words, or an admission that there were none. A
+         screen that knows a write failed and shows nothing is worse than the
+         failure. */
+      const why = ok ? '' : (((window.__oops || {}).message || '').trim()
+        || 'The database refused it without saying why. Tell Avin what you were changing.');
+      state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false, newDept: ok ? false : F.newDept,
+                  err: why, done: ok ? 'Saved.' : ''};`,
+  'and keeps what you typed while it says it');
+
+shell = swap(shell,
+`.grid.gtop > .panel{display:flex;flex-direction:column}`,
+`.srfail{border-left:3px solid var(--bad);background:var(--badBg);color:var(--ink);
+  padding:11px 14px;border-radius:0 8px 8px 0;margin:0 0 12px;font-size:13.5px;max-width:110ch}
+.srfail b{color:var(--bad)}
+.srfail em{display:block;font-style:normal;color:var(--ink2);font-size:12.5px;margin-top:5px}
+.grid.gtop > .panel{display:flex;flex-direction:column}`,
+  'a failed save looks like one');
+
 /* ---- a count is a queue, not a filing cabinet.
  *
  *   'Do not show numbers next to past payments, its just for approve

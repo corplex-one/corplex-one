@@ -313,6 +313,69 @@ console.log('\nagreeing writes the record first and the tick second');
   await p.close();
 }
 
+/* ================================ 4b. a Save that fails has to say so
+ *
+ *   'And your save button on staff records isn't saving anything. Click only,
+ *    nothing saves'
+ *   'I still cant save the designation'                              -- Avin
+ *
+ * Every check above stubs the write path and lets it succeed, so the screen has
+ * never once been looked at on the day the database refuses. That is the hole
+ * these four close. When the write fails the panel must say so, in the panel,
+ * with the database's own words, and it must still be holding what he typed. */
+console.log('\nand when the database refuses, the screen says what it said');
+{
+  const {p, errs} = await open('Avin Mascarenhas', {id:'staffrec', con:true});
+  const r = await p.evaluate(async () => {
+    /* the write path as it behaves on a bad day: oops() keeps the reason and
+       the caller is told nothing was written */
+    window.__db = {async saveStaffRecord(){
+      window.__oops = {what:'The staff record',
+        message:'Could not choose the best candidate function between: public.correct_joining(...)',
+        at: Date.now()};
+      return null; }};
+    state.sr = {who:'Shohruh Karimov', confirm:true, busy:false, done:'',
+                draft:{title:'Chief Executive Officer'}};
+    render();
+    document.getElementById('srGo').click();
+    await new Promise(k => setTimeout(k, 300));
+    const f = document.querySelector('.srfail');
+    return {said: f ? f.textContent.replace(/\s+/g, ' ').trim() : '',
+            stillThere: !!document.getElementById('srGo'),
+            draft: JSON.stringify(SRF().draft),
+            noSaved: !document.querySelector('.edok')};
+  });
+  ok('the panel says it did not save', /did not save/i.test(r.said), r.said);
+  ok('and carries the database’s own words',
+     /best candidate function/.test(r.said), r.said);
+  ok('what he typed is still there', r.draft === '{"title":"Chief Executive Officer"}', r.draft);
+  ok('the button is still there to press again, and nothing claims it saved',
+     r.stillThere && r.noSaved, r);
+  ok('no page errors', !errs.length, errs[0]);
+  await p.close();
+}
+
+console.log('\nand a refusal with no message still says something');
+{
+  const {p, errs} = await open('Avin Mascarenhas', {id:'staffrec', con:true});
+  const r = await p.evaluate(async () => {
+    window.__db = {async saveStaffRecord(){ return null; }};
+    /* left over from something else entirely — it must not be shown as the
+       reason for this attempt */
+    window.__oops = {what:'A payment', message:'an old and unrelated failure', at: 0};
+    state.sr = {who:'Shohruh Karimov', confirm:true, busy:false, done:'', draft:{title:'Manager'}};
+    render();
+    document.getElementById('srGo').click();
+    await new Promise(k => setTimeout(k, 300));
+    const f = document.querySelector('.srfail');
+    return f ? f.textContent.replace(/\s+/g, ' ').trim() : '';
+  });
+  ok('it still admits the failure', /did not save/i.test(r), r);
+  ok('and does not blame it on an older, unrelated one', !/unrelated/.test(r), r);
+  ok('no page errors', !errs.length, errs[0]);
+  await p.close();
+}
+
 console.log('\nand a tick on its own touches only the tick');
 {
   const {p, errs} = await open('Avin Mascarenhas', {id:'staffrec', con:true});

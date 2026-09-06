@@ -9064,6 +9064,9 @@ function vStaffRec(){
           + '<span class="ednow">' + esc(is) + '</span>'
           + (says ? '<em>' + says + '</em>' : '') + '</li>';
       }).join('') + '</ul>'
+    + (F.err ? '<div class="srfail"><b>It did not save.</b> ' + esc(F.err)
+        + '<em>Nothing was written. Your changes are still here \u2014 press the button again once that is '
+        + 'dealt with, or press Back to keep editing.</em></div>' : '')
     + '<div class="edconfb"><button class="btn" id="srGo" type="button"' + (F.busy ? ' disabled' : '')
     + '>' + (F.busy ? 'Saving\u2026' : 'Yes, save ' + changed.length + (changed.length === 1 ? ' change' : ' changes')) + '</button>'
     + '<button class="btn ghost" id="srNo" type="button">Back</button>'
@@ -10550,7 +10553,8 @@ function render(){
   { const b = document.getElementById('srGo');
     if(b) b.onclick = async () => {
       const F = SRF(), who = F.who, d = F.draft, now = srNow(who);
-      F.busy = true; render();
+      window.__oops = null;
+      F.busy = true; F.err = ''; render();
       /* The tick is its own function, because it is its own table. Order
          matters: the record first, so a rename lands before anything keyed to
          the person is written beside it. */
@@ -10573,8 +10577,13 @@ function render(){
       /* The name may have changed, so the person this screen is about is
          looked up again by the id rather than by what it used to be called. */
       const still = ok ? (Object.keys(HR().ids || {}).find(n => (HR().ids || {})[n] === now.id) || who) : who;
+      /* The database's own words, or an admission that there were none. A
+         screen that knows a write failed and shows nothing is worse than the
+         failure. */
+      const why = ok ? '' : (((window.__oops || {}).message || '').trim()
+        || 'The database refused it without saying why. Tell Avin what you were changing.');
       state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false, newDept: ok ? false : F.newDept,
-                  done: ok ? 'Saved.' : ''};
+                  err: why, done: ok ? 'Saved.' : ''};
       render(); }; }
   document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
   document.querySelectorAll('.refin.masked').forEach(el => {

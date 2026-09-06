@@ -316,6 +316,15 @@ function hereIAm(){
 
 const oops = (e, what) => {
   console.error(what, e);
+  // Kept, so the screen where the button was pressed can show the reason. A
+  // toast that removes itself after six seconds is not a way of telling
+  // somebody why their work did not save.
+  window.__oops = {
+    what,
+    message: (e && (e.message || e.hint || e.details || e.error_description)) || String(e || ''),
+    code: (e && e.code) || '',
+    at: Date.now()
+  };
   const t = document.createElement('div');
   t.className = 'toast bad';
   t.textContent = `${what} did not save. ${e.message || ''}`.trim();
