@@ -8,7 +8,7 @@
 <!-- Installable to a home screen: an icon, no browser chrome, and — on
      Android and on iOS 16.4 and later, once it has been added — notifications
      that arrive while the app is closed. No store, no fee, no review queue. -->
-<link rel="manifest" href="manifest.webmanifest?v=202609060016">
+<link rel="manifest" href="manifest.webmanifest?v=202609060806">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <meta name="theme-color" content="#2A1B33">
@@ -20,7 +20,7 @@
 <body style="margin:0">
 <title>CorpLex One</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500;6..96,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
 
 :root{
   --bg:#F6F4F7; --panel:#FFFFFF; --panel2:#FBFAFC; --sunk:#F0ECF2;
@@ -74,7 +74,7 @@
 body{margin:0;background:var(--bg);color:var(--ink);
   font-family:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif;font-size:15px;line-height:1.5;font-variant-numeric:tabular-nums;
   -webkit-font-smoothing:antialiased}
-h1,h2,h3,h4{margin:0;font-family:'Bodoni Moda','Didot',Georgia,serif;font-weight:500;text-wrap:balance;letter-spacing:-.01em}
+h1,h2,h3,h4{margin:0;font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-weight:500;text-wrap:balance;letter-spacing:-.01em}
 .num{font-variant-numeric:tabular-nums}
 button{font:inherit;color:inherit;cursor:pointer}
 :focus-visible{outline:2px solid var(--c1);outline-offset:2px;border-radius:4px}
@@ -86,7 +86,7 @@ button{font:inherit;color:inherit;cursor:pointer}
   background-image:repeating-linear-gradient(180deg,rgba(255,255,255,.05) 0 1px,transparent 1px 34px)}
 #login .brandside .mark{padding-top:14px}
 #login .brandside .mark img{display:block;width:180px;height:auto}
-#login .brandside .pitch{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:34px;line-height:1.2;max-width:16ch;margin-top:auto}
+#login .brandside .pitch{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:34px;line-height:1.2;max-width:16ch;margin-top:auto}
 #login .brandside .sub{color:var(--brandDim);max-width:34ch;margin-top:14px;font-size:14px}
 #login .brandside .foot{color:var(--brandDim);font-size:12px;letter-spacing:.06em;text-transform:uppercase;margin-top:40px}
 #login .formside{display:flex;align-items:center;justify-content:center;padding:40px 32px}
@@ -94,7 +94,10 @@ button{font:inherit;color:inherit;cursor:pointer}
 #login h1{font-size:26px;margin-bottom:4px}
 #login .lead{color:var(--ink2);margin:0 0 26px}
 label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);margin-bottom:6px}
-input,select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);font:inherit}
+input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel2);color:var(--ink);font:inherit;
+  /* after the shorthand, which would otherwise pull 11px down from label{} */
+  font-size:14px;letter-spacing:normal;text-transform:none}
 input:focus,select:focus{border-color:var(--c1);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--c1) 18%,transparent)}
 .field{margin-bottom:16px}
 .btn{border:1px solid var(--accent);background:var(--accent);color:var(--accentInk);padding:10px 16px;border-radius:8px;font-weight:600;font-size:15px}
@@ -147,7 +150,7 @@ a.btn{display:inline-block;text-decoration:none;line-height:1.25}
 main{min-width:0;display:flex;flex-direction:column}
 .topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);
   border-bottom:1px solid var(--line);padding:12px 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.topbar .ttl{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:19px;margin-right:auto}
+.topbar .ttl{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:19px;margin-right:auto}
 .topbar .ttl small{display:block;font-family:'IBM Plex Sans',sans-serif;font-size:11.5px;color:var(--ink3);letter-spacing:.04em}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
 .seg button{background:none;border:0;padding:6px 12px;font-size:12.5px;color:var(--ink2);border-right:1px solid var(--line)}
@@ -171,7 +174,7 @@ main{min-width:0;display:flex;flex-direction:column}
 .conbtn.on{background:var(--accent);border-color:var(--accent);color:var(--accentInk)}
 .conbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--brand);color:var(--brandInk);
   border-radius:var(--r);padding:12px 16px;box-shadow:var(--shadow)}
-.conbar h2{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:19px;font-weight:500;margin:0}
+.conbar h2{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:19px;font-weight:500;margin:0}
 .conbar .cwho{color:var(--brandDim);font-size:12.5px}
 .conbar .ctabs{margin-left:auto}
 .conbar .cback{flex:none}
@@ -233,7 +236,7 @@ main{min-width:0;display:flex;flex-direction:column}
 
 table{width:100%;border-collapse:collapse;font-size:14px}
 .tw{overflow-x:auto}
-th{text-align:left;font-weight:500;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);
+th{text-align:left;font-weight:600;font-size:13px;letter-spacing:0;text-transform:none;color:var(--ink);
   padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel2);position:sticky;top:0}
 td{padding:9px 12px;border-bottom:1px solid var(--line2);vertical-align:top}
 tbody tr:last-child td{border-bottom:0}
@@ -306,7 +309,7 @@ svg .dl{fill:var(--ink);font-size:10.5px;font-family:'IBM Plex Sans',system-ui,s
 .calc{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:20px}
 @media(max-width:760px){.calc{grid-template-columns:minmax(0,1fr)}}
 .drop{border:1.5px dashed var(--line);border-radius:var(--r);padding:26px;text-align:center;color:var(--ink2);background:var(--panel2)}
-.drop .big{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:19px;color:var(--ink);margin-bottom:5px}
+.drop .big{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:19px;color:var(--ink);margin-bottom:5px}
 .steps{counter-reset:s;display:flex;flex-direction:column;gap:0}
 .steps li{list-style:none;display:grid;grid-template-columns:26px minmax(0,1fr);gap:12px;padding:0 0 16px;position:relative}
 .steps li::before{counter-increment:s;content:counter(s);width:22px;height:22px;border-radius:99px;background:var(--brand);color:var(--brandInk);
@@ -433,7 +436,7 @@ main.fixed .content{flex:1;min-height:0;overflow:hidden;max-width:none;padding-b
 .invscroll{flex:1 1 auto;min-height:0;overflow:auto}
 .invtable{font-size:13.5px}
 .invtable th{padding:0 9px;height:36px;line-height:36px;vertical-align:middle;white-space:nowrap;
-  font-size:10.5px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3)}
+  font-size:12.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--ink)}
 .invtable td{padding:6px 9px}
 .invtable td.nw{white-space:nowrap}
 .invtable td.cname{min-width:170px;max-width:210px}
@@ -547,14 +550,14 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   box-shadow:0 -8px 30px -12px rgba(0,0,0,.4)}
 .shtop{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:4px 20px 10px;
   border-bottom:1px solid var(--line2);margin-bottom:4px}
-.shtop b{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:19px;font-weight:500}
+.shtop b{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:19px;font-weight:500}
 .shclose{background:none;border:0;font:inherit;font-size:15px;font-weight:600;color:var(--accent2);
   padding:6px 4px;cursor:pointer}
 .askbar{display:flex;align-items:center;gap:12px;margin:0 0 2px}
 .askback{width:38px;height:38px;flex:none;border:1px solid var(--line);border-radius:10px;background:var(--panel);
   color:var(--ink2);display:flex;align-items:center;justify-content:center;cursor:pointer}
 .askback svg{width:19px;height:19px}
-.askbar b{display:block;font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:21px;font-weight:500;line-height:1.2}
+.askbar b{display:block;font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:21px;font-weight:500;line-height:1.2}
 .askbar span{display:block;font-size:12.5px;color:var(--ink3)}
 .askbal{display:flex;align-items:baseline;gap:9px;padding:12px 16px;border-radius:10px;
   background:var(--accentSoft);color:var(--accent2);flex-wrap:wrap}
@@ -610,7 +613,7 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   /* .revlink moved out of this media query — see the note in mkweb.mjs. */
 .mnet{padding:18px 16px;background:var(--brand);color:var(--brandInk);display:flex;flex-direction:column;gap:3px}
   .mnet span{font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--brandDim);font-weight:600}
-  .mnet b{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:32px;font-weight:500;line-height:1.1}
+  .mnet b{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:32px;font-weight:500;line-height:1.1}
   .mnet i{font-style:normal;font-size:12.5px;color:var(--brandDim)}
   .mlines{padding:4px 0 10px}
   .mlines h4{margin:14px 16px 4px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);font-weight:700}
@@ -667,6 +670,19 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
    text-transform inherits — so a sentence written inside one is shouted at the
    reader unless it says otherwise. Both of these are sentences. */
 .jform label .pfhint{text-transform:none;letter-spacing:0}
+/* Its own colour, so the sales decision does not read as one more employment
+   field. The tint is the third chart hue rather than the accent, because the
+   accent means 'press me' everywhere else in the portal. */
+.srpanel{border-color:color-mix(in srgb, var(--c3) 34%, var(--line));
+  background:color-mix(in srgb, var(--c3) 4%, var(--panel))}
+.srpanel > header{background:color-mix(in srgb, var(--c3) 9%, var(--panel));
+  border-bottom-color:color-mix(in srgb, var(--c3) 22%, var(--line2));
+  border-radius:var(--r) var(--r) 0 0}
+.srpanel > header h3{color:var(--c3)}
+.srpanel .srsales{margin-top:0;padding-top:0;border-top:0}
+.srnew{display:flex;gap:7px;align-items:center}
+.srnew input{min-width:0}
+.srnew .btn{flex:none;white-space:nowrap}
 .srsales{margin-top:18px;padding-top:16px;border-top:1px solid var(--line2)}
 .srtick{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 11px;align-items:start;
   cursor:pointer;text-transform:none;letter-spacing:0;margin-bottom:0}
@@ -807,7 +823,7 @@ select.mini{width:auto;padding:2px 6px;font-size:11.5px;border-radius:6px;backgr
   .stkv>.sk:nth-child(6n+4){padding-left:0}
   .stsign{grid-template-columns:1fr;gap:14px}}
 /* the leave matrix: eleven columns, so the headings turn and the dashes recede */
-.obtab thead .obgrp th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);
+.obtab thead .obgrp th{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink2);
   text-align:center;padding-bottom:4px;border-bottom:1px solid var(--line)}
 .obtab thead .obgrp th:nth-child(2){border-right:1px solid var(--line)}
 .obtab th.r,.obtab td.r{text-align:right}
@@ -824,7 +840,7 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .edconf h4{margin:0;padding:13px 16px 12px;font-size:14.5px;background:var(--warnSoft, rgba(168,114,12,.10));
   border-bottom:1px solid var(--line)}
 .edtab{width:100%;border-collapse:collapse;font-size:13px}
-.edtab th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);
+.edtab th{text-align:left;font-weight:600;font-size:13px;letter-spacing:0;text-transform:none;color:var(--ink);
   padding:9px 16px 7px;border-bottom:1px solid var(--line)}
 .edtab td{padding:9px 16px;border-bottom:1px solid var(--line)}
 .edtab tr:last-child td{border-bottom:0}
@@ -845,7 +861,7 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
   background-image:linear-gradient(120deg, var(--brand) 0%, var(--brand2) 100%),repeating-linear-gradient(180deg,rgba(255,255,255,.04) 0 1px,transparent 1px 34px)}
 .hhero .pad{padding:22px 22px 24px}
 .hhero .hgreet{display:block;font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--railLabel);font-weight:600}
-.hhero h2{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:28px;font-weight:500;margin:6px 0 4px;letter-spacing:-.01em}
+.hhero h2{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:28px;font-weight:500;margin:6px 0 4px;letter-spacing:-.01em}
 .hhero p{margin:0;color:var(--brandDim);font-size:13.5px}
 .htodo{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
 .htodo button{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.11);border:1px solid rgba(255,255,255,.18);
@@ -858,7 +874,7 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .hmepic{width:96px;height:96px;border-radius:50%;overflow:hidden;background:rgba(255,255,255,.12);
   border:2px solid rgba(255,255,255,.28);display:flex;align-items:center;justify-content:center;flex:none}
 .hmepic img{width:100%;height:100%;object-fit:cover;display:block}
-.hmepic span{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:32px;color:var(--brandInk);letter-spacing:.02em}
+.hmepic span{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:32px;color:var(--brandInk);letter-spacing:.02em}
 .hmebtn{background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.26);color:var(--brandInk);
   padding:6px 15px;border-radius:99px;font-size:12.5px;font-weight:500;white-space:nowrap}
 .hmebtn:hover{background:rgba(255,255,255,.22);border-color:rgba(255,255,255,.45)}
@@ -910,7 +926,7 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .dpill::before{content:'';width:8px;height:8px;border-radius:2px;background:var(--dc);flex:none}
 .availtable{table-layout:auto;width:100%}
 .availtable th.r{text-align:center;font-weight:600;padding:6px 0;min-width:34px}
-.availtable th.r span{display:block;font-size:10px;letter-spacing:.05em;color:var(--ink3);text-transform:uppercase}
+.availtable th.r span{display:block;font-size:11.5px;letter-spacing:0;color:var(--ink2);text-transform:none}
 .availtable th.r b{display:block;font-size:12.5px;font-variant-numeric:tabular-nums}
 .availtable td.av{text-align:center;font-size:11.5px;font-weight:700;color:var(--ink2);padding:8px 0;
   border-left:1px solid var(--line2)}
@@ -968,13 +984,13 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .pfpic{position:relative;flex:none;width:84px;height:84px;border-radius:50%;background:var(--sunk);
   border:1px solid var(--line);display:flex;align-items:center;justify-content:center;overflow:visible}
 .pfpic img{width:100%;height:100%;border-radius:50%;object-fit:cover}
-.pfpic > span{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:28px;color:var(--ink3);letter-spacing:.02em}
+.pfpic > span{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:28px;color:var(--ink3);letter-spacing:.02em}
 .pfpicbtn{position:absolute;left:50%;transform:translateX(-50%);bottom:-11px;white-space:nowrap;
   background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:2px 9px;font-size:11px;
   color:var(--ink2);cursor:pointer;box-shadow:var(--shadow)}
 .pfpicbtn:hover{border-color:var(--accent);color:var(--ink)}
 .pfwho{flex:1;min-width:200px}
-.pfwho h2{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:24px;font-weight:500;margin:0}
+.pfwho h2{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:24px;font-weight:500;margin:0}
 .pfwho p{margin:3px 0 0;color:var(--ink2);font-size:13.5px}
 .pfleg{margin:4px 0 0;font-size:12.5px;color:var(--ink3)}
 .pfupd{display:block;margin-top:5px;font-size:12px;color:var(--ink3)}
@@ -1008,7 +1024,7 @@ tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
 .pa{width:44px;height:44px;border-radius:50%;overflow:hidden;flex:none;background:var(--sunk);
   border:1px solid var(--line);display:flex;align-items:center;justify-content:center}
 .pa img{width:100%;height:100%;object-fit:cover;display:block}
-.pa span{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:16px;color:var(--ink2);letter-spacing:.02em}
+.pa span{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:16px;color:var(--ink2);letter-spacing:.02em}
 .pa.big{width:82px;height:82px}
 .pa.big span{font-size:30px}
 /* ---- organisation tree: top down ---- */
@@ -1136,7 +1152,7 @@ select:disabled,select option:disabled{color:var(--ink3)}
 .mrow span{width:52px;flex:none;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);padding-top:2px}
 .mrow b{color:var(--ink);font-weight:600;min-width:0}
 .mbody{background:var(--panel);padding:22px 26px 20px}
-.mbrand{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:19px;font-weight:600;color:var(--ink);
+.mbrand{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:19px;font-weight:600;color:var(--ink);
   padding-bottom:13px;border-bottom:2px solid var(--accent);margin-bottom:6px}
 .mbrand em{display:block;font-family:'IBM Plex Sans',sans-serif;font-style:normal;font-size:11.5px;
   letter-spacing:.1em;text-transform:uppercase;color:var(--ink3);font-weight:400;margin-top:3px}
@@ -1192,7 +1208,7 @@ select:disabled,select option:disabled{color:var(--ink3)}
   body.printinv .panel:has(.invtable)>header,body.printinv .expbar,body.printinv .cap,
   body.printinv .rawbox{display:none!important}
   body.printinv .printhead{display:block;margin:0 0 8px}
-  body.printinv .printhead b{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:15pt;display:block}
+  body.printinv .printhead b{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:15pt;display:block}
   body.printinv .printhead span{font-size:8pt;color:#5A4E63}
   body.printinv .tw,body.printinv .invscroll{overflow:visible!important;max-height:none!important;height:auto!important}
   body.printinv .invtable{width:100%;font-size:6.6pt;border-collapse:collapse}
@@ -1240,7 +1256,7 @@ select:disabled,select option:disabled{color:var(--ink3)}
 #boot.hidden{display:none}
 .bootmark{display:flex;align-items:flex-end;gap:10px}
 .bootmark img{width:210px;height:auto;display:block}
-.bootmark .one{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:34px;
+.bootmark .one{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:34px;
   line-height:1;position:relative;padding-left:12px;border-left:1px solid rgba(242,236,245,.34)}
 .bootmark .crown{position:absolute;width:19px;height:11px;top:-11px;right:2px;color:var(--accent)}
 .bootbar{width:132px;height:2px;background:rgba(242,236,245,.18);border-radius:2px;overflow:hidden}
@@ -1625,7 +1641,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
     border-radius:7px;font-size:13.5px;font-family:inherit}
   .subtabs button:hover{color:var(--ink);background:var(--panel)}
   .subtabs button[aria-current="true"]{background:var(--accent);color:var(--accentInk);font-weight:600}
-  .subtitle{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:18px;color:var(--ink2);
+  .subtitle{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:18px;color:var(--ink2);
     margin-left:auto}
 
   /* payment requests: the documents on one, and turning one down */
@@ -1918,7 +1934,7 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
   .jform label.wide{grid-column:1/-1}
   .jform label.tick{flex-direction:row;align-items:center;gap:9px}
   .jform label.tick input{width:auto}
-  .jform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .jform span{font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2)}
   .jform label.tick span{text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink2)}
   .jnote{grid-column:1/-1;margin:-4px 0 4px;font-size:13px;color:var(--ink3);
     max-width:82ch;line-height:1.55}
@@ -2033,8 +2049,8 @@ b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
      only in config.js — which meant that forgetting to upload config.js left
      app.js?v=1 pointing at a year-cached copy, and a deploy that changed
      nothing. That is a mistake worth making unrepeatable. -->
-<script>window.__BUILD = '202609060016';</script>
-<script src="config.js?v=202609060016"></script>
-<script type="module" src="boot.js?v=202609060016"></script>
+<script>window.__BUILD = '202609060806';</script>
+<script src="config.js?v=202609060806"></script>
+<script type="module" src="boot.js?v=202609060806"></script>
 </body>
 </html>

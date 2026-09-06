@@ -110,7 +110,7 @@ const state = {
   invFilter: {q:'Q2', status:'all', text:'', type:'all', sp:'all', pm:'all', role:'all'},
   invSort: {key:null, dir:1},
   payCompany: 'all',
-  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '', attMonth: null, edit: null, edSaved: null,
+  deptView: null, company: null, attMonth: null, edit: null, edSaved: null,
   exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',
   revQ: '', refShow: false, dirWho: null, attTab: 'me', slipRun: null, slipYear: '',
   opForm: null, opDone: '', reqForm: null, reqSent: false, onOfficeNet: true,
@@ -8291,7 +8291,7 @@ function vSalesUpload(){
  * and Work email is their sign-in. The confirm list says what a change DOES,
  * not just what it was, and that needs room.
  */
-const SRF = () => state.sr || (state.sr = {who:'', draft:{}, confirm:false, busy:false, done:''});
+const SRF = () => state.sr || (state.sr = {who:'', draft:{}, confirm:false, busy:false, done:'', newDept:false});
 const srCo = () => Object.keys(DATA.companies);
 
 /* What the record says now, before anything is typed. One place, so the
@@ -8360,7 +8360,7 @@ const SRFIELDS = [
   {k:'visa',       label:'Visa',       pick:'co'},
   {k:'paidBy',     label:'Paid from',  pick:'co'},
   {k:'title',      label:'Designation'},
-  {k:'department', label:'Department', list:'srDepts'},
+  {k:'department', label:'Department'},
   {k:'shift',      label:'Shift',      pick:'shift'},
   {k:'manager',    label:'Reports to', pick:'people'},
   {k:'email',      label:'Work email'},
@@ -8389,7 +8389,27 @@ function vStaffRec(){
   const box = f => {
     const v = srVal(f.k, now);
     const off = f.k === 'email' && signedIn;
-    const c = f.pick === 'co'
+    /* Department is a picker of the ones that exist, because typing it was how
+     * 'Corporate and Legal' became a department of one.
+     *
+     *   'There is no picker for department as well'                   -- Avin
+     *
+     * But a genuinely new department is a real thing, so the list ends in an
+     * escape rather than making it impossible. Choosing it turns the row into
+     * a box, and Cancel puts the list back. */
+    const c = f.k === 'department'
+      ? (F.newDept
+        ? '<span class="srnew"><input data-sr="department" value="' + esc(v || '') + '" '
+          + 'placeholder="the new department\u2019s name" autofocus>'
+          + '<button type="button" id="srDeptBack" class="btn ghost sm">Cancel</button></span>'
+        : '<select data-sr="department">'
+          + (depts.includes(v) || !v ? '' :
+              '<option value="' + esc(v) + '" selected>' + esc(v) + '</option>')
+          + (v ? '' : '<option value="" selected>No department</option>')
+          + depts.map(d => '<option value="' + esc(d) + '"' + (d === v ? ' selected' : '') + '>'
+              + esc(d) + '</option>').join('')
+          + '<option value="__new">\u2795 a department that is not on this list\u2026</option></select>')
+      : f.pick === 'co'
       ? '<select data-sr="' + f.k + '">' + srCo().map(k =>
           '<option value="' + esc(k) + '"' + (k === v ? ' selected' : '') + '>'
           + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select>'
@@ -8415,20 +8435,67 @@ function vStaffRec(){
   const tick = !who ? '' : (() => {
     const isOn = String(srVal('sales', now)) === 'true' || srVal('sales', now) === true || srVal('sales', now) === 'yes';
     const co = srVal('salesCo', now), dept = srVal('salesDept', now);
+    /* Only the departments that actually earn revenue for THAT company.
+     *
+     *   'What is "on which leaderboard"?'                             -- Avin
+     *
+     * It was a free text box offering every department in the group, and a
+     * value that is not one of these does not fail — scopeOf() falls through
+     * and quietly shows the person the Corporate & Legal table instead. So it
+     * is a picker of the real ones, and it follows the company above it. */
+    const boards = REVDEPT(co);
+
+    /* Whether they are ALREADY on the sales scheme through their department.
+     *
+     *   'there is no tick on Zhavokhir (i never put one). I can still see his
+     *    sales from his login'                                        -- Avin
+     *
+     * Which is right: he is a consultant in Corporate & Legal, and that is one
+     * of the departments that earns revenue for CorpLex, so his department has
+     * always let him in. The tick is the EXCEPTION — for somebody whose
+     * department is not one of those. An empty tick beside somebody who plainly
+     * has sales access reads as a bug, so the screen has to say which of the
+     * two is carrying them. */
+    const theirCo = srVal('company', now), theirDept = srVal('department', now);
+    const already = REVDEPT(theirCo).includes(theirDept);
+    const coName = k => esc((DATA.companies[k] || {}).name || k);
+
     return '<div class="srsales">'
       + '<label class="srtick"><input type="checkbox" id="srSales"' + (isOn ? ' checked' : '') + '>'
       + '<b>On the sales scheme</b>'
       + '<em>Their own figures, and Team performance, the leaderboard and Department, open for them '
       + 'whatever department they sit in.</em></label>'
+      + (already
+        ? '<p class="cap" style="padding:9px 0 0">' + (isOn
+            ? 'They would be on the scheme anyway: <b>' + esc(theirDept) + '</b> earns revenue for <b>'
+              + coName(theirCo) + '</b>. The tick is only changing where they are counted.'
+            : '<b>' + nm(who) + '</b> is already on the scheme without this tick, because <b>'
+              + esc(theirDept) + '</b> is one of the departments that earns revenue for <b>'
+              + coName(theirCo) + '</b>. The tick is for somebody whose department is not &mdash; '
+              + 'an accountant who also sells. Use it here only to count them under a different '
+              + 'company or leaderboard.') + '</p>'
+        : '')
       + (isOn
         ? '<div class="jform" style="margin-top:12px">'
           + '<label><span>Counted under</span><select data-sr="salesCo">' + srCo().map(k =>
               '<option value="' + esc(k) + '"' + (k === co ? ' selected' : '') + '>'
               + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select></label>'
-          + '<label><span>On which leaderboard</span><input data-sr="salesDept" list="srDepts" value="'
-          + esc(dept || '') + '" placeholder="a sales department"></label></div>'
-          + '<p class="cap" style="padding:10px 0 0">This is what decides whose team they are ranked against. '
-          + 'It does not have to be the department they sit in on the chart &mdash; that is the point of the tick.</p>'
+          + '<label><span>On which leaderboard</span>'
+          + (boards.length
+            ? '<select data-sr="salesDept">' + boards.map(d =>
+                '<option value="' + esc(d) + '"' + (d === dept ? ' selected' : '') + '>'
+                + esc(d) + '</option>').join('') + '</select>'
+            : '<select data-sr="salesDept" disabled><option>nothing to join</option></select>')
+          + '</label></div>'
+          + (boards.length
+            ? '<p class="cap" style="padding:10px 0 0">This is the team they are ranked inside &mdash; whose '
+              + 'figures they see on Team performance and Department, and which leaderboard they appear on. '
+              + 'It does not have to be the department they sit in on the chart; that is the point of the tick. '
+              + '<b>' + esc((DATA.companies[co] || {}).name || co) + '</b> earns revenue through '
+              + boards.map(d => '<b>' + esc(d) + '</b>').join(' and ') + ', so those are the choices.</p>'
+            : '<p class="cap" style="padding:10px 0 0"><b>' + esc((DATA.companies[co] || {}).name || co)
+              + '</b> has no department set as earning revenue, so there is no leaderboard to put anybody on. '
+              + 'Set one on <b>Sales &rarr; Staff accounts</b> first, or count them under another company.</p>')
         : '')
       + '</div>';
   })();
@@ -8469,7 +8536,6 @@ function vStaffRec(){
   </section>
 
   ${!who ? '' : `
-  <datalist id="srDepts">${depts.map(d => `<option value="${esc(d)}">`).join('')}</datalist>
   <section class="panel">
     <header><h3>${nm(who)}</h3>
       <span class="pill mute">${esc(now.staffNo || 'no ID')}</span>
@@ -8482,11 +8548,20 @@ function vStaffRec(){
     ${F.done ? `<div class="edok">${esc(F.done)}</div>` : ''}
     <div class="pad">
       <div class="jform">${SRFIELDS.map(box).join('')}</div>
-      ${tick}
       <p class="cap" style="padding:16px 0 0">Nothing is written until you press Save and agree to the list of
         changes. A joining date, a salary and the air ticket are not here: those are
         <b>Payroll</b>, <b>Revisions</b> and <b>Air ticket</b>, because each of them writes more than a field.</p>
     </div>
+  </section>
+
+  <!-- The sales scheme is its own panel, in its own colour: it is not part of
+       the employment record, it is a decision about what this person can SEE.
+       Same Save, because it is still one person. -->
+  <section class="panel srpanel">
+    <header><h3>Sales scheme</h3>
+      <span class="hint">${'sales' in F.draft || 'salesCo' in F.draft || 'salesDept' in F.draft
+        ? 'changed &mdash; press Save changes above' : 'what they can see, not what they are paid'}</span></header>
+    <div class="pad">${tick}</div>
   </section>`}`;
 }
 
@@ -8541,7 +8616,21 @@ function vAdmin(){
 
         <label><span>Staff number</span><input id="jNo" value="${esc(JF().staffNo)}" placeholder="left blank, the next in the series"></label>
         <label><span>Job title</span><input id="jTitle" value="${esc(JF().title)}"></label>
-        <label><span>Department</span><input id="jDept" value="${esc(JF().dept)}"></label>
+        <label><span>Department</span>${(() => {
+          /* A picker here too, for the same reason as on Staff Records: typing
+             it is how a department of one gets created by a stray plural. The
+             last option is the way to add a genuinely new one. */
+          const ds = [...new Set(USERS.map(x => orgDeptOf(x.name)).filter(Boolean)
+            .concat(Object.values(HR().revDept || {}).flat()))].sort();
+          const v = JF().dept;
+          if(state.jNewDept) return `<span class="srnew"><input id="jDept" value="${esc(v)}"
+            placeholder="the new department&rsquo;s name">
+            <button type="button" id="jDeptBack" class="btn ghost sm">Cancel</button></span>`;
+          return `<select id="jDept"><option value=""${v ? '' : ' selected'}>Choose one</option>${
+            ds.map(d => `<option value="${esc(d)}"${d === v ? ' selected' : ''}>${esc(d)}</option>`).join('')
+          }${ds.includes(v) || !v ? '' : `<option value="${esc(v)}" selected>${esc(v)}</option>`
+          }<option value="__new">&#10133; a department that is not on this list&hellip;</option></select>`;
+        })()}</label>
         <label><span>Reports to</span><select id="jMgr"><option value="">nobody yet</option>${
           USERS.map(u=>u.name).sort().map(n=>`<option value="${esc(n)}"${JF().manager===n?' selected':''}>${esc(n)}</option>`).join('')}</select></label>
         <label><span>Shift</span><select id="jShift">${
@@ -9691,13 +9780,21 @@ function render(){
    ['jBasic','basic'],['jAllow','allow'],['jShift','shift'],['jCountry','country'],
    ['jRate','rate']].forEach(([id,key])=>{
     const el = document.getElementById(id); if(!el) return;
-    const h = ()=>{ JF()[key] = el.value; state.jDone = null; render();
+    const h = ()=>{
+      if(id === 'jDept' && el.value === '__new'){
+        state.jNewDept = true; JF().dept = ''; state.jDone = null; render();
+        const nb = document.getElementById('jDept'); if(nb) nb.focus();
+        return;
+      }
+      JF()[key] = el.value; state.jDone = null; render();
       const e2 = document.getElementById(id);
       if(e2 && e2.tagName==='INPUT' && e2.type!=='date'){ e2.focus();
         try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} } };
     if(el.tagName==='SELECT' || el.type==='date') el.onchange = h;
     else { let tm; el.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(h, 300); }; }
   });
+  { const jb = document.getElementById('jDeptBack');
+    if(jb) jb.onclick = () => { state.jNewDept = false; JF().dept = ''; render(); }; }
   const jnt = document.getElementById('jNoTicket');
   if(jnt) jnt.onchange = ()=>{ JF().noTicket = jnt.checked; state.jDone = null; render(); };
   const jcl = document.getElementById('jClear');
@@ -9785,10 +9882,34 @@ function render(){
     const r=HR().requests.find(x=>x.id===b.dataset.declineReq);
     if(r){ r.status='Declined'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'declined'); } render(); });
   { const sw = document.getElementById('srWho');
-    if(sw) sw.onchange = () => { state.sr = {who: sw.value, draft:{}, confirm:false, busy:false, done:''}; render(); }; }
+    if(sw) sw.onchange = () => { state.sr = {who: sw.value, draft:{}, confirm:false, busy:false, done:'', newDept:false}; render(); }; }
+  /* The leaderboard a person is put on has to be one of the departments that
+     earn revenue for the company they are counted under, so changing the
+     company can strand the board. Rather than leave a value that silently
+     resolves to the wrong table, it is moved to that company's first board. */
+  function srFixBoard(now){
+    const d = SRF().draft;
+    const co = 'salesCo' in d ? d.salesCo : now.salesCo;
+    const boards = REVDEPT(co);
+    const cur = 'salesDept' in d ? d.salesDept : now.salesDept;
+    if(boards.includes(cur)) return;
+    srSet('salesDept', boards[0] || '', now);
+  }
+  { const b = document.getElementById('srDeptBack');
+    if(b) b.onclick = () => { const now = srNow(SRF().who);
+      SRF().newDept = false; srSet('department', now.department, now); render(); }; }
   document.querySelectorAll('[data-sr]').forEach(el => {
     const k = el.dataset.sr, now = srNow(SRF().who);
-    const h = () => { srSet(k, el.value, now); SRF().done = ''; render();
+    const h = () => {
+      /* the escape at the foot of the department list */
+      if(k === 'department' && el.value === '__new'){
+        SRF().newDept = true; srSet('department', '', now); SRF().done = ''; render();
+        const nb = document.querySelector('input[data-sr="department"]'); if(nb) nb.focus();
+        return;
+      }
+      srSet(k, el.value, now);
+      if(k === 'salesCo') srFixBoard(now);
+      SRF().done = ''; render();
       const e2 = document.querySelector('[data-sr="' + k + '"]');
       if(e2 && e2.tagName === 'INPUT'){ e2.focus();
         try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} } };
@@ -9798,13 +9919,17 @@ function render(){
   { const st = document.getElementById('srSales');
     if(st) st.onchange = () => { const now = srNow(SRF().who);
       srSet('sales', st.checked ? 'yes' : 'no', Object.assign({}, now, {sales: now.sales ? 'yes' : 'no'}));
+      /* Ticking somebody on for the first time leaves the board empty, and an
+         empty board is refused by the database. Fill it with the company's
+         first, which is the only choice for POA and Lex anyway. */
+      if(st.checked) srFixBoard(now);
       SRF().done = ''; render(); }; }
   { const b = document.getElementById('srSave');
     if(b) b.onclick = () => { SRF().confirm = true; render(); window.scrollTo({top:0}); }; }
   { const b = document.getElementById('srNo');
     if(b) b.onclick = () => { SRF().confirm = false; render(); }; }
   { const b = document.getElementById('srReset');
-    if(b) b.onclick = () => { state.sr = {who: SRF().who, draft:{}, confirm:false, busy:false, done:''}; render(); }; }
+    if(b) b.onclick = () => { state.sr = {who: SRF().who, draft:{}, confirm:false, busy:false, done:'', newDept:false}; render(); }; }
   { const b = document.getElementById('srGo');
     if(b) b.onclick = async () => {
       const F = SRF(), who = F.who, d = F.draft, now = srNow(who);
@@ -9830,7 +9955,7 @@ function render(){
       /* The name may have changed, so the person this screen is about is
          looked up again by the id rather than by what it used to be called. */
       const still = ok ? (Object.keys(HR().ids || {}).find(n => (HR().ids || {})[n] === now.id) || who) : who;
-      state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false,
+      state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false, newDept: ok ? false : F.newDept,
                   done: ok ? 'Saved.' : ''};
       render(); }; }
   document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
