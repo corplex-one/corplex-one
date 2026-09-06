@@ -630,12 +630,86 @@ export function buildData(db, meId){
                  // the entity that carries the liability, which is not always
                  // the one the person works for
                  visa: r.visa_company || '', basic:{}};
+    row._emp = r.employee_id;
     gById.set(r.id, row); gratuity.rows.push(row);
   });
   (db.gratuity_basic || []).forEach(c => {
     const row = gById.get(c.row_id); if(!row) return;
     row.basic[String(c.month_end).slice(0,10)] = +c.basic;
   });
+
+  /* ------------------------------------- the months the workbook does not own
+   *
+   * 'You need to remove the data from Sep 2026 and conclude with me till
+   *  August 2026. From Sep 2026, you calculate on your basis and I continue
+   *  with my work book.'
+   *
+   * Up to workbookTo the figures are Avin's, stored as his sheet has them and
+   * never touched. After it there is nothing stored at all, and the basic for
+   * each month is read from the salary chart in force that month — the same
+   * chart the settlement reads, so the provision and the settlement cannot
+   * come apart again, and a revision letter maintains the provision by writing
+   * the only figure there is.
+   *
+   * It runs to the end of the current year rather than to today, because the
+   * sheet it is being compared against carries future months: a revision
+   * effective in October is known in September and belongs on both sides.
+   *
+   * Nothing here is written back. These months are worked out on every load,
+   * so correcting a salary corrects the provision with it.
+   */
+  const wbTo = String(gratuity.policy.workbookTo || '').slice(0, 7);
+  if(wbTo){
+    gratuity.workbookTo = wbTo;
+    const monthEnd = ym => { const y = +ym.slice(0,4), m = +ym.slice(5,7);
+      return new Date(Date.UTC(m === 12 ? y + 1 : y, m === 12 ? 0 : m, 0))
+        .toISOString().slice(0,10); };
+    const next = ym => { const y = +ym.slice(0,4), m = +ym.slice(5,7);
+      return m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2,'0'); };
+
+    /* One pass over the salary chart, oldest first, so the basic in force at a
+       month is the last row dated on or before its end. A person paid by two
+       companies has a row for each; the provision follows the whole basic, as
+       the settlement does. */
+    const chart = {};
+    (db.salary_parts || []).slice()
+      .sort((a, b) => String(a.effective_from).localeCompare(String(b.effective_from)))
+      .forEach(s => { const n = name(s.employee_id); if(!n) return;
+        (chart[n] || (chart[n] = [])).push(
+          {from: String(s.effective_from).slice(0,10), co: s.company || '', basic: +s.basic || 0}); });
+    const basicAt = (n, on) => {
+      const rows = chart[n]; if(!rows) return 0;
+      const byCo = {};
+      rows.forEach(r => { if(r.from <= on) byCo[r.co] = r.basic; });
+      return Object.values(byCo).reduce((t, v) => t + v, 0);
+    };
+
+    /* One provision row per person gets the computed months. Nobody has two
+       today, but the liability can sit with a second entity, and writing the
+       whole basic into both rows would provision the same person twice. The
+       row that gets it is the one for the company they are on; failing that,
+       the first, so a person is never silently left without one. */
+    const mine = {};
+    gratuity.rows.forEach(r => {
+      if(!r._emp) return;
+      const theirs = co((byId.get(r._emp) || {}).company);
+      if(!mine[r._emp] || r.co === theirs) mine[r._emp] = r;
+    });
+
+    const lastYm = (new Date().getUTCFullYear()) + '-12';
+    for(const row of gratuity.rows){
+      if(row._emp && mine[row._emp] !== row) continue;
+      for(let ym = next(wbTo); ym <= lastYm; ym = next(ym)){
+        const on = monthEnd(ym);
+        /* Somebody who has left stops being provisioned for, and a month
+           before they joined was never theirs. */
+        if(row.left && row.left < on) continue;
+        if(row.doj && row.doj > on) continue;
+        const b = basicAt(row.n, on);
+        if(b > 0) row.basic[on] = b;
+      }
+    }
+  }
 
   // ------------------------------------------------- advances and letters
   hr.loans = (db.loans || []).map(l => ({

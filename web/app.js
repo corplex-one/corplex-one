@@ -2812,6 +2812,77 @@ const GRAT = () => DATA.gratuity || {policy:{}, rows:[]};
 const gMonthEnd = ym => { const [y,m] = ym.split('-').map(Number);
   return `${y}-${String(m).padStart(2,'0')}-${String(new Date(y,m,0).getDate()).padStart(2,'0')}`; };
 const gDays = (a,b) => Math.round((new Date(b+'T00:00:00') - new Date(a+'T00:00:00'))/86400000);
+/* One row per month: what each company holds, the group total, and what moved.
+   Plain concatenation rather than nested templates. */
+function gByMonth(){
+  const months = gMonths();
+  if(!months.length) return '';
+  const cos = ['CorpLex', 'POA', 'Lex'];
+  const wbTo = String((GRAT() || {}).workbookTo || '');
+  const at = ym => { const me = gMonthEnd(ym);
+    const per = cos.map(c => GRAT().rows.filter(r => r.co === c)
+      .reduce((t, r) => t + gratAt(r, me).v, 0));
+    const heads = GRAT().rows.filter(r => gratAt(r, me).v > 0).length;
+    return {per, tot: per.reduce((t, v) => t + v, 0), heads}; };
+
+  const seen = months.map(at);
+  const rows = months.map((ym, i) => {
+    const now = seen[i], was = i ? seen[i - 1] : null;
+    const mv = was ? now.tot - was.tot : 0;
+    const first = wbTo && ym > wbTo && !(months[i - 1] > wbTo);
+    const head = first
+      ? '<tr class="grp"><td class="s1" colspan="7">Worked out by the portal from here'
+        + ' &mdash; the workbook is the authority above</td></tr>'
+      : '';
+    return head + '<tr' + (ym === (state.gratMonth || '') ? ' class="on"' : '') + '>'
+      + '<td class="s1 nw">' + esc(MONTHNAME[+ym.slice(5) - 1]) + ' ' + ym.slice(0,4) + '</td>'
+      + now.per.map(v => '<td class="n r">' + (v ? money(v, 0) : '&mdash;') + '</td>').join('')
+      + '<td class="n r netcol">' + money(now.tot, 0) + '</td>'
+      + '<td class="n r"' + (mv < 0 ? ' style="color:var(--good)"' : '') + '>'
+        + (was ? (mv ? (mv < 0 ? '(' : '') + money(Math.abs(mv), 0) + (mv < 0 ? ')' : '') : '&mdash;')
+               : '<span style="color:var(--ink3)">opening</span>') + '</td>'
+      + '<td class="n r">' + now.heads + '</td></tr>';
+  }).join('');
+
+  /* What a year charged is its closing provision less the CLOSING OF THE YEAR
+     BEFORE — not less its own January, which leaves out January's own charge
+     and understates every year after the first. The earliest year on file has
+     no year before it, so it gets no figure rather than a wrong one. */
+  const year = ym => ym.slice(0,4);
+  const yrs = [...new Set(months.map(year))];
+  const closeOf = {};
+  yrs.forEach(y => { const ix = months.map((m, i) => year(m) === y ? i : -1).filter(i => i >= 0);
+    closeOf[y] = seen[ix[ix.length - 1]].tot; });
+  const foot = yrs.map(y => {
+    const before = closeOf[String(+y - 1)];
+    const charged = before === undefined ? null : closeOf[y] - before;
+    return '<tr class="sub"><td class="s1">' + y + ' &mdash; charged over the year</td>'
+      + '<td colspan="3"></td><td class="n r">' + money(closeOf[y], 0) + '</td>'
+      + '<td class="n r"' + (charged !== null && charged < 0 ? ' style="color:var(--good)"' : '') + '>'
+        + (charged === null
+           ? '<span style="color:var(--ink3)">no opening on file</span>'
+           : (charged < 0 ? '(' : '') + money(Math.abs(charged), 0) + (charged < 0 ? ')' : ''))
+      + '</td><td></td></tr>';
+  }).join('');
+
+  return '<section class="panel">'
+    + '<header><h3>By month</h3><span class="hint">what each company holds at every month end</span></header>'
+    + '<div class="tw"><table class="invtable gtable gmon">'
+    + '<colgroup><col style="width:18%"><col style="width:14%"><col style="width:14%">'
+      + '<col style="width:14%"><col style="width:16%"><col style="width:14%"><col style="width:10%"></colgroup>'
+    + '<thead><tr><th class="s1">Month</th><th class="r">CorpLex</th><th class="r">POA</th>'
+      + '<th class="r">Lex Estates</th><th class="r">Group</th><th class="r">Movement</th>'
+      + '<th class="r">People</th></tr></thead>'
+    + '<tbody>' + rows + foot + '</tbody></table></div>'
+    + '<p class="cap">Every figure is worked out here from the basic held for that month, not'
+    + ' copied from anywhere. Above the line those basics are Avin&rsquo;s workbook, exactly as'
+    + ' the sheet has them. Below it they are the salary chart &mdash; the same figure the final'
+    + ' settlement uses &mdash; so a revision letter moves the provision by itself and there is'
+    + ' nothing to upload. <b>Movement</b> is against the month before: a charge to the P&amp;L'
+    + ' where it rises, a release where it falls.</p>'
+    + '</section>';
+}
+
 function gratAt(row, monthEnd){
   const P = GRAT().policy, cap = (P.firstYears||5) * (P.yearDays||365);
   if(row.left && row.left < monthEnd) return {v:0, gone:true, days:0, basic:0};
@@ -3078,8 +3149,15 @@ function vGratuity(){
         Nothing is payable to them until they do, so it is provided against the likelihood they stay,
         and written back if they do not.</p>`;
     })()}
-    <p class="cap">Straight from your workbook and recalculated here, not copied &mdash; every figure in the 2025 and 2026 sheets reproduces to the dirham. Service runs in calendar days from the joining date; a leaver is held to their last working day and released the following month. The POA table is split by <b>visa entity</b>, because the end-of-service liability sits with the company that sponsors the visa, not the one the person works for. A <b>payroll says</b> flag means the basic on the payroll file differs from the one in the workbook &mdash; one of the two is out of date.</p>
+    <p class="cap">${GRAT().workbookTo && ym > GRAT().workbookTo
+      ? 'The basic for this month comes from the <b>salary chart</b> &mdash; the same figure the final settlement uses &mdash; so a revision letter moves the provision with it and there is nothing to upload. Avin&rsquo;s workbook is the authority up to ' + esc(MONTHNAME[+GRAT().workbookTo.slice(5)-1]) + ' ' + GRAT().workbookTo.slice(0,4) + ', and those months are untouched.'
+      : 'Straight from your workbook and recalculated here, not copied &mdash; every figure in the 2025 and 2026 sheets reproduces to the dirham.'}
+      Service runs in calendar days from the joining date; a leaver is held to their last working day and released the following month.
+      The POA table is split by <b>visa entity</b>, because the end-of-service liability sits with the company that sponsors the visa, not the one the person works for.${
+      GRAT().workbookTo && ym > GRAT().workbookTo ? '' : ' A <b>payroll says</b> flag means the basic on the payroll file differs from the one in the workbook &mdash; one of the two is out of date.'}</p>
   </section>
+
+  ${gByMonth()}
 
   ${released.length?`<section class="panel">
     <header><h3>Released this month</h3><span class="hint">provision no longer held</span></header>
