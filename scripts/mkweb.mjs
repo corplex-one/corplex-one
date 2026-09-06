@@ -1,0 +1,17127 @@
+/* Builds the deployable site from the portal sources.
+ *
+ *   node scripts/mkweb.mjs ../portal
+ *
+ * Produces web/index.html, web/app.js and web/config.js. Every edit below is
+ * anchored to an exact string and asserted, so a change upstream that moves
+ * the ground under it fails here rather than silently shipping.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+
+const SRC = process.argv[2] || '../portal';
+const OUT = 'web';
+
+const swap = (s, a, b, what) => {
+  const n = s.split(a).length - 1;
+  if(n !== 1) throw new Error(`${what}: expected 1 match, found ${n}`);
+  return s.replace(a, b);
+};
+
+/* Replace a whole block, named by its first and last line. For a passage too
+ * long to quote in full — both anchors must still be unique, so what it
+ * asserts is exactly what swap asserts, twice. */
+const cutout = (s, a, b, to, what) => {
+  const i = s.indexOf(a), j = s.indexOf(b);
+  if(i < 0) throw new Error(`${what}: the opening anchor is not there`);
+  if(s.indexOf(a, i + 1) >= 0) throw new Error(`${what}: the opening anchor is not unique`);
+  if(j < 0) throw new Error(`${what}: the closing anchor is not there`);
+  if(s.indexOf(b, j + 1) >= 0) throw new Error(`${what}: the closing anchor is not unique`);
+  if(j < i) throw new Error(`${what}: the anchors are the wrong way round`);
+  return s.slice(0, i) + to + s.slice(j + b.length);
+};
+
+let shell = fs.readFileSync(path.join(SRC, 'shell.html'), 'utf8');
+let app   = fs.readFileSync(path.join(SRC, 'app.js'), 'utf8');
+
+/* ---------------------------------------------------------------- the shell */
+
+// A real sign-in: no prefilled demo credentials, a place to say what went
+// wrong, a way to get a new password, and the set-a-password step people land
+// on from an invitation.
+shell = swap(shell,
+`      <div class="field"><label for="lu">Work email</label><input id="lu" type="email" value="avin@corplex.ae" autocomplete="username"></div>
+      <div class="field"><label for="lp">Password</label><input id="lp" type="password" value="demo-password" autocomplete="current-password"></div>
+      <button class="btn wide" type="submit">Sign in</button>
+      <div class="demonote"><b>Demo:</b> any email and password opens the portal. Pick who you sign in as from the header once inside &mdash; consultant, project manager or the accounts manager.</div>
+    </form>`,
+`      <div id="signinBox">
+        <div class="field"><label for="lu">Work email</label><input id="lu" type="email" autocomplete="username" placeholder="you@corplex.ae" required></div>
+        <div class="field"><label for="lp">Password</label><input id="lp" type="password" autocomplete="current-password" required></div>
+        <button class="btn wide" id="lgGo" type="submit">Sign in</button>
+        <p class="lgsmall"><a href="#" id="lgForgot">I have forgotten my password</a></p>
+      </div>
+    </form>
+    <form class="form hidden" id="setForm">
+      <h1>Choose a password</h1>
+      <p class="lead">Ten characters or more. Only you will know it &mdash; nobody at CorpLex can see it, including Accounts.</p>
+      <div class="field"><label for="np1">New password</label><input id="np1" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="np2">Once more</label><input id="np2" type="password" autocomplete="new-password" required></div>
+      <button class="btn wide" type="submit">Save and sign in</button>
+    </form>`,
+  'login form');
+
+// the message line sits between the two forms
+shell = swap(shell,
+  `    <form class="form" id="loginForm">`,
+  `    <div id="lgMsg" class="lgmsg hidden"></div>\n    <form class="form" id="loginForm">`,
+  'login message line');
+
+// one file, one person: the switcher has no meaning here
+/* A rail you can put away.
+ *
+ * Avin asked for this after seeing the reconciliation table: the navigation is
+ * useful about twice a session and 236px wide all day, and on a wide table
+ * that is a column and a half. Collapsed it keeps the icons, so it is still
+ * navigation rather than a hidden menu, and the choice is remembered.
+ */
+shell = swap(shell,
+`    <div class="markco" id="railCo">CorpLex</div>
+  </div>`,
+`    <div class="markco" id="railCo">CorpLex</div>
+    <button class="railtog" id="railTog" type="button" aria-label="Hide the menu" title="Hide the menu">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M15 6l-6 6 6 6"/></svg>
+    </button>
+  </div>`,
+  'somewhere to put the rail away');
+
+shell = swap(shell,
+  `      <div class="pick"><label for="userSel" style="margin:0">Signed in as</label><select id="userSel"></select></div>`,
+  `      <div class="pick hidden"><select id="userSel"></select></div>`,
+  'user switcher');
+
+shell = swap(shell,
+  `      <button class="out" id="signout">View login screen</button>`,
+  `      <button class="out" id="signout">Sign out</button>
+      <span class="buildno" id="buildNo" title="Which version of the portal you are looking at"></span>`,
+  'sign out button, and the version stamp');
+
+// The app's frame was visible from the first paint, so every refresh showed an
+// empty rail, "Signed in as —" and a blank Dashboard for as long as the session
+// check took. Nothing is shown until there is something to show.
+shell = swap(shell, '<div id="app">', '<div id="app" class="hidden">', 'hide the frame until it is ready');
+
+shell = swap(shell, '<div class="tip" id="tip"></div>',
+  `<div id="boot"><div class="bootmark"><img id="bootMark" alt=""><span class="one"><svg class="crown" viewBox="0 0 24 14" aria-hidden="true"><path d="M2 13.6V4.2l5 4.4 5-6.4 5 6.4 5-4.4v9.4Z" fill="currentColor"/></svg>One</span></div><div class="bootbar"><i></i></div></div>
+<div class="tip" id="tip"></div>`,
+  'the opening screen');
+
+// somewhere for the document viewer to appear
+shell = swap(shell, '<div class="tip" id="tip"></div>',
+  '<div class="tip" id="tip"></div>\n<div id="lookWrap" class="hidden"></div>',
+  'the viewer mount');
+
+shell = swap(shell, '</style>', `
+/* ---------- sign in ---------- */
+#login .formside{position:relative}
+.lgmsg{margin:0 0 14px;padding:10px 13px;border-radius:9px;font-size:13.5px;line-height:1.45}
+.lgmsg.bad{background:var(--badBg);color:var(--bad);border:1px solid color-mix(in oklab,var(--bad) 26%,transparent)}
+.lgmsg.good{background:var(--goodBg);color:var(--good);border:1px solid color-mix(in oklab,var(--good) 26%,transparent)}
+.lgsmall{margin:14px 0 0;font-size:13px;text-align:center}
+.lgsmall a{color:var(--ink2)}
+.lgsmall a:hover{color:var(--accent2)}
+#lgGo[disabled]{opacity:.6;cursor:default}
+.toast.bad{background:var(--bad);color:#fff}
+
+/* ---------- the running clock ----------
+   b.ciclock, not .ciclock: the shell already styles a b inside .cibox, and a
+   bare class loses to it on specificity. */
+.buildno{display:block;margin-top:10px;font-size:10.5px;letter-spacing:.06em;
+  color:var(--brandDim);opacity:.7;font-variant-numeric:tabular-nums}
+
+/* ---------- the opening moment ---------- */
+#boot{position:fixed;inset:0;z-index:300;background:var(--brand);color:var(--brandInk);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px}
+#boot.hidden{display:none}
+.bootmark{display:flex;align-items:flex-end;gap:10px}
+.bootmark img{width:210px;height:auto;display:block}
+.bootmark .one{font-family:'Bodoni Moda','Didot',Georgia,serif;font-size:34px;
+  line-height:1;position:relative;padding-left:12px;border-left:1px solid rgba(242,236,245,.34)}
+.bootmark .crown{position:absolute;width:19px;height:11px;top:-11px;right:2px;color:var(--accent)}
+.bootbar{width:132px;height:2px;background:rgba(242,236,245,.18);border-radius:2px;overflow:hidden}
+.bootbar i{display:block;width:40%;height:100%;background:var(--accent);border-radius:2px;
+  animation:bootslide 1.15s ease-in-out infinite}
+@keyframes bootslide{
+  0%   {transform:translateX(-110%)}
+  100% {transform:translateX(360%)}
+}
+@media(prefers-reduced-motion:reduce){ .bootbar i{animation:none;width:100%;opacity:.5} }
+
+/* ---------- the profile, in rows ---------- */
+.frow{display:grid;gap:0 16px;align-items:start}
+.frow.c1{grid-template-columns:1fr}
+.frow.c2{grid-template-columns:1fr 1fr}
+.frow.c3{grid-template-columns:1fr 1fr 1fr}
+.frow .field{margin-bottom:14px}
+.bdrow{display:grid;grid-template-columns:96px 1fr;gap:8px}
+/* A field that is shown rather than typed. It sits on the same baseline as the
+   inputs beside it so a row does not go ragged, but it carries no border and no
+   background — the point is that there is nothing here to press. */
+.pfread{min-height:38px;display:flex;align-items:center;gap:6px;font-size:15px;color:var(--ink)}
+/* "Nothing on file" wherever a value is expected and absent. */
+.miss{color:var(--ink3);font-style:italic}
+
+/* ---------- the settlement rail ----------
+   Six segments across the top of an exit, saying where it has got to. It had
+   no stylesheet at all, so a span, a b and an em ran together into
+   "1 · doneDraftedby Avin Mascarenhas". Each segment is a small stack now:
+   the number and the state on one line, what the step is under it, and who or
+   when under that. */
+.exrail .step{flex:1 1 150px;min-width:0;display:grid;
+  grid-template-columns:22px minmax(0,1fr);grid-template-rows:auto auto auto;
+  column-gap:8px;row-gap:1px;align-content:start;
+  padding:10px 13px;border:1px solid var(--line);background:var(--panel2)}
+.exrail .step:first-child{border-radius:9px 0 0 9px}
+.exrail .step:last-child{border-radius:0 9px 9px 0}
+.exrail .step + .step{border-left:0}
+.exrail .step i{grid-row:1;grid-column:1;width:22px;height:22px;border-radius:99px;
+  background:var(--sunk);color:var(--ink3);display:grid;place-items:center;
+  font-style:normal;font-size:11.5px;font-family:'IBM Plex Sans',system-ui,sans-serif}
+.exrail .step .sw{grid-row:1;grid-column:2;align-self:center;font-size:10.5px;
+  letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+.exrail .step b{grid-row:2;grid-column:2;font-weight:500;font-size:13.5px;color:var(--ink2);
+  line-height:1.25;overflow-wrap:break-word}
+.exrail .step em{grid-row:3;grid-column:2;font-style:normal;font-size:11.5px;color:var(--ink3);
+  line-height:1.3;overflow-wrap:break-word}
+.exrail .step.done{background:var(--panel)}
+.exrail .step.done i{background:var(--good);color:#fff}
+.exrail .step.done b{color:var(--ink)}
+.exrail .step.now{background:var(--accentSoft);border-color:var(--accent)}
+.exrail .step.now i{background:var(--accent);color:var(--accentInk)}
+.exrail .step.now .sw{color:var(--accent);font-weight:600}
+.exrail .step.now b{color:var(--ink)}
+@media(max-width:1100px){ .exrail{gap:8px}
+  .exrail .step{flex:1 1 210px;border-radius:9px!important;border-left:1px solid var(--line)!important} }
+
+/* The one button on a screen that undoes rather than advances. */
+.btn.ghost.bad{color:var(--bad);border-color:color-mix(in srgb, var(--bad) 32%, var(--line))}
+.btn.ghost.bad:hover{background:color-mix(in srgb, var(--bad) 9%, transparent);border-color:var(--bad)}
+/* Inside the grid the same span stands for one blank cell among many, so it is
+   a quiet dash rather than eight italic sentences a row. */
+.dgrid .miss{font-style:normal;opacity:.5}
+
+/* ---------- the staff documents grid ----------
+   Four documents across, three things under each, and there is no honest way
+   to fit thirteen columns into a panel. So it keeps its real widths and
+   scrolls sideways inside .tw rather than crushing a date into '16 Fe…'. The
+   employee column is what you read down, so it is the widest and it stays. */
+.dgrid{min-width:2010px}
+.dgrid th,.dgrid td{padding-left:9px;padding-right:9px}
+/* The group heading: one document, spanning its three columns. */
+.dgrid tr.dgrp th.grp{text-align:center;font-size:11.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink2);padding-bottom:3px}
+/* A hairline at the start of each document, so the eye knows where one ends.
+   On the heading it runs the full height; on a cell it is quieter. */
+.dgrid th.b,.dgrid td.b{border-left:1px solid var(--line)}
+.dgrid td.num{font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}
+/* The copy the employee uploaded: one icon, under a heading that says what it
+   is. Both centred, so the paperclip sits under the word rather than beside
+   the date to its left. */
+.dgrid th.doc{text-align:center}
+.dgrid td.clipc{text-align:center;padding-left:0;padding-right:0;overflow:visible}
+.clip{font-size:15px;line-height:1;background:none;border:0;padding:3px 5px;border-radius:6px;
+  color:var(--ink2);cursor:pointer}
+.clip:hover{background:var(--panel2);color:var(--ink)}
+.clip.no{opacity:.32;cursor:default;filter:grayscale(1)}
+.clip.no:hover{background:none}
+.pfgrid{align-items:stretch}
+.pfgrid > .panel{display:flex;flex-direction:column;height:100%}
+.pfgrid > .panel > .pad{flex:1}
+/* Change sits on the rim of the photograph; Remove goes under it, not across
+   the name beside it. */
+.pfhead .pfpic{margin-bottom:16px}
+.pfpicdel{position:absolute;left:50%;transform:translateX(-50%);bottom:-32px;
+  white-space:nowrap;border:0;background:none;color:var(--ink3);
+  font:inherit;font-size:11px;cursor:pointer;text-decoration:underline;padding:0}
+.pfpicdel:hover{color:var(--bad)}
+@media(max-width:900px){ .frow.c2,.frow.c3{grid-template-columns:1fr} }
+
+.fxf{width:104px}
+.fxf.hidden{display:none}
+.lookbtn{border:1px solid var(--line);background:var(--panel);color:var(--ink2);
+  border-radius:7px;padding:2px 9px;font:inherit;font-size:12px;cursor:pointer}
+.lookbtn:hover{border-color:var(--accent);color:var(--accent2)}
+#lookWrap{position:fixed;inset:0;z-index:200}
+#lookWrap.hidden{display:none}
+.lookbg{position:absolute;inset:0;background:rgba(20,14,24,.62)}
+.look{position:absolute;inset:32px;max-width:1000px;margin:0 auto;display:flex;
+  flex-direction:column;background:var(--panel);border-radius:14px;overflow:hidden;
+  box-shadow:0 30px 80px -30px rgba(0,0,0,.6)}
+.look header{display:flex;align-items:center;gap:12px;padding:12px 16px;
+  border-bottom:1px solid var(--line);background:var(--panel2)}
+.look header b{font-size:15px;white-space:nowrap}
+.look header span{color:var(--ink3);font-size:12.5px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.look header .btn{padding:5px 12px;font-size:13px}
+.look header .btn:first-of-type{margin-left:auto}
+.lookbody{flex:1;min-height:0;background:var(--sunk);display:flex;
+  align-items:center;justify-content:center;overflow:auto}
+.lookbody iframe{width:100%;height:100%;border:0;background:#fff}
+.lookbody img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+@media(max-width:720px){ .look{inset:12px} }
+
+b.ciclock{display:flex;align-items:center;gap:11px;font-weight:inherit}
+b.ciclock .citime{font-variant-numeric:tabular-nums;letter-spacing:.5px;
+  font-feature-settings:'tnum' 1}
+b.ciclock .cidot{display:block;width:9px;height:9px;border-radius:50%;
+  background:var(--good);flex:none;
+  box-shadow:0 0 0 0 color-mix(in oklab,var(--good) 60%,transparent);
+  animation:cipulse 2s ease-out infinite}
+@keyframes cipulse{
+  0%   {box-shadow:0 0 0 0 color-mix(in oklab,var(--good) 55%,transparent)}
+  70%  {box-shadow:0 0 0 9px color-mix(in oklab,var(--good) 0%,transparent)}
+  100% {box-shadow:0 0 0 0 color-mix(in oklab,var(--good) 0%,transparent)}
+}
+@media(prefers-reduced-motion:reduce){ b.ciclock .cidot{animation:none} }
+
+/* ---------- saving your profile ----------
+   It follows you down the page: a Save button you have to go looking for is
+   a Save button people do not press. */
+.pfsave{position:fixed;left:50%;bottom:20px;transform:translate(-50%,140%);
+  display:flex;align-items:center;gap:18px;padding:12px 14px 12px 20px;
+  background:var(--panel);border:1px solid var(--line);border-radius:999px;
+  box-shadow:0 2px 6px rgba(30,21,35,.06), 0 16px 40px -18px rgba(30,21,35,.45);
+  z-index:60;transition:transform .22s ease, opacity .22s ease;opacity:0;
+  pointer-events:none;max-width:calc(100vw - 32px)}
+.pfsave.on,.pfsave.just{transform:translate(-50%,0);opacity:1;pointer-events:auto}
+.pfsave.on{border-color:var(--accent)}
+.pfsave span{font-size:13.5px;color:var(--ink2);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.pfsave.on span{color:var(--ink);font-weight:600}
+.pfsave.just span{color:var(--good);font-weight:600}
+.pfsave button[disabled]{display:none}
+@media(prefers-reduced-motion:reduce){ .pfsave{transition:none} }
+@media(max-width:720px){ .pfsave{bottom:78px} }   /* clear of the tab bar */
+</style>`, 'sign-in styles');
+
+/* ------------------------------------------------------------------ the app */
+
+// DATA now arrives from the database instead of being baked into the page.
+app = `/* built by scripts/mkweb.mjs — edit ../portal/app.js, not this file */
+const DATA = window.__DATA;
+` + app;
+
+// Someone who is not on the run still has an identity row, for the letterhead
+// their documents carry. It is not a payslip, and must not be drawn as one.
+/* And the controls at the right edge become one group. They were four
+   siblings in a flex row, held apart only by the title's margin-right:auto —
+   so on a page with nothing between them they read as loose objects rather
+   than as a set. */
+shell = swap(shell,
+`.grid.hrow > .panel{display:flex;flex-direction:column;height:352px}`,
+`.grid.hrow > .panel{display:flex;flex-direction:column;height:auto;min-height:180px}`,
+'a home box is as tall as what is in it');
+
+/* The strip is a fixed four columns, and My commission now has five tiles — so
+   the fifth wrapped onto a line of its own with three columns of white beside
+   it. A strip that says how many it holds fits them. Four stays four
+   everywhere else, because that is what every other strip carries. */
+shell = swap(shell,
+`@media(max-width:840px){.strip{grid-template-columns:repeat(2,minmax(0,1fr))}}`,
+`.strip.five{grid-template-columns:repeat(5,minmax(0,1fr))}
+@media screen and (max-width:1400px){.strip.five{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .strip.five .stat:nth-child(3n){border-right:0}}
+@media(max-width:840px){.strip,.strip.five{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .strip.five .stat:nth-child(3n){border-right:1px solid var(--line2)}}`,
+'a strip of five sits in five');
+
+/* =========================== My invoices: one invoice, one line =============
+ *
+ *   'Just like payment requests, show all invoices in one line'
+ *   'PR# and Company Name can have hover, as too much space is wasted'
+ *   'Shrink the columns'                                            -- Avin
+ *
+ * A company called BOX39 MOTORCYCLES & SCOOTERS MANUFACTURING CO. L.L.C wraps
+ * to four lines, and a four-line row in a sixteen-column table is most of a
+ * screen for one invoice. The name is not shortened — it is the client's name
+ * and it is what somebody searches for — it is truncated with the whole of it
+ * on hover, which is what the Salesperson and P. Manager columns already do.
+ *
+ * Everything else tightens to what it holds: a date, an invoice number and a
+ * PR number are all a known width, and were being given room to grow into. */
+shell = swap(shell,
+`.invtable td.cname{min-width:170px;max-width:210px}`,
+`/* One line per invoice. Anything that would wrap is cut with the whole value
+   on hover — the browser's own tooltip, so it works on a touch device's
+   long-press too. */
+.invtable td.cname{min-width:0;max-width:230px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.invtable td.cname .pill{margin-left:5px}
+.invtable td.prno{max-width:96px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* The columns that hold a known shape stop being given room to grow into. */
+.invtable td,.invtable th{padding-left:8px;padding-right:8px}
+.invtable td.s1,.invtable th.s1{padding-left:14px}
+.invtable td.n.nw{white-space:nowrap}
+.invtable colgroup col.tight{width:1%}`,
+'an invoice is one line, and the long names are hover');
+
+shell = swap(shell,
+`      <button class="bell hidden" id="bell" type="button" title="Payment requests waiting">`,
+`      <div class="tbend">
+      <button class="bell hidden" id="bell" type="button" title="Payment requests waiting">`,
+'the bar controls open a group');
+
+shell = swap(shell,
+`      <div class="seg" id="themeSeg">
+        <button data-t="light" type="button">Light</button>
+        <button data-t="dark" type="button">Dark</button>
+      </div>`,
+`      <div class="seg" id="themeSeg">
+        <button data-t="light" type="button">Light</button>
+        <button data-t="dark" type="button">Dark</button>
+      </div>
+      </div>`,
+'and close it');
+
+app = swap(app,
+  `  const row = payrollRowFor(state.user);
+  if(!row) return`,
+  `  const row0 = payrollRowFor(state.user);
+  const row = (row0 && row0.net !== undefined) ? row0 : null;
+  if(!row) return`,
+  'payslip: a row without figures is not a payslip');
+
+// The payroll run's state is whatever the database says it is. Left hard-coded
+// as 'closed', every person's payslip screen tried to draw a payslip out of a
+// run that was still a draft, and printed NaN at them.
+app = swap(app,
+  `  payStatus: 'closed', payRun: 'aug',`,
+  `  payStatus: (window.__DATA && window.__DATA.payroll && window.__DATA.payroll.status) || 'draft',
+  pfDirty: null, pfSaved: '',
+  payRun: 'aug',`,
+  'payroll status, and the unsaved-profile state');
+
+// Roles come from the database, not from the demo user list baked into app.js.
+// Left as it was, Rana reached console screens on the strength of a hard-coded
+// entry — the data behind them was still refused, but the door should not have
+// opened at all.
+app = swap(app,
+  `const ROLE = Object.fromEntries(USERS.map(u=>[u.name,u.role]));`,
+  `const APPROLE = {owner:'owner', accounts:'admin', manager:'manager', staff:'staff'};
+const RANK = ['staff','manager','admin','owner'];
+const ROLE = Object.fromEntries(Object.entries(DATA._roles || {}).map(([n, rs]) =>
+  [n, (rs || []).map(r => APPROLE[r] || 'staff')
+        .sort((a,b) => RANK.indexOf(b) - RANK.indexOf(a))[0] || 'staff']));`,
+  'roles from the database');
+
+// Who is signed in is settled by the session, not by a dropdown.
+app = swap(app,
+  `  user: 'Avin Mascarenhas',\n  asAdmin: true,`,
+  `  user: window.__ME,\n  asAdmin: (window.__ROLES||[]).some(r => r === 'accounts' || r === 'owner'),`,
+  'signed-in user');
+
+// Every screen is back. What a person may see is no longer decided by which
+// tab is drawn — it is decided by which rows the database was willing to send
+// them, which is a decision the browser cannot argue with.
+
+/* --- writes: the screen changes at once, the database is told straight after */
+
+app = swap(app,
+  `    a.segs.push({in:hm,out:'',loc:b.dataset.ci,ok:b.dataset.ci==='Office',
+      note:b.dataset.ci==='Client site'?'Off-site — checked in away from the office':''});
+    render(); });`,
+  `    const seg={in:hm,out:'',loc:b.dataset.ci,ok:b.dataset.ci==='Office',
+      note:b.dataset.ci==='Client site'?'Off-site — checked in away from the office':''};
+    a.segs.push(seg);
+    window.__db.checkIn({date:d, kind:a.kind, in:hm, loc:seg.loc, note:seg.note});
+    render(); });`,
+  'check in');
+
+app = swap(app,
+  `    const now=new Date(); g.out=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    render(); };`,
+  `    const now=new Date(); g.out=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    window.__db.checkOut({date:HDATE(), out:g.out});
+    render(); };`,
+  'check out');
+
+app = swap(app,
+  `    HR().requests.unshift({id:'RQ-'+n, who:state.user, type:f.type, from:from, to:to,`,
+  `    const NEWREQ = {id:'RQ-'+n, who:state.user, type:f.type, from:from, to:to,`,
+  'new request head');
+app = swap(app,
+  `      calDays: t.half ? 1 : spanDays(from,to).length, sent:HDATE(), decided:''});`,
+  `      calDays: t.half ? 1 : spanDays(from,to).length, sent:HDATE(), decided:''};
+    HR().requests.unshift(NEWREQ);
+    window.__db.newRequest(NEWREQ);`,
+  'new request tail');
+
+app = swap(app,
+  `    const r=HR().requests.find(x=>x.id===b.dataset.approveReq); if(r){ r.status='Approved'; r.decided=HDATE(); } render(); });`,
+  `    const r=HR().requests.find(x=>x.id===b.dataset.approveReq);
+    if(r){ r.status='Approved'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'approved'); } render(); });`,
+  'approve');
+
+app = swap(app,
+  `    const r=HR().requests.find(x=>x.id===b.dataset.declineReq); if(r){ r.status='Declined'; r.decided=HDATE(); } render(); });`,
+  `    const r=HR().requests.find(x=>x.id===b.dataset.declineReq);
+    if(r){ r.status='Declined'; r.decided=HDATE(); window.__db.decide(r.uid||r.id,'declined'); } render(); });`,
+  'decline');
+
+app = swap(app,
+  `      p[el.dataset.pf]=el.value; touchProf(); render();`,
+  `      p[el.dataset.pf]=el.value; touchProf();
+      window.__db.saveProfile(el.dataset.pf, el.value); render();`,
+  'profile field');
+
+/* The viewer's code, kept out of the swap below so both stay readable. */
+const VIEWER = `/* Looking at a document without leaving the page.
+   Two callers, so two ways in. A staff member on their own Documents page
+   passes the kind ('passport') and the viewer finds their own file; accounts,
+   on the Staff Documents grid, passes somebody else's file object outright
+   along with the heading it should carry. Nothing here reads state.user
+   except the first form, which is the only one that should. */
+function showDoc(what, title, sub){
+  const own = typeof what === 'string';
+  const f = own ? ((HR().files || {})[state.user] || {})[what] : what;
+  if(!f || !f.url) return;
+  const label = own ? (UPLOADS().find(t => t.k === what) || {label: what}).label
+                    : (title || 'Document');
+  const pdf = /pdf/i.test(f.name || '');
+  const box = document.getElementById('lookWrap');
+  box.innerHTML = '<div class="lookbg" data-lookclose="1"></div>'
+    + '<div class="look" role="dialog" aria-modal="true">'
+    +   '<header><b>' + esc(label) + '</b><span>' + esc(f.name) + '</span>'
+    +     (sub ? '<span class="mute">' + esc(sub) + '</span>' : '')
+    +     '<a class="btn ghost" href="' + f.url + '" download="' + esc(f.name) + '">Download</a>'
+    +     '<button class="btn ghost" data-lookclose="1" type="button">Close</button></header>'
+    +   '<div class="lookbody">'
+    +     (pdf ? '<iframe src="' + f.url + '#toolbar=0" title="' + esc(label) + '"></iframe>'
+                : '<img src="' + f.url + '" alt="' + esc(label) + '">')
+    +   '</div></div>';
+  box.classList.remove('hidden');
+  box.querySelectorAll('[data-lookclose]').forEach(b => b.onclick = hideDoc);
+  document.body.style.overflow = 'hidden';
+}
+function hideDoc(){
+  const box = document.getElementById('lookWrap');
+  if(!box) return;
+  box.classList.add('hidden'); box.innerHTML = '';
+  document.body.style.overflow = '';
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest && ev.target.closest('[data-look]');
+  if(b) showDoc(b.dataset.look);
+});
+document.addEventListener('keydown', ev => { if(ev.key === 'Escape') hideDoc(); });
+`;
+
+/* --- which version am I looking at --- */
+// "Nothing changed" is usually a cached page rather than a failed upload, and
+// there was no way to tell the two apart from the outside.
+app = swap(app,
+  `/* theme + login */`,
+  `{ const bn = document.getElementById('buildNo');
+  if(bn) bn.textContent = 'build ' + ((window.CORPLEX_ONE || {}).build || '?'); }
+
+/* theme + login */`,
+  'show the build number');
+
+/* --- the profile, laid out the way it is read --- */
+
+// The mobile box sat unlabelled beside the work number Avin had already given
+// me, so nobody could tell which was which.
+app = swap(app,
+  `  {k:'mobile',      label:'Mobile',                 group:'you',   req:true,  ph:'+971 50 000 0000'},`,
+  `  {k:'mobile',      label:'Personal mobile',        group:'you',   req:true,  ph:'+971 50 000 0000',
+   note:'Only you and accounts see this. Colleagues get the work number.'},`,
+  'the profile: whose mobile');
+
+// Fields sit in rows, so a form reads across rather than as one long column.
+app = swap(app,
+  `const PFIELDS = [`,
+  `/* row groups the fields into lines; the numbers are what the page reads across */
+const PFIELDS = [`,
+  'the profile: rows');
+[['callMe',1],['bday',1],['gender',2],['marital',2],['mobile',2],
+ ['pemail',3],['uaeAddr',3],
+ ['homeCountry',1],['homeAddr',1],['homeContact',2],['homePhone',2],
+ ['ecName',1],['ecRel',1],['ecPhone',2],['ecAlt',2]].forEach(([k, row]) => {
+  const at = app.indexOf(`{k:'${k}',`);
+  if(at < 0) throw new Error('field not found: ' + k);
+  const close = app.indexOf('}', at);
+  app = app.slice(0, close) + `, row:${row}` + app.slice(close);
+});
+
+app = swap(app,
+  `  const grp = g => PFIELDS.filter(f=>f.group===g).map(fld).join('');`,
+  `  const grp = g => {
+    const fs = PFIELDS.filter(f=>f.group===g);
+    const rows = [...new Set(fs.map(f=>f.row||0))];
+    return rows.map(r => {
+      const line = fs.filter(f=>(f.row||0)===r);
+      return \`<div class="frow c\${line.length}">\${line.map(fld).join('')}</div>\`;
+    }).join('');
+  };`,
+  'the profile: render the rows');
+
+// A birthday with no year should not be typed into a box that demands one.
+app = swap(app,
+  `      ? \`<input id="pf_bday" data-bday="1" type="date" value="\${esc(bdayISO(u))}">
+         <span class="pfhint">\${bdayOf(u)?'On file as <b>'+esc(bdayOf(u))+'</b> — only the day and month are kept, never the year.':'Only the day and month are kept, never the year.'}</span>
+         <label class="pfchk"><input type="checkbox" id="pf_quiet"\${p.quietBday?' checked':''}><span>Keep it to yourself &mdash; do not announce my birthday</span></label>
+         <span class="pfhint">\${p.quietBday?'Nothing goes to the team &mdash; not the home page, not the bell, not an email. You still get your own wish and your half-day.':'On the day you appear on the home page, in the bell, and in a short note to the team.'}</span>\``,
+  `      ? (() => { const on = bdayOf(u).split(' ');
+          const dd = on[0] || '', mo = on[1] || '';
+          const MON = Object.keys(MIDX);
+          return \`<div class="bdrow">
+            <select id="pf_bdayD" data-bday="1"><option value="">Day</option>\${
+              Array.from({length:31},(_,i)=>String(i+1).padStart(2,'0')).map(d=>
+                \`<option value="\${d}"\${d===dd?' selected':''}>\${+d}</option>\`).join('')}</select>
+            <select id="pf_bdayM" data-bday="1"><option value="">Month</option>\${
+              MON.map(m=>\`<option value="\${m}"\${m===mo?' selected':''}>\${m}</option>\`).join('')}</select>
+          </div>
+          <span class="pfhint">Only the day and month are kept &mdash; never the year.</span>\`; })()`,
+  'the profile: the birthday, without a year');
+
+// and the handler behind it
+app = swap(app,
+  `  const bdEl = document.getElementById('pf_bday');
+  if(bdEl) bdEl.onchange = ()=>{
+    const v = bdEl.value;
+    const B = HR().birthdays || (HR().birthdays={});
+    if(!v){ delete B[state.user]; }
+    else { const mm = +v.slice(5,7), dd = +v.slice(8,10);
+      B[state.user] = {d: String(dd).padStart(2,'0')+' '+Object.keys(MIDX)[mm-1], sample:false}; }
+    const p=PROF(state.user); if(p) p.updated=HDATE();
+    render(); };`,
+  `  document.querySelectorAll('[data-bday]').forEach(el => el.onchange = ()=>{
+    const d = (document.getElementById('pf_bdayD')||{}).value || '';
+    const m = (document.getElementById('pf_bdayM')||{}).value || '';
+    const B = HR().birthdays || (HR().birthdays={});
+    const v = (d && m) ? d + ' ' + m : '';
+    if(v) B[state.user] = {d: v, sample:false}; else delete B[state.user];
+    const p=PROF(state.user); if(p) p.updated=HDATE();
+    state.pfDirty = Object.assign(state.pfDirty||{}, {birthday: v});
+    state.pfSaved = ''; render(); });`,
+  'the profile: saving the birthday');
+
+
+// Your details beside Employment, Home country beside Emergency contact,
+// and the two boxes on a row the same height.
+app = swap(app,
+  `  <div class="grid g2 gtop" style="align-items:start">
+    <div class="col">
+    <section class="panel">
+      <header><h3>Your details</h3><span class="hint">yours to change any time</span></header>
+      <div class="pad">\${grp('you')}</div>
+    </section>
+    <section class="panel">
+      <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>
+      <div class="pad">\${grp('home')}</div>
+    </section>
+    </div>
+    <div class="col">
+    <section class="panel">`,
+  `  <div class="grid g2 gtop pfgrid">
+    <section class="panel">
+      <header><h3>Your details</h3><span class="hint">yours to change any time</span></header>
+      <div class="pad">\${grp('you')}</div>
+    </section>
+    <section class="panel">`,
+  'the profile: first row');
+
+app = swap(app,
+  `    <section class="panel">
+      <header><h3>Emergency contact</h3><span class="hint">who we call if something happens</span></header>
+      <div class="pad">\${grp('emg')}</div>
+    </section>
+    </div>
+  </div>`,
+  `    <section class="panel">
+      <header><h3>Home country</h3><span class="hint">where to reach you and yours</span></header>
+      <div class="pad">\${grp('home')}</div>
+    </section>
+    <section class="panel">
+      <header><h3>Emergency contact</h3><span class="hint">who we call if something happens</span></header>
+      <div class="pad">\${grp('emg')}</div>
+    </section>
+  </div>`,
+  'the profile: second row');
+
+// the note under a field that needs one
+app = swap(app,
+  `      : \`<input id="pf_\${f.k}" data-pf="\${f.k}" value="\${esc(p[f.k]||'')}" placeholder="\${esc(f.ph||'')}">\`}</div>\`;`,
+  `      : \`<input id="pf_\${f.k}" data-pf="\${f.k}" value="\${esc(p[f.k]||'')}" placeholder="\${esc(f.ph||'')}">\`}\${
+      f.note ? \`<span class="pfhint">\${esc(f.note)}</span>\` : ''}</div>\`;`,
+  'the profile: a note under a field');
+
+/* --- the card fee calculator takes AED and bills in the client's currency --- */
+// the two rate boxes must recalculate as well
+app = swap(app,
+  `      ['cfInv','cfCur'].forEach(id=>{const el=document.getElementById(id);`,
+  `      ['cfInv','cfCur','cfFxS','cfFxP'].forEach(id=>{const el=document.getElementById(id); if(!el) return;`,
+  'the calculator: the rate boxes recalculate too');
+
+// The amount typed in is always AED. Picking USD used to multiply by the rate,
+// working the whole table on AED 13,249 instead of AED 3,650. The client's
+// currency divides: 3650 / 3.63 = 1,005.51 on Stripe, 3650 / 3.65 = 1,000.00
+// on the POS machine. Stripe's fixed fee is AED 2, so it converts with it —
+// which is what makes the USD table reconcile with the AED one to the fils.
+app = swap(app,
+  `          <label for="cfInv">Invoice value including VAT</label>`,
+  `          <label for="cfInv">Service fee in AED, including VAT</label>`,
+  'the calculator: the amount is always in AED');
+
+app = swap(app,
+  `          <label for="cfCur">Currency</label>`,
+  `          <label for="cfCur">Client pays in</label>`,
+  'the calculator: whose currency');
+
+app = swap(app,
+  `        <p id="cfFx" style="margin:0 0 4px;color:var(--ink3);font-size:12.5px"></p>`,
+  `        <div class="field fxf" style="margin:0"><label for="cfFxS">Stripe rate</label>
+          <input id="cfFxS" class="num" type="number" value="3.63" step="0.0001"></div>
+        <div class="field fxf" style="margin:0"><label for="cfFxP">POS rate</label>
+          <input id="cfFxP" class="num" type="number" value="3.65" step="0.0001"></div>
+        <p id="cfFx" style="margin:0 0 4px;color:var(--ink3);font-size:12.5px"></p>`,
+  'the calculator: the rates are editable');
+
+app = swap(app,
+  `  const raw = parseFloat(document.getElementById('cfInv').value)||0;
+  const cur = document.getElementById('cfCur').value;
+  const invOf = g => cur==='USD' ? raw*FX[g] : raw;
+
+  document.getElementById('cfFx').innerHTML = cur==='USD'
+    ? \`USD \${money(raw,2)} converted at <b>3.63</b> for Stripe (AED \${money(invOf('stripe'),2)}) and <b>3.65</b> for the POS machine (AED \${money(invOf('pos'),2)}).\`
+    : '';
+
+  const rows = CHANNELS.map(ch => ({ch, r: cardCalc(invOf(ch.group), ch)}));`,
+  `  const raw = parseFloat(document.getElementById('cfInv').value)||0;
+  const cur = document.getElementById('cfCur').value;
+  const fxEl = {stripe: document.getElementById('cfFxS'), pos: document.getElementById('cfFxP')};
+  const rate = g => { const v = parseFloat(fxEl[g] && fxEl[g].value); return v > 0 ? v : FX[g]; };
+  document.querySelectorAll('.fxf').forEach(el => el.classList.toggle('hidden', cur !== 'USD'));
+
+  // the amount typed in is AED; the client's currency divides it
+  const invOf = g => cur === 'USD' ? raw / rate(g) : raw;
+
+  document.getElementById('cfFx').innerHTML = cur==='USD'
+    ? \`AED \${money(raw,2)} is <b>USD \${money(invOf('stripe'),2)}</b> on Stripe at \${rate('stripe')}, and <b>USD \${money(invOf('pos'),2)}</b> on the POS machine at \${rate('pos')}. Every figure below is in USD.\`
+    : '';
+
+  const rows = CHANNELS.map(ch => ({ch, r: cardCalc(invOf(ch.group),
+    cur === 'USD' ? Object.assign({}, ch, {fixed: ch.fixed / rate(ch.group)}) : ch)}));`,
+  'the calculator: divide, and convert the fixed fee');
+
+// say which currency the figures are in, on the line that names the fee
+app = swap(app,
+  `        <thead><tr><th></th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
+        <tbody>
+          <tr><td>Service fee</td><td></td><td></td><td class="n r">\${money(r.inv,2)}</td></tr>`,
+  `        <thead><tr><th>\${esc(CUR)}</th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
+        <tbody>
+          <tr><td>Service fee</td><td></td><td></td><td class="n r">\${money(r.inv,2)}</td></tr>`,
+  'the calculator: name the currency');
+
+app = swap(app,
+  `  const block = ({ch,r}) => {
+    const isPos = ch.group==='pos';`,
+  `  const CUR = cur;
+  const block = ({ch,r}) => {
+    const isPos = ch.group==='pos';`,
+  'the calculator: the currency in scope');
+
+// the fixed part of the Stripe line is quoted in AED, so say the converted one
+app = swap(app,
+  `          <tr><td>\${esc(ch.line)}</td>`,
+  `          <tr><td>\${esc(cur === 'USD' && ch.fixed ? ch.line.replace(/\\+ 2 AED/, '+ ' + money(2/rate(ch.group), 2) + ' USD') : ch.line)}</td>`,
+  'the calculator: the fixed fee in the line');
+
+/* --- documents open here, not in another tab --- */
+// A passport scan opening in a new tab is a signed storage link in the address
+// bar, a lost place in the portal, and on a phone a second window to close.
+app = swap(app,
+  '${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <a href="${f.url}" target="_blank" rel="noopener">view</a>`:\'\'}</span>`',
+  '${f?`<span class="pffile"><b>${esc(f.name)}</b><em>${kb(f.size)}</em>${f.url?` <button class="lookbtn" data-look="${esc(t.k)}" type="button">View</button>`:\'\'}</span>`',
+  'view a document in place');
+
+app = swap(app, `/* theme + login */`, VIEWER + `
+/* theme + login */`, 'the document viewer');
+
+/* --- the page stays where you left it --- */
+
+// Refreshing put everyone back on Home, because the tab lived only in memory.
+// It lives in the address now, so a refresh, a bookmark and the back button
+// all land where they should.
+app = swap(app,
+  `function render(){`,
+  `function tabHash(){ return (state.mode === 'console' ? 'c/' : '') + state.tab; }
+function readHash(){
+  const h = (location.hash || '').replace(/^#/, '');
+  if(!h) return;
+  const con = h.startsWith('c/');
+  const id  = con ? h.slice(2) : h;
+  if(!TABS.some(t => t.id === id)) return;
+  state.tab = id;
+  state.mode = con ? 'console' : 'staff';
+}
+function render(){`,
+  'remember which page you were on');
+
+// Rebuilding the view drops the scroll position, so a save or an upload threw
+// you back to the top of the page. Put it back where it was; a deliberate tab
+// change still scrolls to the top on its own.
+app = swap(app,
+  `  applyTheme();
+  renderNav(); renderChrome(); renderTabbar();`,
+  `  const keepY = window.scrollY;
+  applyTheme();
+  renderNav(); renderChrome(); renderTabbar();`,
+  'remember the scroll position');
+
+// Every redraw scrolled to the top, so saving a field or uploading a file threw
+// you back up the page. Only a change of page should do that.
+app = swap(app,
+  `  window.scrollTo({top:0,behavior:'instant'});
+  drawCharts();`,
+  `  const here = tabHash();
+  if(state._at !== here){
+    state._at = here;
+    window.scrollTo({top:0, behavior:'instant'});
+    if(location.hash.slice(1) !== here) history.replaceState(null, '', '#' + here);
+  } else if(window.scrollY !== keepY){
+    window.scrollTo({top:keepY, behavior:'instant'});
+  }
+  drawCharts();`,
+  'scroll to the top only when the page changes');
+
+// Accounts typing an expiry against someone else had the same fault.
+app = swap(app,
+  `    if(el.value) rec[k] = el.value; else delete rec[k];
+    if(!Object.keys(rec).length) delete D[n];
+    render();`,
+  `    if(el.value) rec[k] = el.value; else delete rec[k];
+    if(!Object.keys(rec).length) delete D[n];
+    window.__db.saveDocDateFor(n, k, el.value);
+    render();`,
+  'expiry dates: the admin screen');
+
+// Air ticket history is filed under the staff number. Three people do not have
+// one yet, and their history was landing nowhere — the screen told them they
+// had never taken a ticket. Fall back to the name, which the mapper also files.
+app = swap(app,
+  `  const h = T.history[me.id] || {rows:[], totalPaid:0, cycles:0, first:''};`,
+  `  const h = T.history[me.id] || T.history[me.name] || {rows:[], totalPaid:0, cycles:0, first:''};`,
+  'air ticket history: find it without a staff number too');
+
+// Two people have no joining date on file yet, and the card read "since you
+// joined on" and then stopped.
+app = swap(app,
+  `      <span class="n">since you joined on \${esc(me.doj)}</span></div>`,
+  `      <span class="n">\${me.doj?'since you joined on '+esc(me.doj):'since you joined'}</span></div>`,
+  'air tickets: no joining date, no dangling sentence');
+
+// The history in the database is the history of people who are still here.
+// Seven people who have left took fourteen tickets between them, and that
+// spend is not in this figure — say so rather than let it read as the total.
+app = swap(app,
+  `      <span class="n">\${Object.values(T.history).reduce((s,h)=>s+h.rows.length,0)} tickets taken</span></div>`,
+  `      <span class="n">\${Object.values(T.history).reduce((s,h)=>s+h.rows.length,0)} tickets, staff still with us</span></div>`,
+  'air tickets: the paid-since figure counts current staff only');
+
+/* --- a clock that shows the day running --- */
+// The card said "08:45" and "4:02 so far", both frozen until something else
+// caused a redraw. A running clock is the difference between a record of the
+// day and a sign that it is actually going.
+// A day still running counts up to now. Left as it was, the footer said
+// "00:00 today" beside a clock reading two and a half hours.
+app = swap(app,
+  `function segMins(a){ if(!a||!a.segs) return 0;
+  return a.segs.reduce((s,g)=> s + (g.out ? mins(g.out)-mins(g.in) : 0), 0); }`,
+  `function segMins(a, running){ if(!a||!a.segs) return 0;
+  const now = mins(nowHM());
+  return a.segs.reduce((s,g)=>{
+    if(g.out) return s + (mins(g.out) - mins(g.in));
+    if(!running || a.d !== HDATE()) return s;      // an open segment on a past day counts nothing
+    return s + Math.max(0, now - mins(g.in));
+  }, 0); }`,
+  'count the open segment');
+
+app = swap(app,
+  `\${aTod && aTod.segs.length ? \`<p class="hfoot">\${aTod.segs.map(g=>\`\${esc(g.loc)} \${esc(g.in)}\${g.out?'–'+esc(g.out):' (open)'}\`).join(' &middot; ')} &mdash; <b>\${hhmm(segMins(aTod))}</b> today</p>\`:''}`,
+  `\${aTod && aTod.segs.length ? \`<p class="hfoot">\${aTod.segs.map(g=>\`\${esc(g.loc)} \${esc(g.in)}\${g.out?'–'+esc(g.out):' (open)'}\`).join(' &middot; ')} &mdash; <b>\${hhmm(segMins(aTod, true))}</b> today</p>\`:''}`,
+  'the day total on the home page');
+
+// the markup lives in app.js as a function, since both cards call it
+app = swap(app,
+  `function payrollRowFor(user){`,
+  `function ciClock(open){
+  return `+'`'+`<b class="ciclock" data-since="\${esc(open.in)}"><span class="cidot"></span><span class="citime">0:00:00</span></b>`+'`'+`;
+}
+function payrollRowFor(user){`,
+  'the clock markup');
+
+app = swap(app,
+  `            <span class="cik">\${open?'Checked in since':'Not checked in'}</span>
+            <b>\${open?esc(open.in):'—'}</b>
+            <span class="cin">\${open?esc(open.loc==='Office'?'Office':'Work from home')+(mins(nowHM())>mins(open.in)?' · '+hhmm(mins(nowHM())-mins(open.in))+' so far':''):esc(shiftText(u))}</span>`,
+  `            <span class="cik">\${open?'On the clock':'Not checked in'}</span>
+            \${open ? ciClock(open) : '<b>—</b>'}
+            <span class="cin">\${open?esc(open.loc==='Office'?'Office':'Work from home')+' · since '+esc(open.in):esc(shiftText(u))}</span>`,
+  'the clock on the home page');
+
+app = swap(app,
+  `          <span class="cik">\${open?'Checked in since':'Not checked in'}</span>
+          <b>\${open?esc(open.in):'—'}</b>
+          <span class="cin">\${open?esc(open.loc):'press a button below to start the day'}</span>`,
+  `          <span class="cik">\${open?'On the clock':'Not checked in'}</span>
+          \${open ? ciClock(open) : '<b>—</b>'}
+          <span class="cin">\${open?esc(open.loc)+' · since '+esc(open.in):'press a button below to start the day'}</span>`,
+  'the clock on the attendance page');
+
+// One interval for the life of the page. It finds whichever clock is on
+// screen, so it survives every redraw without being restarted.
+app = swap(app,
+  `/* theme + login */`,
+  `/* the running clock */
+setInterval(() => {
+  document.querySelectorAll('.ciclock[data-since]').forEach(el => {
+    const [h, m] = (el.dataset.since || '').split(':').map(Number);
+    if(isNaN(h) || isNaN(m)) return;
+    const now = new Date();
+    const start = new Date(now); start.setHours(h, m, 0, 0);
+    let s = Math.floor((now - start) / 1000);
+    if(s < 0) s = 0;                                  // checked in after midnight
+    const out = el.querySelector('.citime');
+    const txt = Math.floor(s/3600) + ':'
+      + String(Math.floor(s/60) % 60).padStart(2,'0') + ':'
+      + String(s % 60).padStart(2,'0');
+    if(out && out.textContent !== txt) out.textContent = txt;
+  });
+}, 1000);
+
+/* theme + login */`,
+  'wire the running clock');
+
+/* --- uploads reach the store, not just the page --- */
+// Both of these read the file into memory and stopped. It appeared in the
+// table and was gone on the next refresh, with nothing to say so.
+app = swap(app,
+  `    const rd = new FileReader();
+    rd.onload = () => {
+      const files = HR().files || (HR().files={});
+      const mine = files[state.user] || (files[state.user]={});
+      mine[el.dataset.doc] = {name:f.name, size:f.size, at:HDATE(), url:rd.result};
+      state.pfErr=''; touchProf(); render();
+    };
+    rd.readAsDataURL(f); });`,
+  `    state.pfErr = ''; state.upBusy = el.dataset.doc; render();
+    window.__db.uploadDoc(el.dataset.doc, f).then(path => {
+      state.upBusy = null;
+      if(!path) state.pfErr = \`\${f.name} did not upload. Try again, or tell accounts.\`;
+      render();
+    }); });`,
+  'document upload');
+
+app = swap(app,
+  `  document.querySelectorAll('[data-photo]').forEach(el=>el.onchange=()=>{
+    const f = el.files && el.files[0]; if(!f) return;
+    const rd = new FileReader();
+    rd.onload = () => { const p=PROF(state.user); if(p){ p.photo={name:f.name, size:f.size, url:rd.result}; touchProf(); } render(); };
+    rd.readAsDataURL(f); });`,
+  `  document.querySelectorAll('[data-photo]').forEach(el=>el.onchange=()=>{
+    const f = el.files && el.files[0]; if(!f) return;
+    state.upBusy = 'photo'; render();
+    window.__db.uploadPhoto(f).then(path => {
+      state.upBusy = null;
+      if(!path) state.pfErr = \`\${f.name} did not upload. Try again, or tell accounts.\`;
+      render();
+    }); });`,
+  'photo upload');
+
+// say something while it is happening — a 4 MB scan is not instant
+app = swap(app,
+  `  pfDirty: null, pfSaved: '',`,
+  `  pfDirty: null, pfSaved: '', upBusy: null,`,
+  'upload in progress');
+
+app = swap(app,
+  `            <label class="pfup">\${f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="\${esc(t.k)}" hidden></label></td>`,
+  `            <label class="pfup">\${state.upBusy===t.k ? 'Uploading…' : f?'Replace':'Upload'}<input type="file" accept="image/*,application/pdf" data-doc="\${esc(t.k)}" hidden\${state.upBusy?' disabled':''}></label></td>`,
+  'upload button label');
+
+app = swap(app,
+  `        <label class="pfpicbtn">\${p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden></label>`,
+  `        <label class="pfpicbtn">\${state.upBusy==='photo' ? 'Uploading…' : p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden\${state.upBusy?' disabled':''}></label>`,
+  'photo button label');
+
+// a photograph you can take off again
+app = swap(app,
+  `        <label class="pfpicbtn">\${state.upBusy==='photo' ? 'Uploading…' : p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden\${state.upBusy?' disabled':''}></label>`,
+  `        <label class="pfpicbtn">\${state.upBusy==='photo' ? 'Uploading…' : p.photo?'Change':'Add photo'}<input type="file" accept="image/*" data-photo="1" hidden\${state.upBusy?' disabled':''}></label>
+        \${p.photo && !state.upBusy ? '<button class="pfpicdel" id="pfPhotoOff" type="button">Remove</button>' : ''}`,
+  'the profile: remove a photograph');
+
+app = swap(app,
+  `  document.querySelectorAll('[data-photo]').forEach(el=>el.onchange=()=>{`,
+  `  const poff = document.getElementById('pfPhotoOff');
+  if(poff) poff.onclick = ()=>{ state.upBusy='photo'; render();
+    window.__db.removePhoto().then(()=>{ state.upBusy=null; render(); }); };
+  document.querySelectorAll('[data-photo]').forEach(el=>el.onchange=()=>{`,
+  'the profile: wire remove');
+
+/* --- one attribute, one meaning --- */
+// The document expiry inputs and the invoice export buttons both answered to
+// data-exp, so both handlers bound to both sets of elements: clicking a date
+// field on your profile downloaded your invoices. The documents get their own
+// name.
+app = swap(app,
+  `<input class="ff pfdate" type="date" data-exp="\${esc(t.k)}" value="\${esc(exp)}">`,
+  `<input class="ff pfdate" type="date" data-docexp="\${esc(t.k)}" value="\${esc(exp)}">`,
+  'document expiry: markup');
+
+app = swap(app,
+  `  document.querySelectorAll('[data-exp]').forEach(el=>el.onchange=()=>{
+    const d = HR().docs[state.user] || (HR().docs[state.user]={});
+    d[el.dataset.exp] = el.value;`,
+  `  document.querySelectorAll('[data-docexp]').forEach(el=>el.onchange=()=>{
+    const d = HR().docs[state.user] || (HR().docs[state.user]={});
+    d[el.dataset.docexp] = el.value;
+    window.__db.saveDocDate(el.dataset.docexp, el.value);`,
+  'document expiry: handler, and it saves');
+
+/* --- the profile saves when you say so, not as you type --- */
+
+// Fields change what is on screen and mark the page unsaved. Nothing reaches
+// the database until Save, and nothing is lost quietly if it never does.
+app = swap(app,
+  `      p[el.dataset.pf]=el.value; touchProf();
+      window.__db.saveProfile(el.dataset.pf, el.value); render();`,
+  `      p[el.dataset.pf]=el.value; touchProf();
+      state.pfDirty = Object.assign(state.pfDirty||{}, {[el.dataset.pf]: el.value});
+      state.pfSaved = ''; render();`,
+  'profile: text fields');
+
+app = swap(app,
+  `  document.querySelectorAll('[data-pfs]').forEach(el=>el.onchange=()=>{
+    const p=PROF(state.user); if(!p) return; p[el.dataset.pfs]=el.value; p.updated=HDATE(); render(); });`,
+  `  document.querySelectorAll('[data-pfs]').forEach(el=>el.onchange=()=>{
+    const p=PROF(state.user); if(!p) return; p[el.dataset.pfs]=el.value; p.updated=HDATE();
+    state.pfDirty = Object.assign(state.pfDirty||{}, {[el.dataset.pfs]: el.value});
+    state.pfSaved = ''; render(); });`,
+  'profile: dropdowns');
+
+app = swap(app,
+  `  if(qEl) qEl.onchange = ()=>{ const p=PROF(state.user); if(p){ p.quietBday = qEl.checked; p.updated=HDATE(); } render(); };`,
+  `  if(qEl) qEl.onchange = ()=>{ const p=PROF(state.user); if(p){ p.quietBday = qEl.checked; p.updated=HDATE(); }
+    state.pfDirty = Object.assign(state.pfDirty||{}, {quietBday: qEl.checked});
+    state.pfSaved = ''; render(); };`,
+  'profile: quiet birthday');
+
+// the bar itself, at the foot of the page where a form's buttons belong
+app = swap(app,
+  `    <p class="cap">Take a clear photo or scan of the whole page.`,
+  `    <div class="pfsave\${state.pfDirty ? ' on' : state.pfSaved ? ' just' : ''}">
+      <span>\${state.pfDirty
+        ? Object.keys(state.pfDirty).length + ' change' + (Object.keys(state.pfDirty).length===1?'':'s') + ' not saved yet'
+        : 'Your changes are saved'}</span>
+      <button class="btn" id="pfSave" type="button"\${state.pfDirty ? '' : ' disabled'}>Save changes</button>
+    </div>
+    <p class="cap">Take a clear photo or scan of the whole page.`,
+  'profile: the save bar');
+
+app = swap(app,
+  `/* theme + login */`,
+  `/* the save button */
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest && ev.target.closest('#pfSave');
+  if(!b || !state.pfDirty) return;
+  const changes = state.pfDirty;
+  b.disabled = true; b.textContent = 'Saving…';
+  const ok = await window.__db.saveProfileAll(changes);
+  if(ok){
+    state.pfDirty = null;
+    state.pfSaved = 'Saved';
+    clearTimeout(window.__pfT);
+    window.__pfT = setTimeout(() => { state.pfSaved = ''; render(); }, 4000);
+  }
+  render();
+});
+
+// leaving with something unsaved should cost a click, not a shrug
+window.addEventListener('beforeunload', ev => {
+  if(!state.pfDirty) return;
+  ev.preventDefault(); ev.returnValue = '';
+});
+
+/* theme + login */`,
+  'profile: wire the save button');
+
+/* --- the rest of the write paths --- */
+
+/* ================================================= the month, as five acts
+ *
+ * Avin's own description: he prepares and submits, Miraziz approves, he puts
+ * the payment through, he closes it, and only then do payslips appear.
+ *
+ * The prototype drew that as five steps and moved between them by assignment —
+ * `state.payStatus = 'approved'` — which is a picture of a control rather than
+ * a control. Each button now calls a function that can refuse, and the
+ * database is what refuses: accounts may not approve its own work, the owner
+ * may not prepare, a submitted month cannot be typed on, and a closed month
+ * never moves again.
+ *
+ * Which means the screen can no longer keep its own idea of the status. It
+ * reads the run it is looking at, so if a call is refused the panel goes on
+ * showing the truth rather than what it hoped had happened.
+ */
+app = swap(app,
+  `  const st = state.payStatus;`,
+  `  // The run whose figures are on this screen. Not the one the selector says:
+  // the mapper only works out gross, deductions and net for the newest run, so
+  // this panel always describes that one, and the status it shows has to be
+  // that run's or the buttons would act on a different month from the totals.
+  const HERE = (DATA.payroll.runs || []).find(r => r.key === DATA.payroll.monthKey)
+             || (DATA.payroll.runs || [])[0] || null;
+  const st = HERE ? HERE.status : PAYST();
+  const RUNNOTE = HERE ? (HERE.note || '') : '';`,
+  'the panel reads the run, not a copy of it');
+
+app = swap(app,
+`        \${isPrep && (st==='draft'||st==='returned') ? '<button class="btn" id="paySubmit" type="button">Submit to Miraziz for approval</button>' : ''}
+        \${isApprover && st==='submitted' ? '<button class="btn" id="payApprove" type="button">Approve the run</button><button class="btn ghost" id="payReturn" type="button">Send back to Avin</button>' : ''}
+        \${isPrep && st==='approved' ? '<button class="btn" id="payInit" type="button">Initiate the payment</button><button class="btn ghost" id="payReset" type="button">Reopen</button><span style="color:var(--good);font-size:13px">Approved by Miraziz &mdash; AED '+money(staffNet,2)+' across three companies</span>' : ''}
+        \${isPrep && st==='initiated' ? '<button class="btn" id="payClose" type="button">Approve the payment and release payslips</button><button class="btn ghost" id="payBack" type="button">Back</button><span style="color:var(--warn);font-size:13px">Initiated &mdash; releasing publishes '+staff.length+' payslips to staff</span>' : ''}
+        \${!isPrep && ['approved','initiated'].includes(st) ? '<span style="color:var(--ink3);font-size:12.5px">With Avin &mdash; payment '+(st==='initiated'?'initiated, not yet released':'not yet initiated')+'.</span>' : ''}
+        \${st==='closed' ? \`\${isPrep?\`<button class="btn" id="payNext" type="button">Start the \${esc(NEXTRUN.label)} run</button><button class="btn ghost" id="paySlips" type="button">Payslips</button><button class="btn ghost" id="payReset" type="button">Reopen August</button>\`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED \${money(staffNet,2)} across three companies, and \${staff.length} payslips released to staff</span>\` : ''}`,
+`        \${isPrep && (st==='draft'||st==='returned') ? '<button class="btn" id="paySubmit" type="button">Submit to Miraziz for approval</button>' : ''}
+        \${isApprover && st==='submitted' ? '<button class="btn" id="payApprove" type="button">Approve the run</button><button class="btn ghost" id="payReturn" type="button">Send it back</button>' : ''}
+        \${isPrep && st==='approved' ? '<button class="btn" id="payInit" type="button">Mark it paid</button><span style="color:var(--good);font-size:13px">Approved by '+esc(HERE&&HERE.approver||'the owner')+' &mdash; AED '+money(staffNet,2)+'</span>' : ''}
+        \${isPrep && st==='initiated' ? '<button class="btn" id="payClose" type="button">Close the month and release payslips</button><span style="color:var(--warn);font-size:13px">Paid. Closing publishes '+staff.length+' payslips to staff.</span>' : ''}
+        \${!isPrep && ['approved','initiated'].includes(st) ? '<span style="color:var(--ink3);font-size:12.5px">With Avin &mdash; '+(st==='initiated'?'paid, not yet closed':'not yet paid')+'.</span>' : ''}
+        \${st==='closed' ? \`\${isPrep?\`<button class="btn" id="payNext" type="button">Start the \${esc(NEXTRUN.label)} run</button><button class="btn ghost" id="paySlips" type="button">Payslips</button>\`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED \${money(staffNet,2)}, and \${staff.length} payslips released to staff</span>\` : ''}`,
+  'the buttons of the five acts');
+
+/* The run selector does not belong on this panel.
+ *
+ * The mapper works out gross, deductions and net for the newest run only, so
+ * this screen can only ever describe that one — pressing an older month in the
+ * selector changed the pressed button and nothing else. Harmless while the
+ * buttons did nothing; not harmless now, because a button pressed while an
+ * older month looks selected would act on the newest one.
+ *
+ * So the panel names the month it is describing, plainly, and older months are
+ * read on Payslips, which does hold them.
+ */
+app = swap(app,
+`<h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
+      \${runSeg()}`,
+`<h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
+      <span class="pill mute" style="margin-left:14px">\${esc(HERE ? HERE.label : DATA.payroll.month)}</span>`,
+  'the approval panel names its own month');
+
+// A month that has gone out cannot be pulled back — that is the point of it
+// having gone out. What can be withdrawn is a submission nobody has yet
+// decided on, and only by the person who made it.
+app = swap(app,
+`        \${isPrep && st==='submitted' ? '<span style="color:var(--ink3);font-size:12.5px">With Miraziz. You will be notified when he approves.</span>' : ''}`,
+`        \${isPrep && st==='submitted' ? '<button class="btn ghost" id="payWithdraw" type="button">Withdraw it</button><span style="color:var(--ink3);font-size:12.5px">With Miraziz. Withdrawing puts it back to a draft you can edit.</span>' : ''}`,
+  'withdrawing a submission');
+
+// The reason a month came back belongs to the month, not to the screen.
+app = swap(app,
+`      \${st==='returned'?\`<div class="note" style="border-left-color:var(--bad);margin-top:16px"><b>Miraziz sent this back.</b> \${esc(state.payNote||'No note given.')}</div>\`:''}`,
+`      \${st==='returned'?\`<div class="note" style="border-left-color:var(--bad);margin-top:16px"><b>Sent back.</b> \${esc(RUNNOTE || 'No reason was given.')} &mdash; the month is editable again, and submitting it clears this.</div>\`:''}
+      \${isApprover && st==='submitted' && state.payAsk ? \`<div class="ciwarn" style="border-left-color:var(--bad)">
+        <b>What is wrong with it?</b>
+        <div class="ciwrow"><input id="payWhy" placeholder="so Avin knows what to fix" value="\${esc(state.payWhy||'')}">
+          <button class="btn" id="payWhyGo" type="button"\${(state.payWhy||'').trim()?'':' disabled'}>Send it back</button>
+          <button class="btn ghost" id="payWhyNo" type="button">Cancel</button></div></div>\`:''}`,
+  'the reason a month came back');
+
+app = swap(app,
+  `    on('payInit',()=>{state.payStatus='initiated';render();});`,
+  `    // Every one of these can be refused by the database. None of them assumes
+    // it worked: the panel re-reads the run afterwards either way.
+    const RUNKEY = () => DATA.payroll.monthKey;
+    const act = (id, fn) => { const b = document.getElementById(id); if(!b) return;
+      b.onclick = async () => { b.disabled = true; await fn(RUNKEY()); render(); }; };
+    act('payInit',     k => window.__db.payRun(k));`,
+  'payroll: mark it paid');
+app = swap(app,
+  `    on('payBack',()=>{state.payStatus='approved';render();});`,
+  `    act('payWithdraw', k => window.__db.unsubmitRun(k));`,
+  'payroll: withdraw a submission');
+app = swap(app,
+  `    on('payClose',()=>{state.payStatus='closed';render();});`,
+  `    act('payClose',    k => window.__db.closeRun(k));`,
+  'payroll: close the month');
+app = swap(app,
+  `    on('paySubmit',()=>{state.payStatus='submitted';state.payNote='';render();});`,
+  `    act('paySubmit',   k => window.__db.submitRun(k));`,
+  'payroll: submit');
+app = swap(app,
+  `    on('payApprove',()=>{state.payStatus='approved';render();});`,
+  `    act('payApprove',  k => window.__db.approveRun(k));`,
+  'payroll: approve');
+app = swap(app,
+`    on('payReturn',()=>{state.payStatus='returned';
+      state.payNote='Confirm the CorpLex–POA recharge before I approve.';render();});`,
+`    on('payReturn',()=>{ state.payAsk = true; render(); });
+    on('payWhyNo',()=>{ state.payAsk = false; state.payWhy = ''; render(); });
+    { const w = document.getElementById('payWhy');
+      if(w){ let tm; w.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(()=>{
+        state.payWhy = w.value; render();
+        const e2 = document.getElementById('payWhy');
+        if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+      }, 300); }; } }
+    { const g = document.getElementById('payWhyGo');
+      if(g) g.onclick = async ()=>{ g.disabled = true;
+        const r = await window.__db.returnRun(RUNKEY(), state.payWhy);
+        if(r){ state.payAsk = false; state.payWhy = ''; }
+        render(); }; }`,
+  'payroll: send it back, with a reason');
+app = swap(app,
+  `    on('payReset',()=>{state.payStatus=({closed:'initiated',initiated:'approved',approved:'submitted'})[state.payStatus]||'draft';state.payNote='';render();});`,
+  ``,
+  'payroll: the reopen button is gone');
+
+// advances and letters
+app = swap(app,
+  `    state.lnForm={amount:'',months:'',why:'',plan:''}; state.lnSent=true; render(); };`,
+  `    window.__db.newLoan(L[0]);
+    state.lnForm={amount:'',months:'',why:'',plan:''}; state.lnSent=true; render(); };`,
+  'ask for an advance');
+[['lnOk','loans','Approved','decideLoan'],['lnNo','loans','Declined','decideLoan'],
+ ['ltOk','letters','Issued','decideLetter'],['ltNo','letters','Declined','decideLetter']]
+.forEach(([ds, coll, st, fn]) => {
+  const prop = ds === 'lnOk' ? 'lnOk' : ds;
+  const re = new RegExp(`(const x=HR\\(\\)\\.${coll}\\.find\\(y=>y\\.id===b\\.dataset\\.${prop}\\); if\\(x\\)\\{x\\.status='${st}'; x\\.decided=HDATE\\(\\);)`);
+  const m = app.match(re);
+  if(!m) throw new Error('decision handler not found: ' + ds);
+  app = app.replace(re, `$1 window.__db.${fn}(x.id,'${st}');`);
+});
+
+// announcements
+app = swap(app,
+  `    HR().announcements.unshift({id:'AN-'+(HR().announcements.length+5), title:state.annT, body:state.annB,
+      by:state.user, date:HDATE(), pinned:false});`,
+  `    const ANN = {id:'AN-'+(HR().announcements.length+5), title:state.annT, body:state.annB,
+      by:state.user, date:HDATE(), pinned:false};
+    HR().announcements.unshift(ANN);
+    window.__db.postAnnouncement(ANN);`,
+  'post an announcement');
+
+
+/* ============================================================ attendance
+ *
+ * Four things, and one of them is a promise the portal has been making
+ * without keeping: the caption under My attendance says only you, your
+ * manager and accounts can see it. Until 0017 every signed-in person could
+ * read every attendance row. The evidence now lives in its own table with
+ * its own rules — this end just draws what arrives.
+ */
+
+// What the server can see of you. The browser cannot see its own public
+// address, so an unanswered question means "we do not know", never "you are
+// not in the office".
+app = swap(app,
+  `const tracksAtt = u => !(HR().noAttendance||[]).includes(u);`,
+  `const tracksAtt = u => !(HR().noAttendance||[]).includes(u);
+const WHERE = () => window.__WHERE || {};
+// A screen must never go blank because one settings block is missing. If an
+// older mapper is in the browser's cache these come back undefined, and a
+// thrown error looks exactly like a menu item that does nothing.
+const OFFICE = () => HR().office || {ips:[], geo:{}, set:false};
+const REG = () => HR().regular ||
+  {max:2, graceDays:5, rows:[], mine:[], left:2, from:'', used:{}};
+const officeRules = () => !!WHERE().rules_on;
+const onOfficeNet = () => WHERE().ip_ok === true;
+
+/* --- the nudge ---
+ * Fifteen minutes past your own shift with nothing recorded, and the app
+ * says so. Thirty, and it is your manager's to know. Weekends, public
+ * holidays and approved leave are quiet; a day working from home is not,
+ * because that day still wants a check-in.
+ */
+function nowMins(){ const d=new Date(); return d.getHours()*60 + d.getMinutes(); }
+function nudgeFor(u){
+  if(!tracksAtt(u) || !canCheckIn(u)) return null;
+  const d = HDATE(), st = dayStatus(u, d);
+  if(['Weekend','Holiday','Annual','Sick','Unpaid','Bereavement','Birthday',
+      'Maternity','Paternity','Hajj','Umrah'].includes(st.k)) return null;
+  const s = shiftOf(u), a = attOf(u, d), open = openSeg(u);
+  const late  = HR().nudgeMin ?? 15, shout = HR().escalateMin ?? 30;
+  const n = nowMins();
+  if(!a || !a.segs.length){
+    const over = n - (mins(s.start) + late);
+    if(over < 0) return null;
+    return {kind:'in', by: n - mins(s.start), escalated: n - mins(s.start) >= shout, shift:s};
+  }
+  if(open && n >= mins(s.end) + late)
+    return {kind:'out', by: n - mins(s.end), escalated:false, shift:s};
+  return null;
+}
+// Reports of mine who are past the shout line with nothing recorded. This is
+// the in-app half of the escalation; the email half needs a sender.
+function lateReports(u){
+  return reportsTo(u).filter(n => {
+    const g = nudgeFor(n); return g && g.kind === 'in' && g.escalated;
+  }).map(n => ({who:n, by: nudgeFor(n).by}));
+}
+function nudgeBanner(u){
+  const g = nudgeFor(u); if(!g) return '';
+  const mLabel = m => m >= 60 ? Math.floor(m/60)+'h '+String(m%60).padStart(2,'0')+'m' : m+' minutes';
+  return \`<div class="nudge\${g.escalated?' loud':''}">
+    <span class="ndot"></span>
+    <div><b>\${g.kind==='in'?'You have not checked in':'You are still checked in'}</b>
+      <span>\${g.kind==='in'
+        ? 'Your shift started at '+esc(g.shift.start)+', '+mLabel(g.by)+' ago.'
+          + (g.escalated ? ' Your manager can see this.' : '')
+        : 'Your shift ended at '+esc(g.shift.end)+', '+mLabel(g.by)+' ago. Check out to close the day.'}</span></div>
+  </div>\`;
+}`,
+  'the nudge, and what the server can see of you');
+
+// The pill was reading a flag nothing ever set, so it always said "on the
+// office network" — including from a sofa in Sharjah.
+app = app.split(`  const onNet = state.onOfficeNet !== false;`).join(`  const onNet = onOfficeNet();`);
+if(app.includes('state.onOfficeNet')) throw new Error('a check-in card still reads the flag nothing sets');
+console.log('office pill  both cards read the server, not a flag');
+
+app = swap(app,
+  `      <span class="pill \${onNet?'good':'mute'}">\${onNet?'<span class="dt"></span>On the office network':'Off the office network'}</span>`,
+  `      <span class="pill \${onNet?'good':'mute'}">\${!officeRules()?'Office network not set yet'
+        :onNet?'<span class="dt"></span>On the office network':'Off the office network'}</span>`,
+  'and says so plainly before the office is set');
+
+// Nothing is blocked. An office check-in the server cannot support is
+// recorded as off-site and asks for a line saying where you are.
+app = swap(app,
+  `            : \`<button class="btn" data-ci="Office" type="button"\${onNet?'':' disabled title="You are not on the office network"'}>Check in &mdash; office</button>`,
+  `            : \`<button class="btn" data-ci="Office" type="button">Check in &mdash; office</button>`,
+  'never leave somebody unable to start their day');
+
+// The same card, smaller, on Home.
+app = swap(app,
+  `              : \`<button class="btn wide" data-ci="Office" type="button"\${onNet?'':' disabled title="You are not on the office network"'}>Check in &mdash; office</button>
+                 <div class="cirow"><button class="btn ghost" data-ci="Client site" type="button">Off-site</button>
+                 <button class="btn ghost" data-ci="Home" type="button">Home</button></div>
+                 <span class="cihint">\${onNet?'You are on the office network.':'You are not on the office network — use off-site or home.'}</span>\`}`,
+  `              : \`<button class="btn wide" data-ci="Office" type="button">Check in &mdash; office</button>
+                 <div class="cirow"><button class="btn ghost" data-ci="Client site" type="button">Off-site</button>
+                 <button class="btn ghost" data-ci="Home" type="button">Home</button></div>
+                 <span class="cihint">\${!officeRules()?'The office network has not been set yet.':onNet?'You are on the office network.':'You are not on the office network \\u2014 an office check-in will be recorded as off-site.'}</span>\`}`,
+  'the same, on Home');
+
+app = swap(app,
+  `      <p class="note" style="margin-top:16px">An office check-in is accepted only on the office network and at the office location. Going straight to a client is fine &mdash; check in as <b>off-site</b>, then check out and check in again as <b>office</b> when you arrive. Every segment of the day is kept.</p>\`}`,
+  `      \${state.ciSaid ? \`<div class="ciwarn">
+        <b>Recorded as off-site.</b> We could not confirm you were at the office \\u2014
+        \${state.ciSaid.ip_ok===false?'you are not on the office network':'the office network did not answer'}\${
+          state.ciSaid.distance_m!=null?' and your phone put you '+money(state.ciSaid.distance_m,0)+'\\u2009m away':
+          ', and your device did not share where it is'}.
+        Say where you are and it goes on the record.
+        <div class="ciwrow"><input id="ciNote" type="text" maxlength="120"
+          placeholder="At the Al Barsha client, back after lunch" value="\${esc(state.ciNote||'')}">
+          <button class="btn" id="ciNoteGo" type="button">Save</button></div></div>\` : ''}
+      <p class="note" style="margin-top:16px">An office check-in is confirmed by the office network or by where your device says you are. Neither is a barrier: if we cannot confirm it the day is still recorded, as off-site, and you are asked where you were. Going straight to a client is fine &mdash; check in as <b>off-site</b>, then check out and check in again as <b>office</b> when you arrive. Every segment of the day is kept.</p>\`}`,
+  'say what was recorded, and let the person explain it');
+
+// The nudge, above everything, on My attendance and on Home.
+app = swap(app,
+  `  return \`
+  <div class="strip">
+    <div class="stat"><span class="k">Today &middot; \${esc(dayName(today))} \${esc(dayLabel(today))}</span>`,
+  `  return \`
+  \${nudgeBanner(u)}
+  <div class="strip">
+    <div class="stat"><span class="k">Today &middot; \${esc(dayName(today))} \${esc(dayLabel(today))}</span>`,
+  'the nudge and the way to fix a missed day, on My attendance');
+
+// Where each segment came from, for the person it belongs to.
+// Fixing a past day belongs under today's, not above it.
+app = swap(app,
+  `  <section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>\${esc(MONTHNAME[+ym.slice(5)-1])} \${ym.slice(0,4)}</h3>`,
+  `  \${regularPanel(u)}
+
+  <section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>\${esc(MONTHNAME[+ym.slice(5)-1])} \${ym.slice(0,4)}</h3>`,
+  'fixing a missed day sits under today');
+
+app = swap(app,
+  `  const segRow = g => \`<tr><td class="n">\${esc(g.in)}</td><td class="n">\${g.out?esc(g.out):'<span class="pill warn"><span class="dt"></span>open</span>'}</td>
+    <td>\${esc(g.loc)}</td><td class="n r">\${g.out?hhmm(mins(g.out)-mins(g.in)):'—'}</td>
+    <td style="color:var(--ink2);font-size:12.5px">\${esc(g.note||'')}</td></tr>\`;`,
+  `  const segRow = g => \`<tr><td class="n">\${esc(g.in)}</td><td class="n">\${g.out?esc(g.out):'<span class="pill warn"><span class="dt"></span>open</span>'}</td>
+    <td>\${esc(g.loc)}\${whereMark(g)}</td><td class="n r">\${g.out?hhmm(mins(g.out)-mins(g.in)):'—'}</td>
+    <td style="color:var(--ink2);font-size:12.5px">\${esc(g.note||'')}</td></tr>\`;`,
+  'show where a segment came from');
+
+
+/* ---------------- the new attendance screens ---------------- */
+// Appended rather than woven in: these are whole screens, and a screen is
+// easier to read as itself than as forty anchored edits.
+app += `
+
+/* Where a segment came from, marked only for the people the database lets
+ * see it. A colleague gets no evidence at all, so there is nothing to mark. */
+function whereMark(g){
+  if(!g.where) return '';
+  const w = g.where, bits = [];
+  if(w.ip)   bits.push('from ' + w.ip);
+  if(w.away != null) bits.push(w.away + ' m from the office' + (w.acc ? ' (\\u00b1' + w.acc + ' m)' : ''));
+  if(!bits.length) return '';
+  const t = esc(bits.join(' \\u00b7 '));
+  return g.where.flagged
+    ? \`<span class="wmark bad" title="\${t}">could not confirm</span>\`
+    : \`<span class="wmark" title="\${t}">\${w.ipOk ? 'office network' : (w.away != null ? 'at the office' : '')}</span>\`;
+}
+
+/* --- fixing a day you missed --- */
+function regularDays(u){
+  // Days this month, and the tail of last month while it is still open, with
+  // something missing. A weekend or a holiday has nothing to miss.
+  const R = REG(), out = [], today = HDATE();
+  const from = R.from || today.slice(0,8) + '01';
+  const filed = new Set(R.mine.filter(r => ['Pending','Approved'].includes(r.status)).map(r => r.d));
+  for(let d = new Date(from + 'T00:00:00Z'); ; d.setUTCDate(d.getUTCDate() + 1)){
+    const ds = d.toISOString().slice(0,10);
+    if(ds > today) break;
+    const st = dayStatus(u, ds);
+    if(['Weekend','Holiday','Annual','Sick','Unpaid','Bereavement','Birthday',
+        'Maternity','Paternity','Hajj','Umrah'].includes(st.k)) continue;
+    if(filed.has(ds)) continue;
+    const a = attOf(u, ds);
+    if(!a || !a.segs.length){ out.push({d: ds, what: 'nothing recorded'}); continue; }
+    const last = a.segs[a.segs.length - 1];
+    if(!last.out && ds < today) out.push({d: ds, what: 'no check-out'});
+  }
+  return out.reverse();
+}
+
+function regularPanel(u){
+  const R = REG(), missing = regularDays(u), mine = R.mine;
+  if(!missing.length && !mine.length) return '';
+  const f = state.rgForm || (state.rgForm = {d:'', in:'', out:'', reason:''});
+  const none = R.left <= 0;
+  const pickable = missing.slice(0, 40);
+  const ok = f.d && f.reason.trim().length > 3 && (f.in || f.out) && !none;
+  return \`
+  <section class="panel">
+    <header><h3>Fix a day you missed</h3>
+      <span class="pill \${none?'mute':'good'}">\${none?'none left this month':R.left + ' of ' + R.max + ' left this month'}</span>
+      <span class="hint" style="margin-left:auto">decided by \${esc(NM(adminName()) || 'accounts')}</span></header>
+    <div class="pad">
+      \${missing.length ? \`
+      <div class="rgform">
+        <label><span>Which day</span>
+          <select id="rgDay">
+            <option value="">Choose a day\\u2026</option>
+            \${pickable.map(m => \`<option value="\${m.d}"\${f.d===m.d?' selected':''}>\${esc(dayName(m.d))} \${esc(dayLabel(m.d))} \\u2014 \${esc(m.what)}</option>\`).join('')}
+          </select></label>
+        <label><span>Checked in at</span><input id="rgIn" type="time" value="\${esc(f.in)}"></label>
+        <label><span>Checked out at</span><input id="rgOut" type="time" value="\${esc(f.out)}"></label>
+        <label class="wide"><span>What happened</span>
+          <input id="rgWhy" type="text" maxlength="160" value="\${esc(f.reason)}"
+            placeholder="Went straight to the client in Deira and forgot to tap in"></label>
+      </div>
+      <button class="btn" id="rgGo" type="button"\${ok?'':' disabled'}>Send to \${esc((adminName()||'accounts').split(' ')[0])}</button>
+      \${none ? '<p class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Both of this month\\u2019s are used.</b> A declined request costs nothing, so this is two that were approved. The allowance comes back on the 1st.</p>' : ''}
+      \${state.rgSent ? '<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Sent.</b> Accounts has it, and you will see the answer here.</div>' : ''}
+      \` : '<p style="margin:0;color:var(--ink2)">Nothing is missing. Every working day this month has a check-in and a check-out.</p>'}
+    </div>
+    \${mine.length ? \`<div class="tw"><table>
+      <thead><tr><th>Ref</th><th>Day</th><th class="n">In</th><th class="n">Out</th><th>Why</th><th>State</th><th></th></tr></thead>
+      <tbody>\${mine.map(r => \`<tr>
+        <td class="n">\${esc(r.id)}</td>
+        <td class="nw">\${esc(dayName(r.d))} \${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">\${esc(r.reason)}\${r.note?' \\u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:\${RGCOL(r.status)}">\${esc(r.status)}</span></td>
+        <td>\${r.status==='Pending'?\`<button class="btn ghost sm" data-rgdrop="\${esc(r.uid)}" type="button">Withdraw</button>\`:''}</td>
+      </tr>\`).join('')}</tbody></table></div>\` : ''}
+  </section>\`;
+}
+// A function, not a const: this block is appended after the app has already
+// started drawing, and a const would not be initialised in time.
+function RGCOL(s){ return {Pending:'var(--warn)', Approved:'var(--good)',
+  Declined:'var(--bad)', Withdrawn:'var(--ink3)'}[s] || 'var(--line)'; }
+function adminName(){
+  const R = DATA._roles || {};
+  return Object.keys(R).find(n => (R[n]||[]).includes('accounts')) || '';
+}
+
+/* --- the console: every request, and who is at their limit --- */
+function vRegular(){
+  /* Both tables on this page carry the same first six columns — ref, who,
+     day, in, out, why — and they sit one above the other. Reading down the
+     page means reading down a column, so they are laid out from one set of
+     widths rather than each finding its own. */
+  const REGCOLS = colsOf([8, 18, 12, 8, 8, 25, 11, 10]);
+  const R = REG();
+  const rows = R.rows, pend = rows.filter(r => r.status === 'Pending');
+  const month = HDATE().slice(0,7);
+  const approvedThis = rows.filter(r => r.status === 'Approved' && r.d.slice(0,7) === month);
+  const atLimit = Object.entries(R.used || {})
+    .filter(([k, n]) => k.endsWith('|' + month) && n >= R.max)
+    .map(([k]) => k.split('|')[0]);
+  const late = USERS.map(x => x.name).filter(tracksAtt)
+    .filter(n => { const g = nudgeFor(n); return g && g.escalated; });
+
+  return \`
+  <div class="strip">
+    <div class="stat"><span class="k">Waiting for you</span>
+      <span class="v" style="color:var(--\${pend.length?'warn':'good'})">\${pend.length}</span>
+      <span class="n">\${pend.length?'to approve or decline':'nothing outstanding'}</span></div>
+    <div class="stat"><span class="k">Approved this month</span><span class="v">\${approvedThis.length}</span>
+      <span class="n">\${MONTHNAME[+month.slice(5)-1]} \${month.slice(0,4)}</span></div>
+    <div class="stat"><span class="k">At their limit</span>
+      <span class="v" style="color:var(--\${atLimit.length?'warn':'ink'})">\${atLimit.length}</span>
+      <span class="n">\${atLimit.length?esc(atLimit.map(NM).join(', ')):'nobody has used both'}</span></div>
+    <div class="stat"><span class="k">Not checked in today</span>
+      <span class="v" style="color:var(--\${late.length?'bad':'good'})">\${late.length}</span>
+      <span class="n">\${late.length?'past '+(HR().escalateMin??30)+' minutes':'everybody is in or accounted for'}</span></div>
+  </div>
+
+  \${pend.length ? \`<section class="panel">
+    <header><h3>Waiting for a decision</h3><span class="hint">only you can decide these</span></header>
+    <div class="tw"><table>
+      \${REGCOLS}
+      <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th class="n r">Left</th><th></th></tr></thead>
+      <tbody>\${pend.map(r => {
+        const left = Math.max(0, R.max - (R.used[r.who + '|' + r.d.slice(0,7)] || 0));
+        return \`<tr>
+        <td class="n">\${esc(r.id)}</td><td class="nw">\${esc(NM(r.who))}</td>
+        <td class="nw">\${esc(dayName(r.d))} \${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">\${esc(r.reason)}</td>
+        <td class="n r"\${left?'':' style="color:var(--bad)"'}>\${left} of \${R.max}</td>
+        <td class="nw"><button class="btn sm" data-rgok="\${esc(r.uid)}" type="button"\${left?'':' disabled title="both are used"'}>Approve</button>
+          <button class="btn ghost sm" data-rgno="\${esc(r.uid)}" type="button">Decline</button></td></tr>\`;}).join('')}
+      </tbody></table></div>
+    <p class="cap">Approving writes the times onto that day\\u2019s attendance and marks it as regularized, so the working-days figure that payroll sees moves with it.</p>
+  </section>\` : ''}
+
+  \${late.length ? \`<section class="panel">
+    <header><h3>Not checked in today</h3><span class="hint">more than \${HR().escalateMin??30} minutes past their shift</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Who</th><th>Shift</th><th>Manager</th><th class="r">Late by</th></tr></thead>
+      <tbody>\${late.map(n => { const g = nudgeFor(n); return \`<tr>
+        <td class="nw">\${esc(NM(n))}</td><td class="n">\${esc(shiftOf(n).start)}</td>
+        <td class="nw">\${esc(NM(mgrName(n)) || '\\u2014')}</td>
+        <td class="n r">\${g.by} min</td></tr>\`;}).join('')}
+      </tbody></table></div>
+  </section>\` : ''}
+
+  <section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Every request</h3><span class="hint">\${rows.length} in all</span></header>
+    <div class="tw"><table class="invtable">
+      <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th>State</th><th>Decided</th></tr></thead>
+      <tbody>\${rows.length ? rows.map(r => \`<tr>
+        <td class="n">\${esc(r.id)}</td><td class="nw">\${esc(NM(r.who))}</td>
+        <td class="nw">\${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">\${esc(r.reason)}\${r.note?' \\u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:\${RGCOL(r.status)}">\${esc(r.status)}</span></td>
+        <td class="n">\${esc(r.decided)?esc(dayLabel(r.decided)):'\\u2014'}</td></tr>\`).join('')
+        : '<tr><td colspan="8" style="color:var(--ink3)">Nobody has asked to fix a day yet.</td></tr>'}
+      </tbody></table></div>
+    <p class="cap">Two approved a month each, counted by the database rather than by this screen \\u2014 a limit only the screen keeps is not a limit. A declined request costs nobody anything.</p>
+  </section>\`;
+}
+`;
+
+
+
+// The nudge on Home too, since Home is where people land. And, for anyone with
+// reports, the half of the escalation that does not need an email sender.
+app = swap(app,
+  `  return \`
+  \${celebStrip}
+  <section class="panel hhero\${MOBILE()?' slim':' withme'}">`,
+  `  return \`
+  \${nudgeBanner(u)}
+  \${(() => { const late = lateReports(u);
+    if(!late.length) return '';
+    return \`<div class="nudge loud"><span class="ndot"></span>
+      <div><b>\${late.length === 1 ? esc(NM(late[0].who)) + ' has not checked in'
+                                  : late.length + ' of your team have not checked in'}</b>
+      <span>\${esc(late.map(l => NM(l.who) + ' (' + l.by + ' minutes past)').join(', '))}. They have been told.</span></div></div>\`;
+  })()}
+  \${celebStrip}
+  <section class="panel hhero\${MOBILE()?' slim':' withme'}">`,
+  'the nudge, and late reports, on Home');
+
+
+/* --------------------------------- gratuity: why a provision was released ---
+ * Seba Bahmad Alhalabi left seven days short of a year, so no gratuity was
+ * payable and her provision was written back. The screen showed released
+ * 2,688, paid 0, difference (2,688) in a warning colour — which reads as money
+ * still owed rather than as a release. A leaver who was under a year and one
+ * who has not been paid yet are very different things and should not look the
+ * same.
+ */
+app = swap(app,
+  `      <thead><tr><th>Who</th><th>Company</th><th>Last day</th><th class="r">Provision released</th><th class="r">Paid</th><th class="r">Difference</th></tr></thead>
+      <tbody>\${released.map(x=>\`<tr><td class="nw">\${nm(x.r.n)}</td><td class="nw">\${esc(x.r.co==='Lex'?'Lex Estates':x.r.co)}</td>
+        <td class="n nw">\${esc(dayLabel(x.r.left))} \${x.r.left.slice(0,4)}</td>
+        <td class="n r">\${money(x.was.v,0)}</td><td class="n r">\${money(x.r.paid||0,0)}</td>
+        <td class="n r"\${Math.abs((x.r.paid||0)-x.was.v)>1?' style="color:var(--warn)"':''}>\${money((x.r.paid||0)-x.was.v,0)}</td></tr>\`).join('')}`,
+  `      <thead><tr><th>Who</th><th>Company</th><th>Last day</th><th class="r">Provision released</th><th class="r">Paid</th><th class="r">Over/(under)</th><th>Why</th></tr></thead>
+      <tbody>\${released.map(x=>{
+        const served = Math.round((new Date(x.r.left) - new Date(x.r.doj))/86400000);
+        const short = served < 365 && !(x.r.paid > 0);
+        const d = (x.r.paid||0) - x.was.v;
+        return \`<tr><td class="nw">\${nm(x.r.n)}</td><td class="nw">\${esc(x.r.co==='Lex'?'Lex Estates':x.r.co)}</td>
+        <td class="n nw">\${esc(dayLabel(x.r.left))} \${x.r.left.slice(0,4)}</td>
+        <td class="n r">\${money(x.was.v,0)}</td><td class="n r">\${short?'—':money(x.r.paid||0,0)}</td>
+        <td class="n r"\${short?' style="color:var(--good)"':(Math.abs(d)>1?' style="color:var(--warn)"':'')}>\${short?'('+money(x.was.v,0)+')':money(d,0)}</td>
+        <td class="gnote">\${short
+          ? '<span class="pill mute">'+served+' days &mdash; under a year, none payable</span>'
+          : !x.r.paid ? '<span class="pill warn"><span class="dt"></span>nothing recorded as paid</span>'
+          : !x.r.paidOn ? ''
+          : (() => {
+              // Paid on the last day and released the month after is the normal
+              // shape of things; only a real gap is worth flagging.
+              const gap = (+ym.slice(0,4)*12 + +ym.slice(5,7)) -
+                          (+x.r.paidOn.slice(0,4)*12 + +x.r.paidOn.slice(5,7));
+              return Math.abs(gap) <= 1
+                ? '<span class="pill good"><span class="dt"></span>paid '+esc(dayLabel(x.r.paidOn))+'</span>'
+                : '<span class="pill warn"><span class="dt"></span>cash paid '+esc(dayLabel(x.r.paidOn))+' '+x.r.paidOn.slice(0,4)+'</span>';
+            })()}</td></tr>\`;}).join('')}`,
+  'a release under a year is a write-back, not an unpaid debt');
+
+app = swap(app,
+  `    <p class="cap">A difference here is an over or under provision, and goes through the P&amp;L in the month the person is paid.</p>`,
+  `    <p class="cap">A difference here is an over or under provision, and goes through the P&amp;L in the month the person is paid. Somebody who leaves before completing a year is owed nothing under the law, so their whole provision is written back &mdash; that is a credit, not a debt. Where the cash left in a different month from the release, the date it actually went out is shown.</p>`,
+  'and say so');
+
+// How much of the provision belongs to people who have not been a year yet —
+// the part that would be written back rather than paid if they left.
+app = swap(app,
+  `    <p class="cap">Straight from your workbook and recalculated here, not copied`,
+  `    \${(() => {
+      const young = all.flat().filter(x => !x.r.left && x.now.days && x.now.days < 365);
+      if(!young.length) return '';
+      const v = young.reduce((s,x) => s + x.now.v, 0);
+      return \`<p class="cap" style="border-left:2px solid var(--line2);padding-left:12px">
+        <b>\${money(v,0)} of this is held for \${young.length} \${young.length===1?'person':'people'} who
+        \${young.length===1?'has':'have'} not completed a year</b> &mdash;
+        \${esc(young.sort((a,b)=>b.now.days-a.now.days).map(x=>nm(x.r.n)+' ('+Math.round(365-x.now.days)+'d)').join(', '))}.
+        Nothing is payable to them until they do, so it is provided against the likelihood they stay,
+        and written back if they do not.</p>\`;
+    })()}
+    <p class="cap">Straight from your workbook and recalculated here, not copied`,
+  'name the provision that is not yet payable');
+
+
+/* ------------------------------- gratuity: who carries the liability -------
+ * The POA table splits by visa entity, and that was read off the payroll
+ * file's free-text Visa column. Three things wrong with that: it says "Other
+ * company" for Abdullokh Fozilov although POA pays his gratuity; it says
+ * nothing at all for anyone who has left, so Mahek Pardeshi read as "visa
+ * entity not recorded" when her visa was POA throughout; and the staff list
+ * held the right answer all along. The gratuity row carries it now, so it
+ * survives somebody leaving.
+ */
+app = swap(app,
+  `  const gVisa = n => { const v = ((payrollRowFor(n)||{}).visa || '').trim();
+    if(!v) return ''; if(/^CorpLex/.test(v)) return 'CorpLex';
+    if(v==='POA') return 'POA'; if(v==='Lex') return 'Lex'; return 'Other'; };`,
+  `  const CoLabel = {corplex:'CorpLex', poa:'POA', lex:'Lex'};
+  const gVisa = r => {
+    if(r && r.visa) return CoLabel[r.visa] || 'Other';
+    const v = ((payrollRowFor(r && r.n)||{}).visa || '').trim();
+    if(!v) return ''; if(/^CorpLex/.test(v)) return 'CorpLex';
+    if(v==='POA') return 'POA'; if(v==='Lex') return 'Lex'; return 'Other'; };`,
+  'the liable entity comes from the record, not the payroll file');
+
+app = swap(app,
+  `      return {r, now, was, move: now.v - was.v, visa: gVisa(r.n)}; })`,
+  `      return {r, now, was, move: now.v - was.v, visa: gVisa(r)}; })`,
+  'and is asked for by the row');
+
+
+/* ------------------------------ gratuity: one row, movement by company -----
+ * Five tiles in a four-column grid left one stranded on a second row, which
+ * is the gap Avin could see. Four tiles fit, and each company can carry its
+ * own movement rather than the movement being a single number for the group —
+ * which is more use anyway, since the three provisions are three different
+ * liabilities.
+ */
+app = swap(app,
+  `  <div class="strip">
+    <div class="stat"><span class="k">Provision at \${esc(dayLabel(me))} \${me.slice(0,4)}</span>
+      <span class="v"><span class="cur">AED</span>\${money(tot,0)}</span>
+      <span class="n">\${all.flat().filter(x=>x.now.v>0).length} people across the three companies</span></div>
+    <div class="stat"><span class="k">Movement in the month</span>
+      <span class="v" style="color:var(--\${mv>=0?'warn':'good'})"><span class="cur">AED</span>\${mv>=0?'':'('}\${money(Math.abs(mv),0)}\${mv>=0?'':')'}</span>
+      <span class="n">\${mv>=0?'charge to the P&amp;L':'net release'}</span></div>
+    \${cos.map((c,i)=>\`<div class="stat"><span class="k">\${esc(c==='Lex'?'Lex Estates':c)}</span>
+      <span class="v"><span class="cur">AED</span>\${money(all[i].reduce((s,x)=>s+x.now.v,0),0)}</span>
+      <span class="n">\${all[i].filter(x=>x.now.v>0).length} \${all[i].filter(x=>x.now.v>0).length===1?'person':'people'}</span></div>\`).join('')}
+  </div>`,
+  `  \${(() => {
+    // provision above, this month's movement below it, for the group and for
+    // each company — the same shape four times over
+    const tile = (label, sub, value, move, heads) => \`
+      <div class="stat"><span class="k">\${esc(label)}\${sub?' <i>'+esc(sub)+'</i>':''}</span>
+        <span class="v"><span class="cur">AED</span>\${money(value,0)}</span>
+        <span class="n">\${move
+          ? '<b style="color:var(--'+(move>=0?'warn':'good')+')">'
+            + (move>=0?'+':'(') + money(Math.abs(move),0) + (move>=0?'':')')
+            + '</b> ' + (move>=0?'charged':'released')
+          : '<span style="color:var(--ink3)">no movement</span>'}
+          &middot; \${heads} \${heads===1?'person':'people'}</span></div>\`;
+    return \`<div class="strip tight">
+      \${tile('All three companies', esc(dayLabel(me)) + ' ' + me.slice(0,4),
+             tot, mv, all.flat().filter(x=>x.now.v>0).length)}
+      \${cos.map((c,i)=>tile(c==='Lex'?'Lex Estates':c, '',
+             all[i].reduce((s,x)=>s+x.now.v,0),
+             all[i].reduce((s,x)=>s+x.move,0),
+             all[i].filter(x=>x.now.v>0).length)).join('')}
+    </div>\`;
+  })()}`,
+  'gratuity: four tiles in one row, each with its own movement');
+
+shell = swap(shell, '</style>', `
+  /* Four numbers that belong together read better close than spread out. */
+  .strip.tight .stat{padding:12px 15px;gap:3px}
+  .strip.tight .stat .v{font-size:22px}
+  .strip.tight .stat .k i{font-style:normal;color:var(--ink3);opacity:.75;
+    letter-spacing:.04em;margin-left:5px}
+  .strip.tight .stat .n b{font-weight:600;font-variant-numeric:tabular-nums}
+  @media(max-width:840px){ .strip.tight .stat .v{font-size:20px} }
+</style>`, 'the gratuity strip, tighter');
+
+
+/* -------------------------------- payroll: find a person by either name ----
+ * The payroll file carries legal names — Rana Mohsen Amine, Shamsiddin
+ * Khasanovich Kadirov, Zhavokhirbek Khasanbaev — and the staff list carries
+ * the names everybody actually uses. payrollRowFor tried the exact name, then
+ * an alias map built from the air ticket register, then a fuzzy word match,
+ * and all three of those people fell through every one of them: they were on
+ * the August run and simply did not appear on the register.
+ *
+ * The mapper has been putting the portal name on every line all along. Ask for
+ * it first.
+ */
+app = swap(app,
+  `  const rows = DATA.payroll.rows.filter(r=>!r.dummy);
+  let hit = rows.find(r=>r.name===user);
+  if(hit) return hit;`,
+  `  const rows = DATA.payroll.rows.filter(r=>!r.dummy);
+  let hit = rows.find(r=>r.name===user) || rows.find(r=>r.portalName===user);
+  if(hit) return hit;`,
+  'payroll: match the everyday name as well as the legal one');
+
+
+/* ========================================================= preparing a month
+ *
+ * The September screen was a mock-up: an Upload button that moved a counter,
+ * and a hand-written list of things to remember. This is the real one. The
+ * database builds the lines from the salary records, the attendance and the
+ * air ticket tracker; what is left is the handful of figures only Avin knows,
+ * typed straight onto the register.
+ *
+ * Every figure saves as it is typed and the net comes back from the database,
+ * so what is on screen is what is stored rather than a second opinion about it.
+ */
+app += `
+
+const PAYRUNS = () => (DATA.payroll.runs || []);
+const runOf = key => PAYRUNS().find(r => r.key === key) || null;
+const draftRun = () => PAYRUNS().find(r => r.status === 'draft') || null;
+// the month before the one being looked at, for comparison
+const priorRun = key => {
+  const all = PAYRUNS().filter(r => r.key < key).sort((a,b) => a.key < b.key ? 1 : -1);
+  return all[0] || null;
+};
+const MKEY = k => { const [y,m] = k.split('-'); return MONTHNAME[+m-1] + ' ' + y; };
+
+// the columns you can type into, in the order they appear on the register
+// rule: true marks where one kind of column stops and the next begins —
+// after the days, after the earnings, after the deductions.
+const PAYCOLS = [
+  {k:'days',   f:'days',       label:'Days',       rule:true},
+  {k:'claims', f:'claims',     label:'Claims'},
+  {k:'air',    f:'air_ticket', label:'Air ticket', auto:true},
+  {k:'inc',    f:'incentive',  label:'Incentive'},
+  {k:'comm',   f:'commission', label:'Commission'},
+  {k:'ref',    f:'referral',   label:'Referral'},
+  {k:'other',  f:'other_add',  label:'Other',      rule:true},
+  {k:'adv',    f:'advance',    label:'Advance'},
+  {k:'don',    f:'donation',   label:'Donation'},
+  {k:'ins',    f:'insurance',  label:'Insurance'},
+  {k:'mob',    f:'mobile',     label:'Mobile'},
+  {k:'oth',    f:'other_ded',  label:'Other ded.', rule:true}
+];
+// Employee, company, then fourteen money columns all the same width.
+const PAYGROUP = () => '<colgroup><col style="width:15%"><col style="width:6%">'
+  + Array(PAYCOLS.length + 2).fill('<col style="width:5.65%">').join('') + '</colgroup>';
+
+/* --- what moved since last month, and why ---
+ * This is what replaces the spreadsheet as the second pair of eyes. A figure
+ * that moved for a reason is fine; a figure that moved for no reason is the
+ * thing to look at. */
+function payVariance(run){
+  const prev = priorRun(run.key);
+  if(!prev) return null;
+  // A person, not a line. Somebody who changes company mid-year — Fakhridin
+  // Kochkorov moving from POA to Lex — would otherwise read as one person
+  // leaving and a different one arriving, and Miraziz's two lines are one
+  // person's pay. The invented rows are not part of the comparison at all.
+  const fold = list => {
+    const by = {};
+    list.filter(r => !r.dummy).forEach(r => {
+      const k = r.portalName;
+      const a = by[k] || (by[k] = {portalName:k, company:r.company, companies:[],
+        days:r.days, salary:0, air:0, comm:0, claims:0, inc:0, ref:0, other:0,
+        gross:0, ded:0, net:0});
+      ['salary','air','comm','claims','inc','ref','other','gross','ded','net']
+        .forEach(f => { a[f] += (+r[f] || 0); });
+      if(!a.companies.includes(r.company)) a.companies.push(r.company);
+      // sorted, or Miraziz reads as moving from 'CorpLex + POA' to
+      // 'POA + CorpLex' every month depending on the order the rows arrived in
+      a.company = a.companies.slice().sort().join(' + ');
+    });
+    return by;
+  };
+  const was = fold(prev.rows), now = fold(run.rows);
+  const seen = {};
+  const out = [];
+  Object.values(now).forEach(r => {
+    const k = r.portalName;
+    seen[k] = true;
+    const p = was[k];
+    if(!p){ out.push({r, kind:'new', by: r.net, why:['a joiner \u2014 not on ' + MKEY(prev.key)]}); return; }
+    const by = Math.round((r.net - p.net) * 100) / 100;
+    if(!by && p.company === r.company) return;
+    const why = [];
+    if(p.company !== r.company) why.push('moved from ' + p.company + ' to ' + r.company);
+    if(r.salary !== p.salary){
+      why.push(r.days !== p.days
+        ? r.days + ' days rather than ' + p.days
+        : 'salary ' + money(p.salary,0) + ' \\u2192 ' + money(r.salary,0));
+    }
+    if(r.air !== p.air)   why.push(r.air ? 'air ticket due' : 'no air ticket this month');
+    if(r.comm !== p.comm) why.push('commission ' + money(p.comm,0) + ' \\u2192 ' + money(r.comm,0));
+    if(r.claims !== p.claims) why.push('claims changed');
+    if(r.inc !== p.inc)   why.push('incentive changed');
+    if(r.ref !== p.ref)   why.push('referral changed');
+    if(r.other !== p.other) why.push('other earnings changed');
+    if(r.ded !== p.ded)   why.push('deductions ' + money(p.ded,0) + ' \\u2192 ' + money(r.ded,0));
+    out.push({r, kind:'moved', by, why});
+  });
+  Object.values(was).forEach(r => {
+    if(!seen[r.portalName])
+      out.push({r, kind:'gone', by: -r.net,
+                why:['on ' + MKEY(prev.key) + ', not on this one \u2014 a leaver, or off payroll']});
+  });
+  out.sort((a,b) => Math.abs(b.by) - Math.abs(a.by));
+  return {prev, rows: out,
+          prevNet: Object.values(was).reduce((s,r) => s + r.net, 0),
+          unexplained: out.filter(x => x.kind === 'moved' && !x.why.length)};
+}
+
+function vPayrollDraft(run){
+  const P = DATA.payroll, T = DATA.tickets;
+  const prep = canUpload(state.user);
+  const byNo = (a,b) => (a.staffNo || 'ZZ').localeCompare(b.staffNo || 'ZZ')
+                     || a.company.localeCompare(b.company);
+  const rows  = run.rows.filter(r => !r.dummy).sort(byNo);
+  // Payments that leave the account without being a staff cost. Avin types
+  // their figures like anybody else's; they simply sit under their own heading
+  // and outside the staff total, which is the only thing that makes them
+  // different.
+  const extra = run.rows.filter(r => r.dummy).sort(byNo);
+  const COS = ['CorpLex','POA','Lex'];
+  const coLabel = c => c === 'Lex' ? 'Lex Estates' : c;
+  const tot = f => rows.reduce((s,r) => s + (+r[f] || 0), 0);
+  const V = payVariance(run);
+  const dueNow = rows.filter(r => r.air > 0);
+  const noSalary = rows.filter(r => !r.salary && !r.comm && !r.claims);
+
+  const cell = (r, c) => {
+    const v = +r[c.k] || 0;
+    if(!prep) return \`<td class="n r\${c.rule?' rule':''}">\${v?money(v,2):'\\u2014'}</td>\`;
+    return \`<td class="n r payc\${c.rule?' rule':''}"><input class="payin\${v?' has':''}" type="number" step="0.01" min="0"
+      value="\${v||''}" placeholder="\\u2014"
+      data-line="\${esc(r.lineId)}" data-field="\${c.f}" data-k="\${c.k}"
+      aria-label="\${esc(c.label)} for \${esc(r.portalName)}">\${
+      // On the days column, what check-in made of the month sits under the
+      // box. A missed tap is not an absence — that is what regularization is
+      // for — so it is a second opinion to accept or ignore, never the figure
+      // being paid.
+      c.k === 'days' && r.daysAtt !== null && r.daysAtt !== undefined
+        && Math.abs(r.daysAtt - v) > 0.001
+        ? \`<button class="attday" type="button" data-att="\${esc(r.lineId)}" data-attv="\${r.daysAtt}"
+             title="Check-in recorded \${r.daysAtt} days. Click to use it.">check-in \${money(r.daysAtt,0)}</button>\`
+        : ''}</td>\`;
+  };
+  const attDiff = rows.filter(r => r.daysAtt !== null && r.daysAtt !== undefined
+    && Math.abs(r.daysAtt - r.days) > 0.001);
+  const attNone = rows.filter(r => r.daysAtt === null || r.daysAtt === undefined);
+
+  return \`
+  <div class="strip tight">
+    <div class="stat"><span class="k">\${esc(run.label)} <i>draft</i></span>
+      <span class="v"><span class="cur">AED</span>\${money(tot('net'),2)}</span>
+      <span class="n">\${rows.length} people \\u00b7 nothing paid yet</span></div>
+    <div class="stat"><span class="k">Earnings</span>
+      <span class="v"><span class="cur">AED</span>\${money(tot('gross'),0)}</span>
+      <span class="n">salary \${money(tot('salary'),0)}\${
+        tot('gross')-tot('salary') ? ' \\u00b7 added ' + money(tot('gross')-tot('salary'),0) : ''}\${
+        dueNow.length ? ' \\u00b7 ' + dueNow.length + ' air ticket' + (dueNow.length===1?'':'s') : ''}</span></div>
+    <div class="stat"><span class="k">Deductions</span>
+      <span class="v" style="color:var(--\${tot('ded')?'warn':'ink'})"><span class="cur">AED</span>\${money(tot('ded'),0)}</span>
+      <span class="n">\${(() => { const n = rows.filter(r=>r.ded).length;
+        return n === 0 ? 'nobody has one' : n === 1 ? 'one person' : n + ' people'; })()}</span></div>
+    <div class="stat"><span class="k">Check-in disagrees</span>
+      <span class="v" style="color:var(--\${attDiff.length?'warn':'good'})">\${attDiff.length}</span>
+      <span class="n">\${attDiff.length
+        ? esc(attDiff.slice(0,3).map(r=>nm(r.portalName)+' '+money(r.daysAtt,0)+'d').join(', '))
+          + (attDiff.length>3 ? ' and ' + (attDiff.length-3) + ' more' : '')
+        : 'the days being paid match the records'}</span></div>
+  </div>
+
+  <section class="panel">
+    <header><h3>\${esc(run.label)}</h3>
+      <span class="pill warn"><span class="dt"></span>Draft</span>
+      \${runSeg()}
+      \${prep?\`<button class="btn ghost" id="payGen" type="button" style="margin-left:auto;padding:5px 13px;font-size:12.5px">Refresh from the records</button>\`:''}
+    </header>
+    <div class="pad">
+      <p style="margin:0;color:var(--ink2);font-size:14.5px;max-width:88ch">
+        The salary, the days and the air ticket come from the records and refresh
+        whenever you press the button above &mdash; after a joiner, a revision letter, or a
+        correction. Everything else is yours to type, and refreshing never touches it.
+        Each figure saves as you leave the box.</p>
+      \${noSalary.length?\`<p class="note" style="margin-top:14px"><b>\${noSalary.length}
+        \${noSalary.length===1?'person has':'people have'} nothing on their line yet</b> &mdash;
+        \${esc(noSalary.map(r=>nm(r.portalName)).join(', '))}. Commission-only staff are
+        expected to look like this until you type their figure.</p>\`:''}
+    </div>
+    <div class="tw"><table class="invtable paytable">
+      \${PAYGROUP()}
+      <thead><tr><th class="s1">Employee</th><th>Co.</th>\${PAYCOLS.map(c=>
+        \`<th class="r\${c.rule?' rule':''}">\${esc(c.label)}\${c.auto?'<i class="autoc">auto</i>':''}</th>\`).join('')}
+        <th class="r rule">Gross</th><th class="r">Net</th></tr></thead>
+      <tbody>\${(() => {
+        const line = r => \`<tr>
+          <td class="s1">\${nm(r.portalName)}\${r.vat?' <span class="wmark">+VAT to pay</span>':''}</td>
+          <td class="nw">\${esc(r.company)}</td>
+          \${PAYCOLS.map(c=>cell(r,c)).join('')}
+          <td class="n r rule">\${money(r.gross,2)}</td>
+          <td class="n r netcol">\${money(r.net,2)}</td></tr>\`;
+        const sub = (list, label, cls) => {
+          const t = f => list.reduce((s,r) => s + (+r[f] || 0), 0);
+          return \`<tr class="\${cls}"><td class="s1">\${esc(label)}</td>
+            <td>\${list.length} \${list.length===1?'person':'people'}</td>
+            \${PAYCOLS.map(c=>\`<td class="n r\${c.rule?' rule':''}">\${t(c.k)?money(t(c.k), c.k==='days'?0:2):'\\u2014'}</td>\`).join('')}
+            <td class="n r rule">\${money(t('gross'),2)}</td>
+            <td class="n r netcol">\${money(t('net'),2)}</td></tr>\`;
+        };
+        let out = '';
+        COS.forEach(c => {
+          const g = rows.filter(r => r.company === c);
+          if(!g.length) return;
+          out += \`<tr class="grp"><td class="s1" colspan="\${PAYCOLS.length+4}">\${esc(coLabel(c))}</td></tr>\`;
+          out += g.map(line).join('');
+          out += sub(g, '', 'sub');
+        });
+        out += sub(rows, rows.length + ' on the payroll', 'tot');
+        if(extra.length){
+          out += \`<tr class="grp"><td class="s1" colspan="\${PAYCOLS.length+4}">Not staff \u2014 leaves the account, not a staff cost</td></tr>\`;
+          out += extra.map(line).join('');
+          out += sub(extra, '', 'sub');
+          out += sub(rows.concat(extra), 'Everything leaving the account', 'tot');
+        }
+        return out;
+      })()}
+      </tbody></table></div>
+    <p class="cap">Days are 30 less unpaid leave, pro-rated for anyone who joined or left inside the month. Where check-in makes it a different number, that figure sits under the box &mdash; click it to take it, or leave it and pay the days above. A missed tap is not an absence, so attendance advises and never decides. A figure you type is yours: refreshing from the records will not overwrite it, and the gross and net are worked out in the database rather than here.\${
+      attNone.length ? ' <b>' + attNone.length + ' ' + (attNone.length===1?'person has':'people have') + ' no attendance recorded this month</b> &mdash; ' + esc(attNone.map(r=>nm(r.portalName)).join(', ')) + '.' : ''}</p>
+  </section>
+
+  \${V ? \`<section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>What moved since \${esc(MKEY(V.prev.key))}</h3>
+      <span class="hint">\${V.rows.length} \${V.rows.length===1?'change':'changes'}\${
+        V.unexplained.length?' \\u00b7 '+V.unexplained.length+' with no reason found':''}</span></header>
+    \${V.rows.length?\`<div class="tw"><table class="invtable">
+      <thead><tr><th class="s1">Employee</th><th>Co.</th><th class="r">\${esc(MKEY(V.prev.key))}</th>
+        <th class="r">\${esc(MKEY(run.key))}</th><th class="r">Change</th><th>Why</th></tr></thead>
+      <tbody>\${V.rows.map(x=>{
+        // For a leaver the row we kept IS last month's, so its net is the
+        // "was" and there is no "now" — subtracting the change would count it
+        // twice.
+        const was = x.kind === 'new'  ? null
+                  : x.kind === 'gone' ? x.r.net
+                  : Math.round((x.r.net - x.by) * 100) / 100;
+        return \`<tr>
+        <td class="s1">\${nm(x.r.portalName)}</td><td class="nw">\${esc(x.r.company)}</td>
+        <td class="n r">\${was===null?'\\u2014':money(was,2)}</td>
+        <td class="n r">\${x.kind==='gone'?'\\u2014':money(x.r.net,2)}</td>
+        <td class="n r" style="color:var(--\${x.by>=0?'warn':'good'})">\${x.by>=0?'+':'('}\${money(Math.abs(x.by),2)}\${x.by>=0?'':')'}</td>
+        <td class="gnote">\${x.why.length
+          ? esc(x.why.join(' \\u00b7 '))
+          : '<span class="pill warn"><span class="dt"></span>no reason found &mdash; look at this one</span>'}</td></tr>\`;}).join('')}
+        <tr class="tot"><td class="s1">Net change</td><td></td>
+          <td class="n r">\${money(V.prevNet,2)}</td>
+          <td class="n r">\${money(tot('net'),2)}</td>
+          <td class="n r netcol">\${money(tot('net') - V.prevNet,2)}</td>
+          <td></td></tr>
+      </tbody></table></div>
+      <p class="cap">This is what the spreadsheet used to do for you: not the arithmetic, which the database can be trusted with, but a second opinion on whether a number that moved was <i>meant</i> to move. Anything in this list without a reason beside it is worth a look before you submit.</p>\`
+      : '<div class="pad"><p style="margin:0;color:var(--ink2)">Nothing has moved since '+esc(MKEY(V.prev.key))+'.</p></div>'}
+  </section>\` : ''}\`;
+}
+`;
+
+
+// The run picker was two hardcoded buttons, August and a September that did
+// not exist. It is whatever runs there are now.
+app = swap(app,
+  `function runSeg(){
+  const r = state.payRun;
+  return \`<div class="seg" id="runSeg" style="margin-left:18px">
+    <button data-run="aug" aria-pressed="\${r==='aug'}" type="button">Aug 2026 &middot; \${state.payStatus==='closed'?'closed':'open'}</button>
+    <button data-run="sep" aria-pressed="\${r==='sep'}" type="button">\${esc(NEXTRUN.label)} &middot; \${['not started','draft','with Miraziz'][state.sepStage]}</button>
+  </div>\`;
+}`,
+  `function runSeg(){
+  const runs = (DATA.payroll.runs || []);
+  if(!runs.length) return '';
+  const here = state.payRun || (runs[0] && runs[0].key);
+  return \`<div class="seg" id="runSeg" style="margin-left:18px">
+    \${runs.slice().sort((a,b)=>a.key<b.key?-1:1).map(r=>
+      \`<button data-run="\${esc(r.key)}" aria-pressed="\${here===r.key}" type="button">\${
+        esc(MKEY(r.key))} &middot; \${esc(r.status)}</button>\`).join('')}
+  </div>\`;
+}`,
+  'a button for every run there is');
+
+// A draft month gets the screen you prepare it on; anything else gets the
+// register as it was.
+app = swap(app,
+  `function vPayroll(){
+  if(state.payRun==='sep') return vPayrollNext();`,
+  `function vPayroll(){
+  const runs = DATA.payroll.runs || [];
+  if(runs.length){
+    if(!state.payRun || !runs.some(r=>r.key===state.payRun))
+      state.payRun = (runs.find(r=>r.status==='draft') || runs[0]).key;
+    const here = runs.find(r=>r.key===state.payRun);
+    if(here && here.status === 'draft' && canAdmin(state.user)) return vPayrollDraft(here);
+  }`,
+  'a draft month is prepared, not read');
+
+/* ---------------- typing on the register ---------------- */
+app = swap(app,
+  `    on('sepUpload',()=>{state.sepStage=1;render();});`,
+  `    // Each figure saves as you leave the box, and the net comes back from the
+    // database — so the total under the column is the stored total, not a
+    // second opinion worked out on screen.
+    document.querySelectorAll('.payin').forEach(el => {
+      el.onfocus = () => el.select();
+      el.onkeydown = ev => { if(ev.key === 'Enter') el.blur(); };
+      el.onchange = async () => {
+        const was = el.defaultValue;
+        el.disabled = true;
+        const said = await window.__db.setLine(el.dataset.line, el.dataset.field, el.value || 0);
+        el.disabled = false;
+        if(!said){ el.value = was; return; }
+        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.lineId===el.dataset.line));
+        const row = run && run.rows.find(x=>x.lineId===el.dataset.line);
+        if(row){ row[el.dataset.k] = +el.value || 0;
+                 row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
+        const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
+      };
+    });
+    document.querySelectorAll('.attday').forEach(b => b.onclick = async () => {
+      b.disabled = true;
+      const said = await window.__db.setLine(b.dataset.att, 'days', b.dataset.attv);
+      if(said){
+        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.lineId===b.dataset.att));
+        const row = run && run.rows.find(x=>x.lineId===b.dataset.att);
+        if(row){ row.days = +said.days; row.salary = +said.salary;
+                 row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
+      }
+      const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
+    });
+    { const g = document.getElementById('payGen');
+      if(g) g.onclick = async () => {
+        g.disabled = true; g.textContent = 'Reading the records\\u2026';
+        await window.__db.generateRun(state.payRun);
+        render(); }; }
+    on('sepUpload',()=>{state.sepStage=1;render();});`,
+  'saving a figure, and refreshing a month');
+
+app = swap(app,
+  `  document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });`,
+  `  document.querySelectorAll('#runSeg button').forEach(b=>b.onclick=()=>{
+    state.payRun = b.dataset.run; state.slipOpen = null; render(); });
+  document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });`,
+  'and switching between months');
+
+/* ---------------- the look of a register you type on ---------------- */
+shell = swap(shell, '</style>', `
+  /* A box you type a figure into should look like the figure until you touch
+     it — a register of thirty inputs with borders on is a form, not a table. */
+  .payc{padding:0 !important}
+  .payin{width:100%;border:0;background:transparent;padding:7px 9px;text-align:right;
+    font:inherit;font-family:'IBM Plex Sans',system-ui,sans-serif;
+    font-variant-numeric:tabular-nums;color:var(--ink3);border-radius:0;
+    -moz-appearance:textfield}
+  .payin::-webkit-outer-spin-button,.payin::-webkit-inner-spin-button{
+    -webkit-appearance:none;margin:0}
+  .payin.has{color:var(--ink)}
+  .payin:hover{background:var(--sunk)}
+  .payin:focus{outline:2px solid var(--accent);outline-offset:-2px;background:var(--card);
+    color:var(--ink)}
+  .payin:disabled{opacity:.45}
+  .autoc{display:block;font-style:normal;font-weight:400;text-transform:none;
+    letter-spacing:0;color:var(--ink3);opacity:.8;font-size:9.5px;line-height:1}
+  /* one kind of column stops and the next begins */
+  .paytable td.rule, .paytable th.rule{border-right:1px solid var(--line)}
+  /* The register carries more columns than any other screen, which is why its
+     headings were set at 10px. That is the size Avin was complaining about,
+     and the width argument does not hold: the headings wrap between words and
+     the table scrolls inside .tw, so the cost of reading them is one taller
+     header row, not a wider table. */
+  .paytable th{font-size:12.5px;line-height:1.25;white-space:normal;vertical-align:bottom}
+  .paytable .autoc{font-size:10.5px}
+  .paytable td, .paytable th{padding-left:6px;padding-right:6px}
+  /* The register's headings wrap between words rather than being cut. They
+     inherit nowrap and a 36px line-height from .invtable, which is right for
+     a heading of one word and wrong for AIR TICKET, which came out as
+     'Air Ticke'. Two short lines cost one row of header and lose nothing. */
+  .invtable.regtable th{white-space:normal;line-height:1.25;height:auto;
+    padding-top:9px;padding-bottom:9px;vertical-align:bottom}
+  /* Every consultant: twelve columns to a fixed width, so the last one is on
+     the screen rather than twenty-three pixels past it. */
+  /* the company blocks a list of people is split into */
+  .cotab{table-layout:fixed;width:100%}
+  .cotab th,.cotab td{overflow:hidden;text-overflow:ellipsis}
+  .cotab td.nw{white-space:nowrap}
+  /* headings break between their words, never through one */
+  .cotab th{white-space:normal;line-height:1.3;vertical-align:bottom}
+  .regblock:first-of-type{border-top:0}
+
+  /* an order number that copies the payment when you click it */
+  .paytab .ordbtn{background:none;border:0;padding:0;font:inherit;color:var(--accent2);
+    cursor:pointer;border-bottom:1px dashed var(--line);line-height:1.35}
+  .paytab .ordbtn:hover{color:var(--accent);border-bottom-color:var(--accent)}
+  .paytab .ordbtn.copied{color:var(--good);border-bottom-color:transparent;font-weight:600}
+  /* a document, said with an icon rather than its file name */
+  .paytab .docico{background:none;border:0;padding:2px;color:var(--ink3);cursor:pointer;
+    line-height:0;border-radius:5px;display:inline-block;vertical-align:middle}
+  .paytab button.docico:hover{color:var(--accent2);background:var(--accentSoft)}
+  .paytab .docico.off{cursor:default;opacity:.55}
+
+  /* the export panel: dates at the top, the rows it would take underneath */
+  .expdates{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:0 0 14px;
+    border-bottom:1px solid var(--line2);margin-bottom:14px}
+  .expdates label{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--ink2)}
+  .expdates input[type=date]{padding:5px 8px;font-size:12.5px;width:auto}
+  .exphead{padding:0 0 10px}
+  .exphead .pfchk{font-size:12.5px}
+  .expfoot{display:flex;gap:10px;align-items:center;padding:14px 16px;
+    border-top:1px solid var(--line2);background:var(--panel2)}
+  #expPop .docbox{width:min(720px,94vw)}
+  #expPop .tw{max-height:46vh;overflow:auto}
+
+  /* Organisation is not another filter on the same list — it is a different
+     view — so its tab does not look like the four beside it. */
+  #peopleSeg .orgtab{margin-left:10px;border-left:1px solid var(--line);
+    color:var(--accent2);font-weight:500}
+  #peopleSeg .orgtab[aria-pressed="true"]{background:var(--accent2);color:#fff}
+
+  /* the two attendance forms, side by side; the day's own segments run the
+     width of the left card rather than the page */
+  .attpair > section{min-width:0}
+  /* Which day, checked in at, checked out at — one row, as Avin asked. It sat
+     in half the width and was stacked into three; at the widths this runs at
+     the three fit that half, and under 900px the pair collapses to one column
+     anyway, which is where stacking them is right. */
+  .attpair .rgform{grid-template-columns:minmax(0,1.5fr) 1fr 1fr;gap:10px}
+  @media (max-width:900px){ .attpair .rgform{grid-template-columns:minmax(0,1fr)} }
+  @media (max-width:1180px){ .attpair{grid-template-columns:minmax(0,1fr)} }
+
+  /* the two lines under the three leave columns: one gap, not two margins
+     plus the grid's own */
+  .lvnotes{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+  .lvnotes .note{margin:0}
+
+  /* what the two colours in the organisation tree mean, beside the tree */
+  .orglgd{display:flex;gap:16px;flex-wrap:wrap;margin-left:auto;font-size:11.5px;color:var(--ink3)}
+  .orglgd span{display:flex;align-items:center;gap:6px}
+  .orglgd i{width:9px;height:9px;border-radius:3px;background:var(--line);flex:none}
+  .orglgd i.rev{background:var(--accent)}
+
+  /* Mattia's commission: the three currencies side by side, the way the
+     sheet has them stacked. The one box that is typed into is the one the
+     sheet highlights. */
+  .mcgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  .mcblock{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+  .mchead{background:var(--panel2);border-bottom:1px solid var(--line2);padding:9px 14px;
+    font-weight:600;font-size:13.5px}
+  .mchead span{font-weight:400;color:var(--ink3);font-size:12px;margin-left:4px}
+  .mcblock table{font-size:13px}
+  .mcblock th,.mcblock td{padding:7px 12px}
+  .mcblock tr.tot td{background:var(--sunk);font-weight:600;border-top:1px solid var(--line)}
+  .mcsay{margin:0 0 4px;color:var(--ink2);font-size:14.5px}
+  .field.mcyellow input{background:#fff9c4;border-color:#e6d97a}
+  :root:not([data-theme="light"]) .field.mcyellow input{background:#4a4326;border-color:#6b5f2e}
+
+  .teamtab{table-layout:fixed;width:100%}
+  .teamtab td,.teamtab th{overflow:hidden;text-overflow:ellipsis}
+  /* Headings wrap between their words rather than being cut, and the role
+     pill wraps too, a size down: OUTSTANDING and COMMISSION are single words
+     and set the width of their own columns, so the room has to come from
+     somewhere that can give it. */
+  .teamtab th{white-space:normal;line-height:1.3}
+  .teamtab .pill{white-space:normal;font-size:10px;padding:2px 6px}
+  .paytable .payin{padding-left:5px;padding-right:6px;font-size:12.5px}
+  .paytable td.n{font-size:12.5px}
+  /* what check-in made of the month, offered rather than imposed */
+  .attday{display:block;width:100%;border:0;background:transparent;cursor:pointer;
+    padding:0 9px 5px;text-align:right;font:inherit;font-size:10.5px;
+    color:var(--warn);white-space:nowrap}
+  .attday:hover{text-decoration:underline}
+  .attday:disabled{opacity:.4;cursor:default}
+</style>`, 'the register you type on');
+
+
+// Payslips should follow the month you are looking at, not always the newest
+// run. Once September is generated it becomes the newest, and without this the
+// payslips screen quietly switches to a draft month nobody has approved.
+app = swap(app,
+  `function vSlips(){
+  const P = DATA.payroll, released = state.payStatus==='closed';
+  const staff = P.rows.filter(r=>!r.dummy);`,
+  `function vSlips(){
+  const P = DATA.payroll;
+  const runs = P.runs || [];
+  const here = runs.find(r => r.key === state.payRun) || runs[0] || null;
+  const released = here ? here.status === 'closed' : state.payStatus === 'closed';
+  const staff = (here ? here.rows : P.rows).filter(r=>!r.dummy);`,
+  'payslips follow the month you are on');
+
+// and a month picker on that screen too
+app = swap(app,
+  `        <button data-co="all" aria-pressed="\${co==='all'}" type="button">All</button>
+        \${DATA.payroll.companies.map(c=>\`<button data-co="\${esc(c)}" aria-pressed="\${co===c}" type="button">\${esc(DATA.payroll.label[c]||c)}</button>\`).join('')}`,
+  `        <button data-co="all" aria-pressed="\${co==='all'}" type="button">All</button>
+        \${DATA.payroll.companies.map(c=>\`<button data-co="\${esc(c)}" aria-pressed="\${co===c}" type="button">\${esc(DATA.payroll.label[c]||c)}</button>\`).join('')}
+      </div>\${runSeg()}<div style="display:none">`,
+  'and a month picker on the payslips screen');
+
+
+/* ================================================= payslips as a pop-up ====
+ * A payslip is a document, and a document belongs in the viewer the documents
+ * already use rather than unrolled down the page under the table you were
+ * reading. Same for your own: the month is a row you click, not a sheet that
+ * is always open.
+ */
+app += `
+function showSlip(html, title, sub){
+  const box = document.getElementById('lookWrap');
+  box.innerHTML = '<div class="lookbg" data-lookclose="1"></div>'
+    + '<div class="look slipmodal" role="dialog" aria-modal="true" aria-label="Payslip">'
+    +   '<header><b>' + esc(title) + '</b><span>' + esc(sub || '') + '</span>'
+    +     '<button class="btn ghost" id="slipPrint" type="button">Print or save as PDF</button>'
+    +     '<button class="btn ghost" data-lookclose="1" type="button">Close</button></header>'
+    +   '<div class="lookbody slipbody">' + html + '</div></div>';
+  box.classList.remove('hidden');
+  box.querySelectorAll('[data-lookclose]').forEach(b => b.onclick = hideDoc);
+  const pr = document.getElementById('slipPrint');
+  if(pr) pr.onclick = () => {
+    document.body.classList.add('printslip');
+    window.print();
+    setTimeout(() => document.body.classList.remove('printslip'), 400);
+  };
+  document.body.style.overflow = 'hidden';
+}
+function openSlipFor(row, run){
+  if(!row) return;
+  const s = slipOf(row, run);
+  /* s.month never existed — the subtitle read "CorpLex · undefined". It is
+     s.period, and now that a payslip is dated by its own run it is the month
+     the sheet is actually for rather than the month the console is on. */
+  showSlip(slipHTML(s), nm(row.portalName || row.name),
+           (DATA.payroll.label[row.company] || row.company) + ' \\u00b7 ' + s.period);
+}
+`;
+
+// The console list opens the viewer rather than unrolling the sheet below it.
+app = swap(app,
+  `        <td class="r"><button class="btn ghost" data-slip="\${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">\${state.slipOpen===r.id?'Hide':'View'}</button></td></tr>\`;}).join('')}`,
+  `        <td class="r"><button class="btn ghost" data-slip="\${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>\`;}).join('')}`,
+  'the payslip list always says View, because nothing unrolls any more');
+
+app = swap(app,
+  `    document.querySelectorAll('[data-slip]').forEach(b=>b.onclick=()=>{`,
+  `    document.querySelectorAll('[data-slip]').forEach(b=>b.onclick=()=>{
+      const runs = DATA.payroll.runs || [];
+      const here = runs.find(r=>r.key===state.payRun) || runs[0];
+      const row = (here ? here.rows : DATA.payroll.rows).find(r=>r.id===b.dataset.slip);
+      if(row) return openSlipFor(row, here);`,
+  'open the viewer instead of the panel');
+
+
+// My payslip: a list of months, not a sheet lying open. Click the month.
+app = swap(app,
+  `  return \`
+  <section class="panel">
+    <header><h3>\${esc(P.month)}</h3><span class="pill good"><span class="dt"></span>Released</span>
+      <span class="pill mute" style="margin-left:auto">A4</span><button class="btn" id="slPrint" type="button" style="padding:6px 14px;font-size:13px">Print or save as PDF</button></header>
+    <div class="slwrap">\${slipHTML(s)}</div>
+  </section>
+  \${revNote(state.user)}
+  <section class="panel">
+    <header><h3>Earlier payslips</h3></header>
+    <div class="pad"><p style="color:var(--ink2);margin:0">\${esc(P.month)} is the first run through the portal. From here on, every released month stays in this list.</p></div>
+  </section>\`;
+}`,
+  `  // Every month that has been released, newest first. The sheet itself opens
+  // when you ask for it.
+  const mine = (P.runs || [])
+    .filter(r => r.status === 'closed')
+    .map(r => ({run: r, row: r.rows.find(x => x.portalName === state.user && !x.dummy)}))
+    .filter(x => x.row);
+  return \`
+  <div class="strip tight">
+    <div class="stat"><span class="k">\${esc(P.month)}</span>
+      <span class="v"><span class="cur">AED</span>\${money(s.net,2)}</span>
+      <span class="n">paid \${esc(s.payDate)}</span></div>
+    <div class="stat"><span class="k">Earnings</span>
+      <span class="v"><span class="cur">AED</span>\${money(s.gross,2)}</span>
+      <span class="n">\${s.earn.length} line\${s.earn.length===1?'':'s'}</span></div>
+    <div class="stat"><span class="k">Deductions</span>
+      <span class="v" style="color:var(--\${s.dedT?'warn':'ink'})"><span class="cur">AED</span>\${money(s.dedT,2)}</span>
+      <span class="n">\${s.ded.length?s.ded.map(d=>esc(d[0])).join(', '):'none this month'}</span></div>
+    <div class="stat"><span class="k">Days paid</span><span class="v">\${s.paidDays}</span>
+      <span class="n">\${s.lop?s.lop+' without pay':'a full month'}</span></div>
+  </div>
+
+  <section class="panel">
+    <header><h3>Your payslips</h3><span class="hint">click a month to open it</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Month</th><th>Paid on</th><th class="r">Earnings</th>
+        <th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
+      <tbody>\${mine.map(x => { const ss = slipOf(x.row);
+        return '<tr class="sliprow" data-myslip="' + esc(x.run.key) + '">'
+          + '<td class="nw"><b>' + esc(x.run.label) + '</b></td>'
+          + '<td class="n nw">' + esc(ss.payDate) + '</td>'
+          + '<td class="n r">' + money(ss.gross,2) + '</td>'
+          + '<td class="n r">' + (ss.dedT ? money(ss.dedT,2) : '&mdash;') + '</td>'
+          + '<td class="n r netcol">' + money(ss.net,2) + '</td>'
+          + '<td class="r"><button class="btn ghost" data-myslip="' + esc(x.run.key)
+          + '" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>';
+      }).join('')}
+      </tbody></table></div>
+    <p class="cap">Every released month stays here. The payslip opens on \${esc(s.ent.legal)} letterhead and can be printed or saved as a PDF from the window.</p>
+  </section>
+  \${revNote(state.user)}\`;
+}`,
+  'my payslip: a list of months, opened when you ask');
+
+app = swap(app,
+  `    const pr=document.getElementById('slPrint'); if(pr) pr.onclick=()=>window.print();`,
+  `    const pr=document.getElementById('slPrint'); if(pr) pr.onclick=()=>window.print();
+    document.querySelectorAll('[data-myslip]').forEach(el => el.onclick = ev => {
+      ev.stopPropagation();
+      const run = (DATA.payroll.runs||[]).find(r => r.key === el.dataset.myslip);
+      const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy);
+      if(row) openSlipFor(row);
+    });`,
+  'and clicking the month opens it');
+
+shell = swap(shell, '</style>', `
+  /* A payslip in the viewer: white paper on the sunk background, and the
+     window prints as the sheet alone. */
+  .slipmodal{max-width:920px}
+  .slipbody{align-items:flex-start;padding:24px;display:block}
+  .slipbody .slip{margin:0 auto}
+  .sliprow, tr.sliprow{cursor:pointer}
+  tr.sliprow:hover{background:var(--panel2)}
+  /* The newest month — the one the figures at the top of the page are about. */
+  tr.sliprow.on td:first-child{box-shadow:inset 3px 0 0 var(--ink)}
+  @media print{
+    body.printslip #app{display:none!important}
+    body.printslip #lookWrap{position:static!important;z-index:auto}
+    body.printslip #lookWrap .lookbg,
+    body.printslip #lookWrap .look header{display:none!important}
+    body.printslip #lookWrap .look{position:static;inset:auto;margin:0;max-width:none;
+      box-shadow:none;background:#fff;border-radius:0}
+    body.printslip #lookWrap .lookbody{overflow:visible;background:#fff;padding:0}
+  }
+</style>`, 'the payslip window');
+
+
+/* --------------------------------- the console, in the order Avin works ----
+ * Payroll, then the payslips it produces, then the letter that changes a
+ * salary, then the two things that accrue on their own, then leaving. The
+ * order a month is actually done in, rather than the order these were built.
+ */
+app = swap(app,
+  `  {id:'payroll',     group:'con',   label:'Payroll',          title:'Payroll', gate:canAdmin, con:true},
+  {id:'revisions',   group:'con',   label:'Salary revisions', title:'Salary revisions', gate:canUpload, con:true},
+  {id:'gratuity',    group:'con',   label:'Gratuity',         title:'Gratuity provision', gate:canAdmin, con:true},`,
+  `  {id:'payroll',     group:'con',   label:'Payroll',          title:'Payroll', gate:canAdmin, con:true},
+  {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
+  {id:'revisions',   group:'con',   label:'Revisions',        title:'Salary revisions', gate:canUpload, con:true},
+  {id:'tickets',     group:'con',   label:'Air ticket',       title:'Air ticket tracker', gate:canAdmin, con:true},
+  {id:'gratuity',    group:'con',   label:'Gratuity',         title:'Gratuity provision', gate:canAdmin, con:true},
+  {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},`,
+  'the console tabs in the order a month is done');
+
+// and the ones that have moved come out of where they were
+app = swap(app,
+  `  {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},
+  {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
+  {id:'tickets',     group:'con',   label:'Air tickets',      title:'Air ticket tracker', gate:canAdmin, con:true},
+  {id:'digest',      group:'con',   label:'Emails',           title:'Emails the portal sends', gate:canAdmin, con:true},`,
+  `  {id:'digest',      group:'con',   label:'Emails',           title:'Emails the portal sends', gate:canAdmin, con:true},`,
+  'without leaving a second copy behind');
+
+/* ---------------- wiring the new screen in ---------------- */
+app = swap(app,
+  `  {id:'hradmin',     group:'con',   label:'Attendance',       title:'Attendance & leave', gate:canAdmin, con:true},`,
+  `  {id:'hradmin',     group:'con',   label:'Attendance',       title:'Attendance & leave', gate:canAdmin, con:true},
+  {id:'regular',     group:'con',   label:'Regularization',   title:'Regularization', gate:canAdmin, con:true},`,
+  'a tab of its own for regularization');
+
+app = swap(app,
+  `                  people:vPeople, digest:vDigest, admin:vAdmin}[state.tab])();`,
+  `                  people:vPeople, digest:vDigest, admin:vAdmin, regular:vRegular}[state.tab])();`,
+  'and something to draw when you are on it');
+
+/* ---------------- the handlers ---------------- */
+// Check-in now goes through the database function and comes back with what was
+// actually recorded, which is not always what was asked for.
+app = swap(app,
+  `  document.querySelectorAll('[data-ci]').forEach(b=>b.onclick=()=>{
+    const d=HDATE(); let a=attOf(state.user,d);
+    if(!a){ a={who:state.user,d,kind:b.dataset.ci==='Home'?'WFH':'Office',segs:[]}; HR().attendance.push(a); }
+    const now=new Date(); const hm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    const seg={in:hm,out:'',loc:b.dataset.ci,ok:b.dataset.ci==='Office',
+      note:b.dataset.ci==='Client site'?'Off-site — checked in away from the office':''};
+    a.segs.push(seg);
+    window.__db.checkIn({date:d, kind:a.kind, in:hm, loc:seg.loc, note:seg.note});
+    render(); });`,
+  `  document.querySelectorAll('[data-ci]').forEach(b=>b.onclick=async ()=>{
+    const d=HDATE(); let a=attOf(state.user,d);
+    if(!a){ a={who:state.user,d,kind:b.dataset.ci==='Home'?'WFH':'Office',segs:[]}; HR().attendance.push(a); }
+    const now=new Date(); const hm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    const seg={in:hm,out:'',loc:b.dataset.ci,ok:true,note:''};
+    a.segs.push(seg);
+    b.disabled = true;
+    state.ciSaid = null; state.ciNote = '';
+    render();
+    // The database reads the address, weighs it against where the device says
+    // it is, and answers with what it wrote down.
+    const said = await window.__db.checkIn({loc: b.dataset.ci});
+    if(said){
+      seg.loc = said.loc; seg.id = said.id; seg.ok = !said.downgraded;
+      a.kind = said.kind;
+      if(said.downgraded) state.ciSaid = said;
+    }
+    render(); });`,
+  'check in through the database, and say what it recorded');
+
+app = swap(app,
+  `  const co=document.getElementById('ciOut'); if(co) co.onclick=()=>{
+    const g=openSeg(state.user); if(!g) return;
+    const now=new Date(); g.out=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    window.__db.checkOut({date:HDATE(), out:g.out});
+    render(); };`,
+  `  const co=document.getElementById('ciOut'); if(co) co.onclick=async ()=>{
+    const g=openSeg(state.user); if(!g) return;
+    const now=new Date(); g.out=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    co.disabled = true; state.ciSaid = null; render();
+    const said = await window.__db.checkOut();
+    if(said && said.out) g.out = said.out;
+    render(); };
+  { const cn=document.getElementById('ciNote'), cg=document.getElementById('ciNoteGo');
+    if(cn) cn.oninput = ()=>{ state.ciNote = cn.value; if(cg) cg.disabled = !cn.value.trim(); };
+    if(cg){ cg.disabled = !(state.ciNote||'').trim();
+      cg.onclick = ()=>{
+        const g = openSeg(state.user); const id = (state.ciSaid||{}).id || (g&&g.id);
+        if(!id) return;
+        if(g) g.note = state.ciNote;
+        window.__db.segmentNote(id, state.ciNote);
+        state.ciSaid = null; state.ciNote = ''; render(); }; } }
+
+  /* --- fixing a missed day --- */
+  { const bind = (id, key, ev) => { const el=document.getElementById(id); if(!el) return;
+      const h = ()=>{ (state.rgForm||(state.rgForm={d:'',in:'',out:'',reason:''}))[key]=el.value;
+        state.rgSent=false; render();
+        const e2=document.getElementById(id);
+        if(e2 && el.tagName==='INPUT' && el.type==='text'){ e2.focus(); e2.setSelectionRange(e2.value.length,e2.value.length); } };
+      if(ev==='input'){ let t; el.oninput=()=>{clearTimeout(t);t=setTimeout(h,260);}; } else el.onchange=h; };
+    bind('rgDay','d'); bind('rgIn','in'); bind('rgOut','out'); bind('rgWhy','reason','input');
+    const go=document.getElementById('rgGo');
+    if(go) go.onclick=async ()=>{
+      const f=state.rgForm||{}; if(!(f.d && f.reason && (f.in||f.out))) return;
+      go.disabled=true;
+      const made = await window.__db.fileRegularization(
+        {date:f.d, in:f.in||null, out:f.out||null, reason:f.reason.trim()});
+      if(made){
+        const RR = HR().regular || (HR().regular = REG());
+        RR.rows.unshift({id:made.ref||made.id, uid:made.id, who:state.user, d:f.d,
+          in:f.in||'', out:f.out||'', reason:f.reason.trim(), status:'Pending',
+          by:'', note:'', sent:HDATE(), decided:''});
+        RR.mine = RR.rows.filter(r=>r.who===state.user);
+        state.rgForm={d:'',in:'',out:'',reason:''}; state.rgSent=true;
+      }
+      render(); };
+    document.querySelectorAll('[data-rgdrop]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.withdrawRegularization(b.dataset.rgdrop); });
+    document.querySelectorAll('[data-rgok]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.decideRegularization(b.dataset.rgok, true); });
+    document.querySelectorAll('[data-rgno]').forEach(b=>b.onclick=()=>{
+      const why = (prompt('Why is it declined? The person sees this.')||'').trim();
+      if(why === '') return;
+      b.disabled=true; window.__db.decideRegularization(b.dataset.rgno, false, why); }); }
+
+  /* --- setting the office --- */
+  { const so=document.getElementById('offHere');
+    if(so) so.onclick=async ()=>{
+      so.disabled=true; so.textContent='Reading\\u2026';
+      const r = await window.__db.setOfficeHere(
+        +((document.getElementById('offRad')||{}).value || 150));
+      if(r) await window.__db.whereAmI();
+      render(); };
+    document.querySelectorAll('[data-offdrop]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.forgetOfficeIp(b.dataset.offdrop); }); }`,
+  'check out, notes, regularization and the office');
+
+
+// Setting the office, from the office. Whoever presses the button is sitting
+// in it, so what the server sees of them is what the office is — no ringing
+// the provider to ask what this week's address is, and no guessing at
+// coordinates from a postal address.
+app = swap(app,
+  `function vAdmin(){
+  const staff = USERS.map(u=>u.name).concat(FORMER);
+  const upl = canUpload(state.user);
+  return \``,
+  `function vAdmin(){
+  const staff = USERS.map(u=>u.name).concat(FORMER);
+  const upl = canUpload(state.user);
+  const W = WHERE(), O = OFFICE();
+  return \`
+  <section class="panel">
+    <header><h3>Where the office is</h3>
+      <span class="pill \${O.set?'good':'warn'}"><span class="dt"></span>\${O.set?'set':'not set yet'}</span>
+      <span class="hint" style="margin-left:auto">press this while sitting in the office</span></header>
+    <div class="pad">
+      <p style="margin:0 0 16px;color:var(--ink2);font-size:14.5px;max-width:70ch">
+        A check-in is confirmed two ways: the network it came from, which the
+        server reads for itself and nobody can fake, and where the device says
+        it is, which is corroboration rather than proof. Until this is set,
+        both are recorded and neither is enforced &mdash; every check-in is taken
+        at its word.</p>
+      <div class="offrow">
+        <div><span class="k">The server sees you at</span>
+          <b class="n">\${esc(W.ip || 'no address')}</b>
+          <span class="n">\${W.ip_ok ? 'already on the list' : 'not on the list'}</span></div>
+        <div><span class="k">How far around still counts</span>
+          <select id="offRad">\${[100,150,250,500].map(r =>
+            \`<option value="\${r}"\${(+((O.geo||{}).radius_m||150))===r?' selected':''}>\${r} metres</option>\`).join('')}</select></div>
+        <button class="btn" id="offHere" type="button">This is the office</button>
+      </div>
+      \${(O.geo||{}).lat ? \`<p class="note" style="margin-top:16px"><b>The office is at
+        \${(+O.geo.lat).toFixed(5)}, \${(+O.geo.lng).toFixed(5)}</b>, and anyone within
+        \${esc(String(O.geo.radius_m||150))} metres of it counts as being there.</p>\` : ''}
+      \${(O.ips||[]).length ? \`<div class="tw" style="margin-top:16px"><table>
+        <thead><tr><th>Address that counts as the office</th><th></th></tr></thead>
+        <tbody>\${O.ips.map(ip => \`<tr><td class="n">\${esc(ip)}\${ip===W.ip?' <span class="wmark">you, now</span>':''}</td>
+          <td class="r"><button class="btn ghost sm" data-offdrop="\${esc(ip)}" type="button">Remove</button></td></tr>\`).join('')}
+        </tbody></table></div>
+        <p class="cap">A line whose address changes will drop off this list on its own one morning, and everybody in the office will be recorded as off-site until it is added again. If that keeps happening, the office needs a fixed address from the provider.</p>\` : ''}
+    </div>
+  </section>`,
+  'setting the office from inside it');
+
+/* ------------------------------------------------------------- a new joiner
+ *
+ * Until now adding somebody meant sending me a message, which is not a system,
+ * it is a dependency. One form writes all six things a joiner needs — the
+ * staff record, an appointment letter carrying the opening salary, a leave
+ * opening, the air ticket clock, a place on the gratuity sheet and a probation
+ * date — because if any one of them is forgotten the mistake surfaces weeks
+ * later on a payslip or a provision.
+ *
+ * The three things most likely to go wrong are given the most room: the work
+ * address (a typo means they sign in to an empty portal, with no error at
+ * all), the three company fields, which are not the same thing, and the split
+ * between basic and allowance, which decides the gratuity for the whole of
+ * their employment.
+ */
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Where the office is</h3>`,
+`  <section class="panel">
+    <header><h3>Add somebody to the staff list</h3>
+      <span class="hint" style="margin-left:auto">accounts only</span></header>
+    <div class="pad">
+      \${state.jDone ? \`<div class="note" style="border-left-color:var(--good);margin-bottom:18px">
+        <b>\${esc(state.jDone.name)} is on the staff list as \${esc(state.jDone.staff_no||'')}.</b>
+        \${state.jDone.email ? \`They cannot sign in yet. Invite <b>\${esc(state.jDone.email)}</b> from
+        Supabase &rarr; Authentication &rarr; Users &rarr; Invite. The sign-in attaches itself to this
+        record by the address, so it has to match exactly &mdash; a typo lets them in to an empty portal
+        with no error at all.\` : 'They have no work address yet, so they cannot be invited until one is added.'}
+        \${state.jDone.probation_until ? \` Probation runs to <b>\${esc(dayLabel(state.jDone.probation_until))} \${esc(String(state.jDone.probation_until).slice(0,4))}</b>.\` : ''}
+        Refresh any open payroll month to put them on it.</div>\` : ''}
+      <p style="margin:0 0 18px;color:var(--ink2);font-size:14.5px;max-width:74ch">
+        This writes the whole of them at once: the staff record, an appointment
+        letter carrying the opening salary, a leave opening, the air ticket
+        clock and a place on the gratuity sheet. It does not create a sign-in
+        &mdash; that is an invitation from Supabase, and it is yours to send.</p>
+      <div class="jform">
+        <label class="wide"><span>Name the portal uses</span>
+          <input id="jName" value="\${esc(JF().name)}" placeholder="as everybody says it"></label>
+        <label class="wide"><span>Name on the visa &mdash; if it differs</span>
+          <input id="jLegal" value="\${esc(JF().legal)}" placeholder="what payslips and letters will carry"></label>
+        <label><span>Work email &mdash; this is their sign-in</span>
+          <input id="jEmail" type="email" value="\${esc(JF().email)}" placeholder="name@corplex.ae"></label>
+        <label><span>The same address again</span>
+          <input id="jEmail2" type="email" value="\${esc(JF().email2)}" placeholder="to catch a typo"></label>
+        <label><span>Joining date</span><input id="jDoj" type="date" value="\${esc(JF().doj)}"></label>
+
+        <label><span>Who employs them</span><select id="jCo">\${
+          ['corplex','poa','lex'].map(k=>\`<option value="\${k}"\${JF().company===k?' selected':''}>\${esc((DATA.companies[k]||{}).name||k)}</option>\`).join('')}</select></label>
+        <label><span>Whose visa they are on</span><select id="jVisa">\${
+          ['corplex','poa','lex'].map(k=>\`<option value="\${k}"\${(JF().visa||JF().company)===k?' selected':''}>\${esc((DATA.companies[k]||{}).name||k)}</option>\`).join('')}</select></label>
+        <label><span>Who pays them</span><select id="jPay">\${
+          ['corplex','poa','lex'].map(k=>\`<option value="\${k}"\${(JF().paidBy||JF().company)===k?' selected':''}>\${esc((DATA.companies[k]||{}).name||k)}</option>\`).join('')}</select></label>
+        <p class="jnote wide">The visa entity decides who carries the gratuity and whose letterhead the payslip
+          uses; the paying entity decides which company's payroll they appear on. They are often the same and
+          sometimes not &mdash; Shannan and Abdullokh are both cases where they diverge.</p>
+
+        <label><span>Staff number</span><input id="jNo" value="\${esc(JF().staffNo)}" placeholder="left blank, the next in the series"></label>
+        <label><span>Job title</span><input id="jTitle" value="\${esc(JF().title)}"></label>
+        <label><span>Department</span>\${(() => {
+          /* A picker here too, for the same reason as on Staff Records: typing
+             it is how a department of one gets created by a stray plural. The
+             last option is the way to add a genuinely new one. */
+          const ds = [...new Set(USERS.map(x => orgDeptOf(x.name)).filter(Boolean)
+            .concat(Object.values(HR().revDept || {}).flat()))].sort();
+          const v = JF().dept;
+          if(state.jNewDept) return \`<span class="srnew"><input id="jDept" value="\${esc(v)}"
+            placeholder="the new department&rsquo;s name">
+            <button type="button" id="jDeptBack" class="btn ghost sm">Cancel</button></span>\`;
+          return \`<select id="jDept"><option value=""\${v ? '' : ' selected'}>Choose one</option>\${
+            ds.map(d => \`<option value="\${esc(d)}"\${d === v ? ' selected' : ''}>\${esc(d)}</option>\`).join('')
+          }\${ds.includes(v) || !v ? '' : \`<option value="\${esc(v)}" selected>\${esc(v)}</option>\`
+          }<option value="__new">&#10133; a department that is not on this list&hellip;</option></select>\`;
+        })()}</label>
+        <label><span>Reports to</span><select id="jMgr"><option value="">nobody yet</option>\${
+          USERS.map(u=>u.name).sort().map(n=>\`<option value="\${esc(n)}"\${JF().manager===n?' selected':''}>\${esc(n)}</option>\`).join('')}</select></label>
+        <label><span>Shift</span><select id="jShift">\${
+          (SHIFTS().length?SHIFTS():[{id:'S2',label:'S2'}]).map(s=>\`<option value="\${esc(s.id)}"\${JF().shift===s.id?' selected':''}>\${esc(s.id)}\${s.from?' · '+esc(s.from)+'–'+esc(s.to):''}</option>\`).join('')}</select></label>
+
+        <label><span>Paid how</span><select id="jBasis">
+          <option value="salaried"\${JF().basis!=='commission'?' selected':''}>A fixed salary</option>
+          <option value="commission"\${JF().basis==='commission'?' selected':''}>Commission only, no fixed salary</option>
+        </select></label>
+        <label><span>Basic (AED)</span><input id="jBasic" inputmode="decimal" value="\${esc(JF().basic)}"\${JF().basis==='commission'?' disabled':''}></label>
+        <label><span>Other allowance</span><input id="jAllow" inputmode="decimal" value="\${esc(JF().allow)}"\${JF().basis==='commission'?' disabled':''}></label>
+        <p class="jnote wide">Gratuity accrues on the <b>basic</b> alone. The house split is 60/40, so on a
+          salary of 10,000 that is a 6,000 basic — entering the whole salary as basic over-provides for the
+          entire life of their employment before anybody notices.\${JF().basis==='commission'?' A commission-only joiner gets no salary letter and no gratuity row, because there is no basic to accrue on.':''}</p>
+
+        <label><span>Home country &mdash; for the air ticket</span>
+          <input id="jCountry" value="\${esc(JF().country)}"\${JF().noTicket?' disabled':''} placeholder="India"></label>
+        <label><span>Ticket allowance (AED)</span>
+          <input id="jRate" inputmode="decimal" value="\${esc(JF().rate)}"\${JF().noTicket?' disabled':''}></label>
+        <label class="wide tick"><input id="jNoTicket" type="checkbox"\${JF().noTicket?' checked':''}>
+          <span>No air ticket entitlement</span></label>
+        <p class="jnote wide">Leave the country blank without ticking that and no entitlement is ever created
+          &mdash; not in eleven months, not ever. The first ticket falls due eleven months after joining.</p>
+      </div>
+      <div class="drow" style="margin-top:6px">
+        <button class="btn" id="jSave" type="button"\${jReady()?'':' disabled'}>Add them</button>
+        <button class="btn ghost" id="jClear" type="button">Clear the form</button>
+        <span class="jwhy">\${esc(jWhy())}</span>
+      </div>
+    </div>
+  </section>
+
+  \${PROB().length ? \`<section class="panel">
+    <header><h3>Probation</h3>
+      <span class="pill \${PROB().some(p=>p.days<=30)?'warn':'good'}"><span class="dt"></span>\${PROB().length} running</span>
+      <span class="hint" style="margin-left:auto">six months from joining &mdash; nothing accrues differently, but somebody has to decide</span></header>
+    <div class="tw"><table>
+      <thead><tr><th class="s1">Employee</th><th>Joined</th><th>Probation ends</th><th class="r">Days left</th><th></th></tr></thead>
+      <tbody>\${PROB().map(p=>\`<tr>
+        <td class="s1 nw">\${nm(p.who)}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(p.doj))} \${esc(p.doj.slice(0,4))}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(p.until))} \${esc(p.until.slice(0,4))}</td>
+        <td class="n r"\${p.days<=30?' style="color:var(--warn)"':''}>\${p.days}</td>
+        <td class="r nw">
+          <button class="btn sm" data-pbok="\${esc(p.who)}" type="button">Confirm</button>
+          <input class="pbdate" type="date" data-pbext="\${esc(p.who)}" value="" title="extend to">
+        </td></tr>\`).join('')}
+      </tbody></table></div>
+    <p class="cap">Confirming records the decision on the day it is taken. Setting a later date in the box
+      extends probation instead. Neither changes what has accrued: leave, the gratuity provision and the air
+      ticket clock have all run from day one, which is what the law and the sheet both do.</p>
+  </section>\` : ''}
+
+  <section class="panel">
+    <header><h3>Where the office is</h3>`,
+  'adding a joiner, and who is still on probation');
+
+// What the joiner form and the probation table read.
+app = swap(app,
+`function vAdmin(){`,
+`const JF = () => state.jf || (state.jf = {name:'', legal:'', email:'', email2:'',
+  doj:'', staffNo:'', company:'corplex', visa:'', paidBy:'', title:'', dept:'',
+  manager:'', basis:'salaried', basic:'', allow:'', shift:'S2', country:'', rate:'',
+  noTicket:false});
+
+// Why the button is off. A disabled control that will not say what it wants is
+// the most irritating thing a form can do.
+function jWhy(){
+  const f = JF();
+  if(!f.name.trim())                       return 'A name, first.';
+  if(!f.doj)                               return 'And a joining date.';
+  if(f.email.trim() !== f.email2.trim())   return 'The two addresses do not match.';
+  if(f.basis !== 'commission' && !(+f.basic > 0))
+                                           return 'A salaried joiner needs a basic. Choose commission only if they have none.';
+  if(!f.noTicket && !f.country.trim())     return 'Home country, or tick that there is no ticket entitlement.';
+  return '';
+}
+const jReady = () => !jWhy();
+
+// Probation still running, soonest to lapse first.
+function PROB(){
+  const p = HR().probation || {}, j = HR().joined || {}, t = HR().today;
+  return Object.keys(p).filter(n => !p[n].confirmed && p[n].until >= t && !(HR().left||{})[n])
+    .map(n => ({who:n, until:p[n].until, doj:j[n] || '',
+      days: Math.round((new Date(p[n].until) - new Date(t)) / 86400000)}))
+    .filter(x => x.doj)
+    .sort((a,b) => a.until.localeCompare(b.until));
+}
+
+function vAdmin(){`,
+  'what the joiner form and the probation table read');
+
+// And the handlers behind them.
+app = swap(app,
+`    document.querySelectorAll('[data-offdrop]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.forgetOfficeIp(b.dataset.offdrop); }); }`,
+`    document.querySelectorAll('[data-offdrop]').forEach(b=>b.onclick=()=>{
+      b.disabled=true; window.__db.forgetOfficeIp(b.dataset.offdrop); }); }
+  [['jName','name'],['jLegal','legal'],['jEmail','email'],['jEmail2','email2'],
+   ['jDoj','doj'],['jNo','staffNo'],['jCo','company'],['jVisa','visa'],['jPay','paidBy'],
+   ['jTitle','title'],['jDept','dept'],['jMgr','manager'],['jBasis','basis'],
+   ['jBasic','basic'],['jAllow','allow'],['jShift','shift'],['jCountry','country'],
+   ['jRate','rate']].forEach(([id,key])=>{
+    const el = document.getElementById(id); if(!el) return;
+    const h = ()=>{
+      if(id === 'jDept' && el.value === '__new'){
+        state.jNewDept = true; JF().dept = ''; state.jDone = null; render();
+        const nb = document.getElementById('jDept'); if(nb) nb.focus();
+        return;
+      }
+      JF()[key] = el.value; state.jDone = null; render();
+      const e2 = document.getElementById(id);
+      if(e2 && e2.tagName==='INPUT' && e2.type!=='date'){ e2.focus();
+        try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} } };
+    if(el.tagName==='SELECT' || el.type==='date') el.onchange = h;
+    else { let tm; el.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(h, 300); }; }
+  });
+  { const jb = document.getElementById('jDeptBack');
+    if(jb) jb.onclick = () => { state.jNewDept = false; JF().dept = ''; render(); }; }
+  const jnt = document.getElementById('jNoTicket');
+  if(jnt) jnt.onchange = ()=>{ JF().noTicket = jnt.checked; state.jDone = null; render(); };
+  const jcl = document.getElementById('jClear');
+  if(jcl) jcl.onclick = ()=>{ state.jf = null; state.jDone = null; render(); };
+  const jsv = document.getElementById('jSave');
+  if(jsv) jsv.onclick = async ()=>{
+    const f = JF(); jsv.disabled = true; jsv.textContent = 'Adding\\u2026';
+    const r = await window.__db.addEmployee({
+      name: f.name.trim(), legal: f.legal.trim() || null,
+      email: f.email.trim() || null, doj: f.doj,
+      company: f.company, visa: f.visa || f.company, paidBy: f.paidBy || f.company,
+      title: f.title.trim() || null, dept: f.dept.trim() || null,
+      manager: (HR().ids||{})[f.manager] || null,
+      basis: f.basis, basic: f.basis==='commission' ? 0 : +f.basic||0,
+      allow: f.basis==='commission' ? 0 : +f.allow||0,
+      shift: f.shift || 'S2',
+      country: f.noTicket ? null : (f.country.trim() || null),
+      rate: f.noTicket ? null : (+f.rate || 0),
+      staffNo: f.staffNo.trim() || null});
+    if(r){ state.jDone = r; state.jf = null; }
+    render(); };
+  document.querySelectorAll('[data-pbok]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true;
+    await window.__db.confirmEmployee((HR().ids||{})[b.dataset.pbok]); render(); });
+  document.querySelectorAll('[data-pbext]').forEach(el=>el.onchange=async ()=>{
+    if(!el.value) return; el.disabled = true;
+    await window.__db.extendProbation((HR().ids||{})[el.dataset.pbext], el.value,
+      'extended from the probation list'); render(); });
+  [['lpAnnual','annual'],['lpAccrual','accrual'],['lpProb','probation'],
+   ['lpCarry','carry'],['lpExp','expires'],
+   ['spFull','full'],['spHalf','half'],['spUnpaid','unpaid']].forEach(([id,key])=>{
+    const el = document.getElementById(id); if(!el) return;
+    let tm; el.oninput = ()=>{ clearTimeout(tm); tm = setTimeout(()=>{
+      LF()[key] = el.value; state.lpSaved = ''; render();
+      const e2 = document.getElementById(id);
+      if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+    }, 300); };
+  });
+  const lps = document.getElementById('lpSave');
+  if(lps) lps.onclick = async ()=>{ lps.disabled = true;
+    const r = await window.__db.setLeavePolicy(LF());
+    state.lpForm = null; if(r) state.lpSaved = 'leave'; render(); };
+  const sps = document.getElementById('spSave');
+  if(sps) sps.onclick = async ()=>{ sps.disabled = true;
+    const r = await window.__db.setSickPolicy(LF());
+    state.lpForm = null; if(r) state.lpSaved = 'sick'; render(); };
+  document.querySelectorAll('[data-sco]').forEach(b=>b.onclick=()=>{
+    state.salesCo = b.dataset.sco; render(); });`,
+  'the joiner form, probation, and the leave policy');
+
+
+
+/* ---------------------------------------------------- a letter that waits
+ *
+ * Avin: "Create an option to send revision letter manually than auto sending,
+ * something like confirm before sending."
+ *
+ * He is right, and the reason is worth writing down. A salary revision is the
+ * only thing in the portal that moves four numbers at once — the payslip, the
+ * salary certificate, the gratuity provision and next month's payroll all read
+ * the same record. A screen that moves all four the instant you finish typing
+ * is a screen you cannot check.
+ *
+ * So the month now has two acts. Writing a draft, which changes NOTHING
+ * anywhere: the database does not touch salary_parts, so every one of those
+ * four still reads the old figure. And sending it, which is a separate press
+ * with the consequence spelled out in figures beside it.
+ */
+app = swap(app,
+`        <button class="btn wide" id="rvIssue" type="button"\${ok?'':' disabled'}>Issue and email it</button>
+        \${state.revSent?\`<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Issued.</b> \${esc(state.revSent)} has been emailed and the letter is on their Letters page. Payslips, the salary certificate and the gratuity provision now use the new basic.</div>\`:''}`,
+`        <button class="btn wide" id="rvIssue" type="button"\${ok?'':' disabled'}>Write the draft</button>
+        \${state.revSent?\`<div class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Drafted. Nothing has moved.</b> \${esc(state.revSent)}'s letter is waiting below. The salary on file, the payslip and the gratuity provision all still read the old figure until you send it.</div>\`:''}`,
+  'the revision button drafts rather than sends');
+
+// The drafts themselves, and what sending one will do.
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Salary on file</h3>`,
+`  <section class="panel">
+    <header><h3>Waiting to be sent</h3>
+      <span class="pill \${DRAFTS().length?'warn':'good'}"><span class="dt"></span>\${DRAFTS().length||'none'}</span>
+      <span class="hint" style="margin-left:auto">a draft changes nothing until you send it</span></header>
+    <div class="pad">
+      \${DRAFTS().length ? DRAFTS().map(r => \`
+        <div class="draft">
+          <div class="dhead">
+            <div><b>\${nm(r.who)}</b>
+              <span class="dsub">\${esc(r.ref)} &middot; with effect from \${esc(dayLabel(r.eff))} \${esc(r.eff.slice(0,4))}\${r.why?' &middot; '+esc(r.why):''}</span></div>
+            <div class="dfig">
+              <span class="was">\${r.was==null?'&mdash;':money(r.was,2)}</span>
+              <span class="arw">&rarr;</span>
+              <b class="n">\${money(r.now,2)}</b>
+              <span class="dsub">basic \${money(r.basic,2)} &middot; other \${money(r.allow,2)}</span>
+            </div>
+            <div class="dact">
+              \${state.revAsk===r.revId ? '' : \`<button class="btn sm" data-rvsend="\${esc(r.revId)}" type="button">Send it</button>
+              <button class="btn ghost sm" data-rvdrop="\${esc(r.revId)}" type="button">Withdraw</button>\`}
+            </div>
+          </div>
+          \${state.revAsk===r.revId ? \`<div class="dask">
+            <p>Sending this moves <b>\${nm(r.who)}</b> from <b>\${r.was==null?'no salary on file':money(r.was,2)}</b>
+              to <b>\${money(r.now,2)}</b> from <b>\${esc(dayLabel(r.eff))} \${esc(r.eff.slice(0,4))}</b>,
+              on a basic of <b>\${money(r.basic,2)}</b>.
+              From that date the payslip, the salary certificate, the gratuity provision and
+              every payroll month still open all read the new figure. It cannot be undone by
+              deleting it &mdash; only by another letter.</p>
+            <div class="drow">
+              <button class="btn" data-rvyes="\${esc(r.revId)}" type="button">Yes, send it</button>
+              <button class="btn ghost" id="rvNo" type="button">Not yet</button>
+            </div></div>\` : ''}
+        </div>\`).join('')
+      : '<p style="margin:0;color:var(--ink3);font-size:13.5px">No letters waiting. Anything you write above lands here first.</p>'}
+    </div>
+  </section>
+
+  \${SENTREV().length ? \`<section class="panel">
+    <header><h3>Sent</h3><span class="hint" style="margin-left:auto">the last few letters that went out</span></header>
+    <div class="tw"><table>
+      <thead><tr><th class="s1">Employee</th><th>Letter</th><th>From</th><th class="r">Was</th><th class="r">Now</th><th class="r">Basic</th><th>Sent</th></tr></thead>
+      <tbody>\${SENTREV().slice(0,12).map(r => \`<tr>
+        <td class="s1 nw">\${nm(r.who)}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(r.ref)}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(r.eff))} \${esc(r.eff.slice(0,4))}</td>
+        <td class="n r" style="color:var(--ink3)">\${r.was==null?'&mdash;':money(r.was,2)}</td>
+        <td class="n r netcol">\${money(r.now,2)}</td>
+        <td class="n r">\${money(r.basic,2)}</td>
+        <td class="nw" style="color:var(--ink2)">\${r.sentAt?esc(dayLabel(r.sentAt))+' '+esc(r.sentAt.slice(0,4)):'&mdash;'}\${r.sentBy?' by '+nm(r.sentBy):''}</td></tr>\`).join('')}
+      </tbody></table></div>
+  </section>\` : ''}
+
+  <section class="panel">
+    <header><h3>Salary on file</h3>`,
+  'the drafts waiting, and the ones already sent');
+
+// Two lists the screen above reads, and nothing else does.
+app = swap(app,
+`function vRevisions(){`,
+`const REVS = () => HR().revisions || [];
+const DRAFTS = () => REVS().filter(r => r.status === 'draft');
+const SENTREV = () => REVS().filter(r => r.status === 'issued');
+
+function vRevisions(){`,
+  'the two lists of revisions');
+
+// And the handler. The prototype wrote the new salary straight into the page's
+// own memory, which is how a screen can look right and mean nothing.
+app = swap(app,
+`  const rvb = document.getElementById('rvIssue');
+  if(rvb) rvb.onclick = ()=>{
+    const g = state.revForm, basic = +g.basic||0, allow = +g.allow||0;
+    const L = HR().letters;
+    L.unshift({id:'LT-'+(4002+L.length), who:g.who, type:'revision', to:'', why:'Salary revision',
+      status:'Issued', asked:HDATE(), decided:HDATE(), by:state.user,
+      eff:g.eff, salary:Math.round((basic+allow)*100)/100, basic, allow});
+    (DATA.master.parts || (DATA.master.parts={}))[g.who] =
+      {salary:Math.round((basic+allow)*100)/100, basic, allow, from:g.eff,
+       src:'Salary revision letter dated '+dayLabel(HDATE())+' '+HDATE().slice(0,4)};
+    state.revSent = g.who; state.ltOpen = L[0].id;
+    state.revForm = {who:'', eff:'', basic:'', allow:''};
+    render(); };`,
+`  const rvb = document.getElementById('rvIssue');
+  if(rvb) rvb.onclick = async ()=>{
+    const g = state.revForm, who = g.who;
+    rvb.disabled = true;
+    const r = await window.__db.issueRevision({
+      emp: (HR().ids||{})[who], basic: +g.basic||0, allow: +g.allow||0,
+      from: g.eff, reason: g.reason || 'Salary revision'});
+    if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:''}; }
+    render(); };
+  document.querySelectorAll('[data-rvsend]').forEach(b=>b.onclick=()=>{
+    state.revAsk = b.dataset.rvsend; state.revSent=''; render(); });
+  const rvn = document.getElementById('rvNo');
+  if(rvn) rvn.onclick = ()=>{ state.revAsk = null; render(); };
+  document.querySelectorAll('[data-rvyes]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; state.revAsk = null;
+    await window.__db.releaseRevision(b.dataset.rvyes); render(); });
+  document.querySelectorAll('[data-rvdrop]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true;
+    await window.__db.withdrawRevision(b.dataset.rvdrop, 'withdrawn before sending'); render(); });`,
+  'writing a draft, sending it, throwing it away');
+
+/* ---------------- the look of it ---------------- */
+shell = swap(shell, '</style>', `
+  /* the nudge — a note, not an alarm, until it is your manager's business */
+  .nudge{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;margin-bottom:16px;
+    border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
+    background:var(--card)}
+  .nudge.loud{border-left-color:var(--bad)}
+  .nudge .ndot{width:8px;height:8px;border-radius:50%;background:var(--warn);
+    margin-top:6px;flex:none}
+  .nudge.loud .ndot{background:var(--bad)}
+  .nudge b{display:block;font-size:14.5px}
+  /* Only the headline is a block. A bold inside the sentence under it — a
+     figure, the name of a button — is part of that sentence. */
+  .nudge span b{display:inline;font-size:inherit}
+  .nudge span:not(.ndot){display:block;color:var(--ink2);font-size:13.5px;margin-top:2px}
+  /* A banner may carry one action. It sits at the right, centred against the
+     two lines of text, and drops under them when there is no room. */
+  .nudge > div{flex:1;min-width:0}
+  .nudge > .btn{flex:none;align-self:center;margin-left:auto}
+  @media(max-width:640px){ .nudge{flex-wrap:wrap} .nudge > .btn{margin-left:20px} }
+
+  /* what the record says about where a check-in came from */
+  .wmark{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:20px;
+    font-size:11px;letter-spacing:.02em;color:var(--ink3);border:1px solid var(--line);
+    vertical-align:1px;white-space:nowrap}
+  .wmark.bad{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,transparent)}
+
+  .ciwarn{margin-top:16px;padding:13px 16px;border:1px solid var(--line);
+    border-left:3px solid var(--warn);border-radius:10px;font-size:14px;color:var(--ink2)}
+  .ciwarn b{color:var(--ink)}
+  .ciwrow{display:flex;gap:10px;margin-top:11px}
+  .ciwrow input{flex:1;min-width:0}
+
+  /* fixing a missed day */
+  /* Three fixed tracks rather than a fraction, because this form is drawn at
+     two widths: half the screen beside Check in and out, and the whole of it
+     on the Regularization tab. A 1.6fr day box is right in the first and
+     absurd in the second. */
+  .rgform{display:grid;grid-template-columns:minmax(200px,380px) 150px 150px;gap:14px;
+    justify-content:start;margin-bottom:16px}
+  .rgform label.wide{max-width:700px}
+  .rgform label{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .rgform label.wide{grid-column:1/-1}
+  .rgform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .btn.sm{padding:5px 12px;font-size:12.5px}
+
+  /* the sub-tabs of the section you are in, kept on screen so the screens of
+     one job stay one click from each other */
+  .subbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    margin:-8px 0 2px;padding:0 2px}
+  .subtabs{display:inline-flex;gap:3px;background:var(--sunk);border:1px solid var(--line);
+    border-radius:9px;padding:3px;flex-wrap:wrap}
+  .subtabs button{background:none;border:0;color:var(--ink2);padding:6px 13px;
+    border-radius:7px;font-size:13.5px;font-family:inherit}
+  .subtabs button:hover{color:var(--ink);background:var(--panel)}
+  .subtabs button[aria-current="true"]{background:var(--accent);color:var(--accentInk);font-weight:600}
+  .subtitle{font-family:'Newsreader','Bodoni Moda',Georgia,serif;font-size:18px;color:var(--ink2);
+    margin-left:auto}
+
+  /* reading a workbook, and saying what was in it before anything is written */
+  .upmsg{border-left:3px solid var(--bad);background:var(--badBg);color:var(--ink);
+    padding:11px 14px;border-radius:0 8px 8px 0;font-size:13px;margin-top:14px;max-width:110ch}
+  .upmsg.warn{border-left-color:var(--warn);background:var(--warnBg)}
+  .upmsg.good{border-left-color:var(--good);background:var(--goodBg)}
+  .upmsg b{font-weight:600}
+  .upact{display:flex;gap:10px;margin-top:16px;align-items:center;flex-wrap:wrap}
+  .upact .why{color:var(--ink3);font-size:12.5px}
+  .upfile{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin-bottom:14px}
+  .upfile b{font-size:16px}
+  .upfile span{color:var(--ink3);font-size:12.5px}
+  .upnames{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .upnames span{background:var(--warnBg);color:var(--warn);border-radius:99px;
+    padding:3px 10px;font-size:12.5px}
+
+  /* a revision letter waiting to be sent */
+  .draft{border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:10px;
+    padding:14px 16px;margin-bottom:12px;background:var(--card)}
+  .draft:last-child{margin-bottom:0}
+  .dhead{display:flex;gap:20px;align-items:center;flex-wrap:wrap}
+  .dhead>div:first-child{flex:1;min-width:180px}
+  .dsub{display:block;font-size:12.5px;color:var(--ink3);margin-top:2px}
+  .dfig{text-align:right;white-space:nowrap}
+  .dfig .was{color:var(--ink3);font-size:14px}
+  .dfig .arw{color:var(--ink3);margin:0 7px}
+  .dfig b{font-size:18px}
+  .dact{display:flex;gap:8px}
+  .dask{margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
+  .dask p{margin:0 0 12px;font-size:14px;color:var(--ink2);max-width:76ch}
+  .drow{display:flex;gap:10px;align-items:center}
+
+  /* adding somebody */
+  .jform{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px 18px;
+    margin-bottom:18px}
+  .jform label{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .jform label.wide{grid-column:1/-1}
+  .jform label.tick{flex-direction:row;align-items:center;gap:9px}
+  .jform label.tick input{width:auto}
+  .jform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .jform label.tick span{text-transform:none;letter-spacing:0;font-size:14px;color:var(--ink2)}
+  .jnote{grid-column:1/-1;margin:-4px 0 4px;font-size:13px;color:var(--ink3);
+    max-width:82ch;line-height:1.55}
+  .jnote b{color:var(--ink2)}
+  .jwhy{font-size:13px;color:var(--ink3)}
+  .pbdate{width:150px;margin-left:8px;vertical-align:middle}
+
+  /* where the office is */
+  .offrow{display:flex;gap:20px;align-items:flex-end;flex-wrap:wrap}
+  .offrow>div{display:flex;flex-direction:column;gap:4px}
+  .offrow .k{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+  .offrow b{font-size:19px}
+  .offrow .n{font-size:12.5px;color:var(--ink3)}
+
+  @media (max-width:820px){
+    .rgform{grid-template-columns:1fr 1fr}
+    .rgform label:first-child{grid-column:1/-1}
+    .ciwrow{flex-direction:column}
+    .jform{grid-template-columns:1fr 1fr}
+    .dhead{gap:12px}
+    .dfig{text-align:left}
+  }
+</style>`, 'the look of the nudge, the evidence and the office');
+
+/* ------------------------------------------------- the upload, for real now
+ *
+ * What stood here was a demonstration: "31 of 34 checks passed", three
+ * warnings against rows 117, 288 and 402, a publish button, a roll-back
+ * promise — every bit of it invented for a screenshot. There was no parser
+ * behind any of it. For a while the screen said so, in as many words, which
+ * was the honest thing to ship but not a thing anybody could use.
+ *
+ * This is the real one. The workbook is read in the browser by web/sales.js —
+ * the same reader that reproduced both of Avin's workbooks cell for cell,
+ * 22,866 figures with no disagreement — and the file itself never leaves his
+ * machine. What is sent is the finished figures.
+ *
+ * Two things it insists on, both learned the hard way:
+ *
+ *   NOTHING IS WRITTEN UNTIL HE HAS SEEN WHAT IT FOUND. The middle state of
+ *   this screen is the whole point of it: totals, void invoices, and every
+ *   name on the workbook that matches nobody on the staff list. August's
+ *   payroll lost AED 11,173 to a name that did not match and a screen that
+ *   did not say so.
+ *
+ *   A YEAR IS REPLACED WHOLE. The workbook is the record. Saying that plainly
+ *   on the button — 'Replace 2026' and not 'Upload' — is the difference
+ *   between a considered action and a surprise.
+ */
+app = cutout(app,
+`      \${state.uploaded ? \``,
+`Prior years are read-only once published.</p>\`}`,
+`      \${vSalesUpload()}`,
+  'the sales upload actually uploads');
+
+// The screen itself, next door to the panel that shows it.
+app = swap(app,
+`function vAdmin(){`,
+`/* Three states, and the middle one is the point: a workbook that has been read
+ * and not yet written. */
+function vSalesUpload(){
+  const aed = v => 'AED ' + Math.round(v || 0).toLocaleString('en-AE');
+  /* How many invoices the portal holds for a year. The blob is Corporate &
+   * Legal with Accounting & Tax riding along as atDept, so a year's count is
+   * the two added — reading only the first said 354 where the workbook says
+   * 499, which makes a replacement warning look like a mistake. */
+  const held = y => {
+    const f = (DATA.yearFigures || {})[String(y)];
+    if(!f || !f.totals) return null;
+    return {count: (f.totals.count || 0) + ((f.atDept && f.atDept.totals && f.atDept.totals.count) || 0)};
+  };
+
+  const names = list => list && list.length
+    ? \`<div class="upnames">\${list.map(n => \`<span>\${esc(n)}</span>\`).join('')}</div>\` : '';
+
+  // What the portal already holds, and where it came from. A figure whose
+  // provenance is a shrug is a figure nobody can check.
+  const history = () => {
+    const years = Object.keys(DATA.yearFigures || {}).sort().reverse();
+    const up = DATA.uploads || [];
+    return \`
+      <div class="tw" style="margin-top:18px"><table>
+        <thead><tr><th>Year</th><th class="r">Invoices held</th><th>Last uploaded</th><th>By</th><th>From</th></tr></thead>
+        <tbody>\${years.length ? years.map(y => {
+          const t = held(y) || {count: 0};
+          const u = up.find(x => String(x.year) === y);
+          return \`<tr><td class="n">\${esc(y)}</td><td class="n r">\${t.count || 0}</td>
+            <td>\${u ? esc(u.at) : '<span style="color:var(--ink3)">before this screen existed</span>'}</td>
+            <td>\${u && u.by ? esc(u.by) : '<span style="color:var(--ink3)">&mdash;</span>'}</td>
+            <td>\${u && u.file ? esc(u.file) : '<span style="color:var(--ink3)">&mdash;</span>'}</td></tr>\`;
+        }).join('') : \`<tr><td colspan="5" style="color:var(--ink3)">No sales year is loaded.</td></tr>\`}
+        </tbody></table></div>
+      <p class="cap" style="padding-left:0">Everything on every sales screen is worked out from these rows. Uploading a year replaces that year and nothing else.</p>\`;
+  };
+
+  // ---- after the write: what the database made of it
+  const d = state.supDone;
+  if(d) return \`
+    <div class="upmsg \${d.unmatched && d.unmatched.length ? 'warn' : 'good'}">
+      <b>\${esc(String(d.year))} replaced.</b> \${d.rows} rows from \${d.invoices || d.rows} invoices &mdash;
+      \${aed(d.invoiced)} invoiced, \${aed(d.net)} net, \${aed(d.eligible)} eligible.
+      \${esc(d.note || '')}
+      \${names(d.unmatched)}
+    </div>
+    <div class="upact"><button class="btn" id="supAgain" type="button">Upload another year</button></div>
+    \${history()}\`;
+
+  // ---- read, and waiting to be agreed to
+  const s = state.sup;
+  if(s){
+    const now = held(s.year);
+    return \`
+      <div class="upfile">
+        <b>\${esc(s.file)}</b>
+        <span>\${s.invoices} invoices &middot; \${s.rows} rows &middot; \${s.clients} clients &middot; year \${esc(String(s.year))}</span>
+      </div>
+      <div class="strip" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+        <div class="stat"><span class="k">Invoiced</span><span class="v">\${aed(s.inv)}</span><span class="n">excluding VAT, after credit notes</span></div>
+        <div class="stat"><span class="k">Net sales</span><span class="v">\${aed(s.net)}</span><span class="n">after cost and partner commission</span></div>
+        <div class="stat"><span class="k">Eligible</span><span class="v">\${aed(s.elig)}</span><span class="n">settled and paid on time</span></div>
+      </div>
+      \${s.byDept.length > 1 ? \`<div class="tw" style="margin-top:16px"><table>
+        <thead><tr><th>Department</th><th class="r">Invoices</th><th class="r">Invoiced</th><th class="r">Net</th><th class="r">Eligible</th></tr></thead>
+        <tbody>\${s.byDept.map(x => \`<tr><td>\${esc(x.department)}</td><td class="n r">\${x.totals.count}</td>
+          <td class="n r">\${aed(x.totals.inv)}</td><td class="n r">\${aed(x.totals.net)}</td>
+          <td class="n r">\${aed(x.totals.elig)}</td></tr>\`).join('')}</tbody></table></div>\` : ''}
+      \${s.unmatched.length ? \`<div class="upmsg warn">
+        <b>\${s.unmatched.length} name\${s.unmatched.length === 1 ? '' : 's'} on this workbook match nobody on the staff list.</b>
+        Their invoices still count towards the company totals, but they will not appear on anybody's
+        own page or leaderboard. Either the spelling differs from the staff record, or the person
+        was never added.\${names(s.unmatched)}</div>\` : \`<div class="upmsg good">
+        <b>Every name on this workbook matches somebody on the staff list.</b> Nothing will be filed under nobody.</div>\`}
+      \${s.voided ? \`<div class="upmsg warn"><b>\${s.voided} invoice\${s.voided === 1 ? ' has' : 's have'} no amount</b> &mdash;
+        a date, a client and a salesperson, and nothing invoiced. They are carried across as they
+        are, counted as void rather than dropped.</div>\` : ''}
+      \${(() => {
+        // The void invoices have their own line above; repeating them here as
+        // forty table rows buries the button under a list of things already said.
+        const rest = s.problems.filter(p => !/^Void or cancelled/.test(p.what));
+        if(!rest.length) return '';
+        return \`<div class="tw" style="margin-top:16px"><table>
+          <thead><tr><th>Row</th><th>Invoice</th><th>What the reader could not settle</th></tr></thead>
+          <tbody>\${rest.slice(0, 30).map(p => \`<tr><td class="n">\${p.row}</td>
+            <td class="n">\${esc(p.invoice || '—')}</td>
+            <td>\${esc(p.what)}\${p.detail && p.detail !== p.invoice ? ' &mdash; ' + esc(p.detail) : ''}</td></tr>\`).join('')}
+          </tbody></table></div>
+          \${rest.length > 30 ? \`<p class="cap" style="padding-left:0">and \${rest.length - 30} more of the same kinds</p>\` : ''}\`;
+      })()}
+      <div class="upmsg\${now ? ' warn' : ''}">\${now
+        ? \`<b>\${esc(String(s.year))} is already loaded &mdash; \${now.count} invoices.</b> Uploading replaces that year
+           whole, in one go: anything the portal holds for \${esc(String(s.year))} and this workbook does not
+           will be gone. Every other year is untouched.\`
+        : \`<b>\${esc(String(s.year))} is not loaded yet.</b> This adds it. Every other year is untouched.\`}</div>
+      <div class="upact">
+        <button class="btn" id="supGo" type="button" \${state.supBusy ? 'disabled' : ''}>\${
+          state.supBusy ? 'Writing&hellip;' : 'Replace ' + esc(String(s.year))}</button>
+        <button class="btn ghost" id="supCancel" type="button" \${state.supBusy ? 'disabled' : ''}>Cancel</button>
+        <span class="why">Nothing has been written yet.</span>
+      </div>\`;
+  }
+
+  // ---- nothing chosen
+  return \`
+    <div class="drop">
+      <div class="big">Choose the sales workbook</div>
+      <div style="margin-bottom:14px">.xlsx &mdash; the portal reads the <b>Sales Data</b>,
+        <b>Employee Master</b>, <b>Company Master</b> and <b>Commission Rules</b> sheets and works
+        the commission out itself, here in this browser. The file is not sent anywhere; only the
+        finished figures are.</div>
+      <input type="file" id="supFile" accept=".xlsx,.xlsm,.xls" hidden>
+      <button class="btn" id="supPick" type="button" \${state.supBusy ? 'disabled' : ''}>\${
+        state.supBusy ? 'Reading&hellip;' : 'Choose file'}</button>
+    </div>
+    \${state.supErr ? \`<div class="upmsg"><b>That workbook could not be read.</b> \${esc(state.supErr)}</div>\` : ''}
+    \${history()}\`;
+}
+
+function vAdmin(){`,
+  'the sales upload screen');
+
+/* ====================================================== payment requests, real
+ *
+ * This screen was the last demonstration left in the portal, and the most
+ * dangerous one. Five invented requests sat in it with real colleagues' names
+ * against invented vendors and amounts — Zhavokhir against a DED licence
+ * renewal, Nissa against a translation, Abdulkhamid against visa quota fees.
+ * Every CorpLex person could open the tab. The bell told Avin three were
+ * waiting on him for AED 19,750. None of it had happened, and somebody was
+ * going to act on it or ask a colleague about a payment they never made.
+ *
+ * The screen itself was right: the form matches the Google Form field for
+ * field, the approval panel walks through payment status, account, remark and
+ * the WhatsApp message in the order Avin actually does it, and the standing
+ * remark for each account is his own wording. What was missing was everything
+ * behind it. So the markup mostly stays and the data changes underneath it.
+ */
+
+// The invented queue, replaced by whatever the database will show this person.
+app = swap(app,
+`let REQS = [
+  {ref:'PR-2026-0141', order:'PR2517', payee:'Dubai Economy (DED)',  date:'31 Aug 2026', by:'Zhavokhir Khasanbaev', client:'ALIFID SA',            purpose:'Trade licence renewal', amount:4750,   mode:'card',     status:'Pending', docs:2, note:'Renewal notice attached.'},
+  {ref:'PR-2026-0140', order:'PR2508', payee:'Al Waha Translation',   date:'30 Aug 2026', by:'Nissa Muradova',       client:'SC Project Management LLC', purpose:'Legal translation', amount:3200,   mode:'cash',     status:'Pending', docs:1, note:'Arabic MOA, 14 pages.'},
+  {ref:'PR-2026-0139', order:'PR2431', payee:'Emirates Typing Centre',date:'28 Aug 2026', by:'Shohruh Karimov',      client:'Abeltino Marketing Management', purpose:'Typing centre charges', amount:11800, mode:'transfer', status:'Pending', docs:3, note:'Invoice and quotation attached.'},
+  {ref:'PR-2026-0138', order:'PR2402', payee:'Aramex',                date:'26 Aug 2026', by:'Maylyn Aguba Asilo',   client:'JAA United DMCC',       purpose:'Courier and attestation', amount:640, mode:'cash',    status:'Approved', docs:1, note:'Paid personally, receipt attached.'},
+  {ref:'PR-2026-0137', order:'PR2380', payee:'GDRFA portal',          date:'24 Aug 2026', by:'Abdulkhamid Makhamatjanov', client:'Jiuba FZC',        purpose:'Visa quota fees',      amount:8500,   mode:'link',     status:'Paid',     docs:2, note:'PRO service fees.'}
+];`,
+`/* Whatever the database gives this person, which for a consultant is their own
+ * requests and for accounts is everybody's. Empty is a perfectly good answer
+ * and the screen says so; it used to say five things that were not true. */
+function reqs(){ return DATA.payments || []; }`,
+  'the payment queue is the database, not five inventions');
+
+// Every read of the old array becomes a read of the new function.
+app = app.split('REQS.filter').join('reqs().filter')
+         .split('REQS.find').join('reqs().find')
+         .split('REQS.map').join('reqs().map');
+
+// The bell guarded itself with typeof REQS !== 'undefined', which was a guard
+// against app.js being half-loaded. reqs() is declared, so the guard is now
+// about whether there is any data yet.
+app = swap(app,
+`  const pend = (typeof REQS!=='undefined') ? reqs().filter(r=>r.status==='Pending') : [];`,
+`  const pend = reqs().filter(r=>r.status==='Pending');`,
+  'the bell counts real requests');
+
+/* Raising a request. The prototype's version built a fake reference, unshifted
+ * a row onto the array and then drew a picture of an email that nobody sends —
+ * a screenshot of a workflow rather than the workflow. This sends it. */
+app = cutout(app,
+`function pqSubmit(){`,
+`  render();
+}
+
+/* ---------------- admin ---------------- */`,
+`async function pqSubmit(){
+  const btn = document.getElementById('pqSubmit');
+  const need = (id, what) => {
+    const v = (document.getElementById(id).value || '').trim();
+    if(!v) throw new Error(what);
+    return v;
+  };
+  let f;
+  try{
+    f = {
+      order:   (document.getElementById('pqOrder').value || '').trim(),
+      client:  (document.getElementById('pqClient').value || '').trim(),
+      purpose: need('pqPurpose', 'Say what the payment is for.'),
+      payee:   need('pqPayee', 'Say who is being paid.'),
+      extra:   (document.getElementById('pqNote').value || '').trim(),
+      mode:    document.getElementById('pqMode').value,
+      amount:  parseFloat(document.getElementById('pqAmount').value) || 0
+    };
+    if(f.amount <= 0) throw new Error('Put in the amount.');
+  }catch(e){
+    state.pqErr = e.message; render(); return;
+  }
+  state.pqErr = '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+
+  /* Held so a failure does not cost somebody their typing. The reload that
+   * follows a failed call redraws this form, and redrawing it empty is how a
+   * refusal came to look like nothing happening at all. */
+  state.pqForm = f;
+
+  const out = await window.__db.raisePayment(f, state.pqFiles || []);
+  if(!out || out.error){
+    // The code is the diagnostic bit — PGRST202 means the API has not picked
+    // up the function yet, P0001 means the function itself said no — so it is
+    // shown rather than left in the console for somebody who knows to look.
+    state.pqErr = (out && out.error) || 'The request did not go through, and no reason came back.';
+    state.pqCode = (out && out.code) || '';
+    render();
+    return;
+  }
+
+  state.pqForm = null;
+  state.pqFiles = [];
+  state.pqDone = {ref: out.ref, mode: f.mode, amount: f.amount, order: f.order,
+                  client: f.client, notAttached: out.notAttached || []};
+  render();
+}
+
+/* ---------------- admin ---------------- */`,
+  'raising a payment request actually raises one');
+
+/* The confirmation. What stood here was a mock-up of an email, complete with a
+ * document count of '1 file (invoice.pdf, 240 KB)' that had nothing to do with
+ * what was attached, and a link to a portal address that does not exist. Until
+ * there is a sending address, the honest version says the request is in the
+ * portal and who has to act on it. */
+app = swap(app,
+`      \${state.pqConfirm ? \`<section class="panel"><header><h3>Submitted</h3><span class="hint">what Avin receives</span></header><div class="pad">\${state.pqConfirm}</div></section>\` : ''}`,
+`      \${state.pqDone ? vPaymentSent() : ''}`,
+  'the confirmation is about what happened');
+
+app = swap(app,
+`function pqBadge(){`,
+`/* What actually happened, said plainly. No invented email, because no email
+ * leaves the portal yet — that is waiting on a sending address, and claiming
+ * otherwise is how somebody stops checking the screen. */
+function vPaymentSent(){
+  const d = state.pqDone; if(!d) return '';
+  const mode = MODES.find(m => m.id === d.mode) || {label: d.mode, next: ''};
+  return \`
+  <section class="panel">
+    <header><h3>\${esc(d.ref)} raised</h3><span class="hint">it is in the portal now</span></header>
+    <div class="pad">
+      <div class="strip" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+        <div class="stat"><span class="k">Reference</span>
+          <span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">\${esc(d.ref)}</span>
+          <span class="n">\${d.order?'Order '+esc(d.order)+' &middot; ':''}AED \${money(d.amount,2)} &middot; \${esc(mode.label)}</span></div>
+        <div class="stat"><span class="k">Waiting on</span>
+          <span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Accounts</span>
+          <span class="n">it shows in the approval queue straight away</span></div>
+      </div>
+      <div class="note" style="margin-top:16px;border-left-color:var(--good)"><b>Once it is approved.</b> \${esc(mode.next||'')}</div>
+      \${d.notAttached && d.notAttached.length ? \`<div class="note" style="margin-top:12px;border-left-color:var(--bad)">
+        <b>The request was raised, but \${d.notAttached.length} document did not go up:</b>
+        \${esc(d.notAttached.join(', '))}. Open the request below and attach it again.</div>\` : ''}
+      <p class="cap" style="padding-left:0">No email has been sent — the portal has no sending address yet, so
+        this screen is where it lives. It stays in <b>My requests</b> below with whatever happens to it.</p>
+      <button class="btn ghost" id="pqAnother" type="button" style="margin-top:6px">Raise another</button>
+    </div>
+  </section>\`;
+}
+
+function pqBadge(){`,
+  'a confirmation that only claims what is true');
+
+if(app.includes('REQS')) throw new Error('something still reads the invented payment array: '
+  + app.split('REQS')[1].slice(0, 80));
+console.log('payments    the invented queue is gone from the bundle');
+
+/* The handlers. The prototype's `commit` set three properties on an object in
+ * memory and the row went back to how it was on the next reload — which was
+ * the whole trouble with this screen. Every one of these now names a database
+ * function that can refuse it. */
+/* The handlers for both payment screens. The guard was state.tab==='payment',
+ * which stopped matching the moment approving moved to a screen of its own —
+ * the same way the sales upload's handlers stopped matching when the console
+ * was reorganised. Twice is a pattern, so this one names both screens and each
+ * handler is guarded by whether its element is actually on the page. */
+app = swap(app,
+`  if(state.tab==='payment'){`,
+`  if(state.tab==='payment' || state.tab==='payapprove'){`,
+  'both payment screens get their handlers');
+
+app = swap(app,
+`    const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
+    document.querySelectorAll('[data-approve]').forEach(b=>b.onclick=()=>{
+      state.approve = {ref:b.dataset.approve, payStatus:'', account:'', remarks:''}; render();
+      window.scrollTo({top:0,behavior:'smooth'});
+    });`,
+`    const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
+    const again=document.getElementById('pqAnother');
+    if(again) again.onclick=()=>{
+      state.pqDone=null; state.pqForm=null; state.pqErr=''; state.pqCode=''; render(); };
+
+    // documents, chosen before the request exists and uploaded with it
+    const fb=document.getElementById('pqFile'), fp=document.getElementById('pqPick');
+    if(fb && fp){
+      fp.onclick=()=>fb.click();
+      fb.onchange=()=>{
+        pqGrab();                       // before the redraw, not after it
+        const picked=[...(fb.files||[])];
+        const room=5-(state.pqFiles||[]).length;
+        state.pqFiles=(state.pqFiles||[]).concat(picked.slice(0,Math.max(0,room)));
+        state.pqErr = picked.length>room ? 'Five documents is the limit on one request.' : '';
+        state.pqCode = '';
+        fb.value=''; render();
+      };
+    }
+    document.querySelectorAll('[data-pqdrop]').forEach(b=>b.onclick=()=>{
+      pqGrab();
+      state.pqFiles=(state.pqFiles||[]).filter((_,i)=>i!==Number(b.dataset.pqdrop));
+      state.pqErr=''; state.pqCode=''; render(); });
+
+    document.querySelectorAll('[data-pqpull]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; await window.__db.withdrawPayment(b.dataset.pqpull); });
+    document.querySelectorAll('[data-pqdoc]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; await window.__db.detachPayment(b.dataset.pqdoc); });
+
+    /* Attaching to a request that already exists — including one that has been
+     * approved, because the receipt, the stamped form and the courier slip all
+     * turn up after the payment does. One hidden input for the screen, pointed
+     * at whichever request the button belonged to. */
+    const rowFile=document.getElementById('pqRowFile');
+    document.querySelectorAll('[data-pqadd]').forEach(b=>b.onclick=()=>{
+      if(!rowFile) return;
+      state.pqAddTo=b.dataset.pqadd; rowFile.value=''; rowFile.click(); });
+    if(rowFile) rowFile.onchange=async()=>{
+      const id=state.pqAddTo, picked=[...(rowFile.files||[])];
+      rowFile.value=''; state.pqAddTo=null;
+      if(!id || !picked.length) return;
+      for(const f of picked) await window.__db.attachPayment(id, f);
+      render();
+    };
+
+    document.querySelectorAll('[data-reject]').forEach(b=>b.onclick=()=>{
+      state.reject = state.reject===b.dataset.reject ? null : b.dataset.reject; render(); });
+    const rjGo=document.getElementById('rjGo');
+    if(rjGo) rjGo.onclick=async()=>{
+      const why=(document.getElementById('rjWhy').value||'').trim();
+      if(!why){ state.rjErr='Say why — the person who raised it will read this.'; render(); return; }
+      rjGo.disabled=true;
+      const out=await window.__db.decidePayment(state.reject, false, why);
+      if(out){ state.reject=null; state.rjErr=''; }
+      render();
+    };
+
+    document.querySelectorAll('[data-approve]').forEach(b=>b.onclick=()=>{
+      state.approve = {ref:b.dataset.approve, payStatus:'', account:'', remarks:''};
+      state.reject = null; render();
+      window.scrollTo({top:0,behavior:'smooth'});
+    });`,
+  'the payment screen buttons reach the database');
+
+/* Approving. This is two database calls, not one: the decision and then what
+ * happened to the money. They are separate on purpose — approving is a
+ * judgement about whether the client has paid, and settling is a record of
+ * which account it came out of, and a portal that could not tell them apart
+ * would have no way to show a request approved but not yet paid. */
+app = swap(app,
+`    const commit = () => {
+      const r = reqs().find(x=>x.ref===state.approve.ref); if(!r) return null;
+      r.status='Approved'; r.payStatus=state.approve.payStatus; r.account=state.approve.account; r.remarks=state.approve.remarks;
+      return r;
+    };`,
+`    const commit = async () => {
+      const st = state.approve;
+      const r = reqs().find(x=>x.ref===st.ref); if(!r) return null;
+      const snap = Object.assign({}, r, {payStatus:st.payStatus, account:st.account, remarks:st.remarks});
+      if(r.status==='Pending'){
+        const out = await window.__db.decidePayment(r.id, true);
+        if(!out) return null;
+      }
+      if(st.payStatus && st.account){
+        const done = await window.__db.settlePayment(
+          r.id, st.payStatus.toLowerCase(), st.account, st.remarks);
+        if(!done) return null;
+      }
+      return snap;   // what to put in the message, before the reload redraws
+    };`,
+  'approving writes the decision and the payment separately');
+
+app = swap(app,
+`    const wa=document.getElementById('apWa'); if(wa) wa.onclick=()=>{
+      const r=commit(); if(!r) return;
+      window.open('https://wa.me/?text='+encodeURIComponent(waMessage(r)),'_blank','noopener');
+      state.approve={ref:null,payStatus:'',account:'',remarks:''}; render();
+    };`,
+`    const wa=document.getElementById('apWa'); if(wa) wa.onclick=async()=>{
+      // The window has to be opened by the click itself, or the browser treats
+      // it as a pop-up and blocks it. So it opens first and is pointed at the
+      // message once the database has taken the approval.
+      const tab=window.open('', '_blank', 'noopener');
+      wa.disabled=true;
+      const r=await commit();
+      if(!r){ if(tab) tab.close(); wa.disabled=false; return; }
+      if(tab) tab.location='https://wa.me/?text='+encodeURIComponent(waMessage(r));
+      state.approve={ref:null,payStatus:'',account:'',remarks:''}; render();
+    };`,
+  'the WhatsApp message goes out after the approval is taken');
+
+app = swap(app,
+`    const dn=document.getElementById('apDone'); if(dn) dn.onclick=()=>{ commit(); state.approve={ref:null,payStatus:'',account:'',remarks:''}; render(); };`,
+`    const dn=document.getElementById('apDone'); if(dn) dn.onclick=async()=>{
+      dn.disabled=true;
+      const r=await commit();
+      if(!r){ dn.disabled=false; return; }
+      state.approve={ref:null,payStatus:'',account:'',remarks:''}; render(); };`,
+  'approve and close waits for the database');
+
+/* The account buttons filled the remark in from a function on ACCOUNTS. The
+ * database holds the same wording — it has to, because it fills the remark in
+ * when the app does not — so the two are kept side by side and the build
+ * checks they still agree. */
+app = swap(app,
+`    document.querySelectorAll('[data-ac]').forEach(b=>b.onclick=()=>{
+      const r = reqs().find(x=>x.ref===state.approve.ref);`,
+`    document.querySelectorAll('[data-ac]').forEach(b=>b.onclick=()=>{
+      const r = reqs().find(x=>x.ref===state.approve.ref);   // remark names the requester`,
+  'the remark still names the person who raised it');
+
+/* The file button was a picture of one: it had no input behind it and no list
+ * of what had been chosen. Five documents, ten megabytes each, exactly what
+ * the Google Form takes. */
+app = swap(app,
+`      <button class="filebtn" type="button">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        Add file <span>5 files &middot; 10 MB each</span>
+      </button>
+      <button class="btn wide" id="pqSubmit" type="button">Submit request</button>`,
+`      <input type="file" id="pqFile" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+      <button class="filebtn" id="pqPick" type="button" \${(state.pqFiles||[]).length>=5?'disabled':''}>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        Add file <span>\${(state.pqFiles||[]).length ? (state.pqFiles.length + ' of 5 chosen') : '5 files &middot; 10 MB each'}</span>
+      </button>
+      \${(state.pqFiles||[]).length ? \`<div class="pqfiles">\${state.pqFiles.map((f,i)=>\`
+        <div class="pqfile"><span>\${esc(f.name)}</span><i>\${Math.max(1,Math.round(f.size/1024))} KB</i>
+          <button type="button" data-pqdrop="\${i}" aria-label="Remove \${esc(f.name)}">&times;</button></div>\`).join('')}</div>\` : ''}
+      \${state.pqErr ? \`<div class="pqerr">\${esc(state.pqErr)}</div>\` : ''}
+      <button class="btn wide" id="pqSubmit" type="button">Submit request</button>`,
+  'the file button has a file input behind it');
+
+/* Turning one down. The prototype had no way to say no at all — the only
+ * button was Approve — which meant a request Avin would not pay simply sat
+ * there pending forever, and the consultant never learned why. */
+app = swap(app,
+`          <td class="act">\${r.status==='Pending'
+            ? \`<button class="btn" style="padding:4px 10px;font-size:12px" data-approve="\${r.ref}" type="button">Approve</button>\`
+            : \`\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}\${r.account?\`<div style="color:var(--ink3);font-size:11.5px;margin-top:3px">\${esc((ACCOUNTS.find(x=>x.id===r.account)||{}).label||'')}</div>\`:''}\`}</td>
+        </tr>\`).join('')}`,
+`          <td class="act">\${r.status==='Pending'
+            ? \`<div class="actpair">
+                 <button class="btn" style="padding:4px 10px;font-size:12px" data-approve="\${esc(r.ref)}" type="button">Approve</button>
+                 <button class="btn ghost" style="padding:4px 10px;font-size:12px" data-reject="\${esc(r.id)}" type="button">Turn down</button>
+               </div>\`
+            : \`\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}\${r.account?\`<div style="color:var(--ink3);font-size:11.5px;margin-top:3px">\${esc((ACCOUNTS.find(x=>x.id===r.account)||{}).label||'')}</div>\`:''}\${
+               r.self?\`<div class="selfnote">approved by the person who raised it</div>\`:''}\`}</td>
+        </tr>\${state.reject===r.id?\`<tr><td colspan="7" style="background:var(--badBg)">
+          <div class="rjbox">
+            <label for="rjWhy">Why is \${esc(reqName(r))} being turned down? \${esc(r.by)} will read this.</label>
+            <input id="rjWhy" placeholder="The client has not settled the invoice this sits against">
+            <div class="drow" style="margin-top:10px">
+              <button class="btn" id="rjGo" type="button">Turn it down</button>
+              <button class="btn ghost" data-reject="\${esc(r.id)}" type="button">Never mind</button>
+              \${state.rjErr?\`<span style="color:var(--bad);font-size:12.5px">\${esc(state.rjErr)}</span>\`:''}
+            </div>
+          </div></td></tr>\`:''}\`).join('')}`,
+  'a request can be turned down, with a reason');
+
+/* My own requests: what happened to it, the documents on it, and a way to take
+ * it back while it is still mine to take back. */
+app = swap(app,
+`      <tbody>\${mine.length?mine.map(r=>\`<tr><td class="n">\${esc(r.ref)}</td><td class="n">\${esc(r.date)}</td><td style="max-width:180px">\${esc(r.client)}</td><td>\${esc(r.purpose)}</td><td class="n r">\${money(r.amount,2)}</td><td>\${esc(modeLabel(r.mode))}</td><td>\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}</td><td style="color:var(--ink2);max-width:260px">\${esc(r.remarks||(r.status==='Pending'?'Waiting for Avin to approve':'—'))}</td></tr>\`).join('')
+        :'<tr><td colspan="8" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>`,
+`      <tbody>\${mine.length?mine.map(r=>\`<tr>
+        <td class="n">\${esc(r.ref)}\${r.files.length?\`<div class="pqdocs">\${r.files.map(f=>
+          f.url?\`<a href="\${esc(f.url)}" target="_blank" rel="noopener">\${esc(f.name)}</a>\`
+              :\`<span>\${esc(f.name)}</span>\`).join('')}\${r.status==='Pending'?r.files.map(f=>
+          \`<button type="button" class="dropdoc" data-pqdoc="\${esc(f.id)}" title="Remove \${esc(f.name)}">&times;</button>\`).join(''):''}</div>\`:''}</td>
+        <td class="n">\${esc(r.date)}</td>
+        <td style="max-width:180px">\${esc(r.client||'—')}</td>
+        <td>\${esc(r.purpose)}</td>
+        <td class="n r">\${money(r.amount,2)}</td>
+        <td>\${esc(modeLabel(r.mode))}</td>
+        <td>\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}</td>
+        <td style="color:var(--ink2);max-width:280px">\${
+          r.status==='Rejected' && r.why ? \`<b>Turned down:</b> \${esc(r.why)}\`
+          : r.remarks ? esc(r.remarks)
+          : r.status==='Pending' ? \`Waiting for accounts to approve
+              <button class="btn ghost sm" data-pqpull="\${esc(r.id)}" type="button" style="margin-left:8px">Withdraw</button>\`
+          : r.status==='Withdrawn' ? 'You took this one back'
+          : '&mdash;'}</td></tr>\`).join('')
+        :'<tr><td colspan="8" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>`,
+  'my own requests show what happened and can be taken back');
+
+// A queue that is empty should say so rather than draw an empty table.
+app = swap(app,
+`    <p class="cap">Your test is whether the client has paid, so the answer sits in the row instead of you looking it up.</p>`,
+`    \${reqs().length ? '' : '<p class="cap" style="padding:22px 20px;text-align:center">Nobody has raised a payment request yet.</p>'}
+    <p class="cap">Your test is whether the client has paid, so the answer sits in the row instead of you looking it up.</p>`,
+  'an empty queue says it is empty');
+
+/* A form that arrives with 3,500 already in the amount box is a form somebody
+ * submits for 3,500 by accident. It was a screenshot's convenience. */
+app = swap(app,
+`<input id="pqAmount" class="num" type="number" value="3500" step="0.01">`,
+`<input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0">`,
+  'the amount box starts empty');
+
+// and the count of my requests is a count, not a count in 2026
+app = swap(app,
+`<span class="hint">\${mine.length} in 2026</span>`,
+`<span class="hint">\${mine.length ? mine.length + (mine.length===1?' request':' requests') : 'none yet'}</span>`,
+  'my requests are counted, not dated');
+
+/* ============================================ two screens, not one crowded one
+ *
+ * Raising a request and deciding on one are two different jobs done by two
+ * different people at two different moments, and they were sharing a screen
+ * because the prototype had one panel and grew. Avin asked for them apart, and
+ * he is right: the queue is the thing he opens in the morning, and the form is
+ * the thing a consultant opens once and leaves.
+ *
+ *   Payment request    raise one, see what came back, and my own requests
+ *   Approve payments   the queue, and the approval panel it opens
+ */
+app = swap(app,
+`  {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},`,
+`  {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
+  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
+   gate:u=>coInView(u)==='corplex' && canUpload(u)},`,
+  'approving payments is its own screen');
+
+app = swap(app,
+  `payment:vPayment,`,
+  `payment:vPayment, payapprove:vPayApprove,`,
+  'and its own view');
+
+/* The queue, on its own, with the columns Avin asked for:
+ * Date · By · Order number · Amount · Client · Purpose · Mode · Vendor ·
+ * Document · approve or turn down.
+ *
+ * Two things kept that were not on his list, both because losing them would
+ * cost something real. Whether the CLIENT HAS PAID rides under the client
+ * name, because that is his stated test for approving at all and it was the
+ * reason the old table had a column of its own for it. And the REFERENCE
+ * rides under the order number, because it is what the WhatsApp message and
+ * every later conversation calls the request. */
+/* One status pill and one mode label, shared. They were locals inside
+ * vPayment, which is fine while there is one payment screen and a silent crash
+ * the moment there are two: vPayApprove reached for statusPill2, threw
+ * mid-render, and left an approval half-done with nothing on screen to say so.
+ * The decision had been taken and the payment had not. */
+app = swap(app,
+`  const statusPill2 = s => \`<span class="pill \${s==='Paid'?'good':(s==='Approved'?'good':(s==='Rejected'?'bad':'warn'))}"><span class="dt"></span>\${esc(s)}</span>\`;
+  const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;`,
+`  // statusPill2 and modeLabel are declared once, beside vPayApprove`,
+  'one status pill, not one per screen');
+
+app = swap(app,
+`function vPayment(){`,
+`function statusPill2(s){
+  return \`<span class="pill \${s==='Paid'||s==='Approved'?'good':(s==='Rejected'?'bad':(s==='Withdrawn'?'mute':'warn'))}"><span class="dt"></span>\${esc(s)}</span>\`;
+}
+function modeLabel(id){ return (MODES.find(m=>m.id===id)||{}).label || id; }
+/* The same four, said in one word. 'Card (for portals)' is a whole column's
+ * width of its own, and on a table that has to fit sixteen columns the
+ * parenthesis is the first thing that has to go. The long name is still on the
+ * form, where there is room to explain. */
+const MODESHORT = {card:'Card', transfer:'Transfer', link:'Link', cash:'Cash'};
+function modeShort(id){ return MODESHORT[id] || modeLabel(id); }
+
+function vPayApprove(){
+  const modeLabel = id => (MODES.find(m=>m.id===id)||{}).label || id;
+  const queue = reqs().filter(r=>r.status==='Pending');
+  const done  = reqs().filter(r=>r.status!=='Pending');
+  const paidPill = c => c.known
+    ? (c.paid ? '<span class="pill good"><span class="dt"></span>client paid</span>'
+              : \`<span class="pill bad"><span class="dt"></span>AED \${money(c.out)} owing</span>\`)
+    : '<span class="pill mute">not in the sales book</span>';
+
+  /* The reconciliation half of a decided row: paid or not, out of which
+   * account, and Avin's own three ticks. Approving and paying are days apart —
+   * 'payments are approved, but not paid yet' — so these are recorded when
+   * they happen rather than guessed at the moment of the decision. */
+  const recon = r => {
+    if(r.status !== 'Approved') return '<td></td><td></td><td></td><td></td><td></td>';
+    const busy = state.reconBusy === r.id;
+    // A bare box under a named column, the way it is on the sheet Avin keeps.
+    const tick = k => \`<td class="c"><input type="checkbox" class="rtick"
+      data-recon="\${esc(r.id)}" data-field="\${k}"\${r[k]?' checked':''}\${busy?' disabled':''}></td>\`;
+    return \`
+      <td><select class="acsel st\${esc((r.payStatus||'Unpaid').toLowerCase())}"
+        data-paystat="\${esc(r.id)}"\${busy?' disabled':''}>\${PAYSTATUS.map(st=>
+        \`<option value="\${esc(st)}"\${(r.payStatus||'Unpaid')===st?' selected':''}>\${esc(st)}</option>\`).join('')}
+      </select></td>
+      <td><select class="acsel" data-acct="\${esc(r.id)}"\${busy?' disabled':''}>
+        <option value=""\${r.account?'':' selected'}>&mdash;</option>
+        \${OFFERED().concat(ACCOUNTS.filter(a=>a.retired && a.id===r.account)).map(a=>
+          \`<option value="\${a.id}"\${r.account===a.id?' selected':''}>\${esc(a.label)}</option>\`).join('')}
+      </select></td>
+      \${tick('books')}\${tick('bigin')}\${tick('receipt')}\`;
+  };
+
+  const row = (r, withRecon) => {
+    const c = clientStatus(r.client);
+    return \`<tr\${state.approve.ref===r.ref?' style="background:var(--accentSoft)"':''}>
+      <td class="n nw">\${esc(r.date)}</td>
+      <td>\${nm(r.by)}</td>
+      <td class="n nw">\${esc(r.order||'—')}</td>
+      <td class="n r nw">\${payAmt(r)}</td>
+      <td class="cell">\${esc(r.client||'—')}<div class="sub">\${paidPill(c)}</div></td>
+      <td class="cell">\${esc(r.purpose)}</td>
+      <td>\${esc(modeShort(r.mode))}</td>
+      <td class="cell">\${esc(r.payee||'—')}</td>
+      <td>\${r.files.length ? r.files.map(f=>f.url
+            ? \`<a class="doc" href="\${esc(f.url)}" target="_blank" rel="noopener" title="\${esc(f.name)}">\${esc(f.name)}</a>\`
+            : \`<span class="doc">\${esc(f.name)}</span>\`).join('')
+          : '<span style="color:var(--ink3)">—</span>'}</td>
+      <td class="cell">\${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+      <td class="act">\${r.status==='Pending'
+        ? \`<div class="actpair">
+             <button class="btn sm" data-approve="\${esc(r.ref)}" type="button">Approve</button>
+             <button class="btn ghost sm x" data-reject="\${esc(r.id)}" type="button" title="Turn it down">&times;</button>
+           </div>\`
+        : \`\${statusPill2(r.status)}\${
+           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}\`}</td>
+      \${withRecon ? recon(r) : ''}
+    </tr>\${state.reject===r.id?\`<tr><td colspan="11" style="background:var(--badBg)">
+      <div class="rjbox">
+        <label for="rjWhy">Why is \${esc(reqName(r))} being turned down? \${esc(r.by)} will read this.</label>
+        <input id="rjWhy" placeholder="The client has not settled the invoice this sits against">
+        <div class="drow" style="margin-top:10px">
+          <button class="btn" id="rjGo" type="button">Turn it down</button>
+          <button class="btn ghost" data-reject="\${esc(r.id)}" type="button">Never mind</button>
+          \${state.rjErr?\`<span style="color:var(--bad);font-size:12.5px">\${esc(state.rjErr)}</span>\`:''}
+        </div>
+      </div></td></tr>\`:''}\`;
+  };
+
+  const cols = \`<th>Date</th><th>By</th><th>Order no.</th><th class="r">Amount</th>
+      <th>Client</th><th>Purpose</th><th>Mode</th><th>Vendor</th>
+      <th>Document</th><th>Additional information</th>\`;
+
+  /* Percentages, with table-layout:fixed. A table sized by its content has a
+   * minimum width it will not go below, and sixteen columns of it came to
+   * 1,610px — which is why this scrolled sideways on a laptop AND on a 1920
+   * monitor, where the browser window is never the whole screen. Percentages
+   * have no minimum: the columns give up width in proportion and the table is
+   * exactly as wide as the space it is in, whatever that is.
+   *
+   * The share each one gets is roughly what it needs: a date and an amount are
+   * a known size, a purpose and a vendor are not. */
+  /* Summing to a little under a hundred. At exactly 100 the browser still
+   * finds a couple of dozen pixels of slop and shows a scrollbar over blank
+   * space, which is the one thing this whole change is meant to remove. */
+  /* One set of shares for both payment tables:
+   *   date, by, order, amount, client, purpose, mode, vendor, document, note,
+   *   then status, paid through, Bk, Bg, Rc and the pencil. */
+  const SHARES = [5.4, 3.8, 5.0, 6.4, 12.9, 12.2, 4.0, 8.1, 5.8, 12.4,
+                  6.6, 7.4, 2.2, 2.2, 2.4, 3.2];
+  const colgroup = ws => \`<colgroup>\${ws.map(w =>
+    \`<col style="width:\${(w * 0.94).toFixed(2)}%">\`).join('')}</colgroup>\`;
+  const wide   = colgroup([7.6, 7.4, 6.6, 6.6, 10.8, 10.8, 5.4, 10.0, 8.0, 11.2, 15.6]);
+  // Books, Bigin and Receipt are one word wide, and one word is wider than a
+  // checkbox: at 2.8% the RECEIPT heading hung 23px past the table and put the
+  // scrollbar back on its own.
+  const widest = colgroup([6.6, 6.0, 5.6, 5.8, 6.8, 6.8, 4.2, 7.2, 6.6, 9.0, 6.8, 7.8, 8.2, 4.2, 4.2, 4.2]);
+
+  const head  = \`\${wide}<thead><tr>\${cols}<th class="act"></th></tr></thead>\`;
+  const head2 = \`\${widest}<thead><tr>\${cols}<th class="act"></th>
+      <th>Payment status</th><th>Paid through</th>
+      <th class="c">Books</th><th class="c">Bigin</th><th class="c">Receipt</th></tr></thead>\`;
+
+  return \`
+  \${state.approve.ref ? vApprovePanel() : ''}
+  <section class="panel">
+    <header><h3>Requests waiting on you</h3>
+      <span class="hint">\${queue.length ? \`\${queue.length} pending &middot; AED \${money(queue.reduce((s,r)=>s+r.amount,0),2)} &middot; \${queue.filter(r=>clientStatus(r.client).paid).length} where the client has paid\` : 'nothing waiting'}</span></header>
+    <div class="tw paytab"><table>\${head}
+      <tbody>\${queue.length ? queue.map(r=>row(r,false)).join('')
+        : '<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">Nothing is waiting on you.</td></tr>'}</tbody>
+    </table></div>
+    <p class="cap">Your test is whether the client has paid, so the answer sits under the client's name instead of you looking it up. <b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>Already decided</h3><span class="hint">\${done.length ? \`\${done.length} request\${done.length===1?'':'s'}\` : 'none yet'}</span></header>
+    <div class="tw paytab recon"><table>\${head2}
+      <tbody>\${done.length ? done.map(r=>row(r,true)).join('')
+        : '<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>
+    </table></div>
+    <p class="cap"><b>Bk</b> Books &middot; <b>Bg</b> Bigin &middot; <b>Rc</b> Receipt.
+      A cell that is cut off says the rest when you hover it, with a Copy beside it.
+      The pencil at the end corrects a request.</p>
+  </section>\`;
+}
+
+function vPayment(){`,
+  'the approval queue is its own screen, with the columns Avin asked for');
+
+/* ------------------------------------------------ the reference goes backstage
+ *
+ * PR-2026-0001 is the portal's own numbering and Avin does not want to see it:
+ * the office runs on the order number, and showing two identifiers for one
+ * request just makes people ask which is which. The reference stays in the
+ * database, because something has to be unique when the order number is blank
+ * or repeated, and it stays in the DOM as the key the buttons use. It is only
+ * gone from the screen.
+ *
+ * Where the order number is missing, the vendor and the amount stand in — a
+ * request has to be nameable in a sentence, and 'your request' is not enough
+ * when somebody has three of them. */
+app = swap(app,
+`function statusPill2(s){`,
+`/* What to call a request when talking to a person about it. */
+function reqName(r){
+  if(!r) return 'that request';
+  if(r.order) return r.order;
+  return \`\${r.payee || 'the payment'} — AED \${money(r.amount, 2)}\`;
+}
+
+function statusPill2(s){`,
+  'a request has a name that is not its reference');
+
+app = swap(app,
+`      <h3>Approving \${esc(r.ref)}</h3>`,
+`      <h3>Approving \${esc(reqName(r))}</h3>`,
+  'nor on the approval panel');
+
+app = swap(app,
+`    <header><h3>\${esc(d.ref)} raised</h3><span class="hint">it is in the portal now</span></header>`,
+`    <header><h3>Request raised</h3><span class="hint">it is in the portal now</span></header>`,
+  'nor on the confirmation');
+
+app = swap(app,
+`        <div class="stat"><span class="k">Reference</span>
+          <span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">\${esc(d.ref)}</span>
+          <span class="n">\${d.order?'Order '+esc(d.order)+' &middot; ':''}AED \${money(d.amount,2)} &middot; \${esc(mode.label)}</span></div>`,
+`        <div class="stat"><span class="k">\${d.order ? 'Order number' : 'Raised'}</span>
+          <span class="v" style="font-size:20px;font-family:'IBM Plex Sans',sans-serif">\${esc(d.order || 'no order number')}</span>
+          <span class="n">AED \${money(d.amount,2)} &middot; \${esc(mode.label)}</span></div>`,
+  'the confirmation leads with the order number');
+
+// and the bell says the order number too
+
+
+/* And the raise screen keeps only what belongs to the person raising: the
+ * form, what came back, and their own requests. The queue and the approval
+ * panel have moved next door. */
+app = cutout(app,
+`  const queuePanel = !approver ? '' : \``,
+`    <p class="cap">Your test is whether the client has paid, so the answer sits in the row instead of you looking it up.</p>
+  </section>\`;`,
+`  const queuePanel = '';`,
+  'the queue is no longer on the raise screen');
+
+app = swap(app,
+`      \${state.approve.ref ? vApprovePanel() : ''}
+      \${state.pqDone ? vPaymentSent() : ''}`,
+`      \${state.pqDone ? vPaymentSent() : ''}`,
+  'and nor is the approval panel');
+
+/* My own requests, with the columns Avin asked for:
+ * Date · Order number · Amount · Client · Purpose · Mode · Vendor · Document ·
+ * Status · Withdraw.
+ *
+ * The remark and the reason for a refusal are not columns of their own on that
+ * list, so they sit under the status — which is where they belong anyway,
+ * being the explanation of it. Losing them would be losing the only thing that
+ * tells somebody to go and collect the cash from Nissa, or why the payment was
+ * not made. */
+app = swap(app,
+`      <thead><tr><th>Ref</th><th>Raised</th><th>Client</th><th>Purpose</th><th class="r">Amount</th><th>Mode</th><th>Status</th><th>What happens next</th></tr></thead>`,
+`      <colgroup>\${[8.6, 7.6, 10.0, 11.4, 10.6, 7.0, 11.0, 8.6, 10.6, 10.2, 4.4]
+        .map(w => \`<col style="width:\${(w*0.97).toFixed(2)}%">\`).join('')}</colgroup>
+      <thead><tr><th>Date</th><th>Order number</th><th class="r">Amount</th><th>Client</th>
+        <th>Purpose</th><th>Mode</th><th>Vendor</th><th>Document</th>
+        <th>Additional information</th><th>Status</th><th class="act"></th></tr></thead>`,
+  'my requests get the columns asked for');
+
+app = swap(app,
+`      <tbody>\${mine.length?mine.map(r=>\`<tr>
+        <td class="n">\${esc(r.ref)}\${r.files.length?\`<div class="pqdocs">\${r.files.map(f=>
+          f.url?\`<a href="\${esc(f.url)}" target="_blank" rel="noopener">\${esc(f.name)}</a>\`
+              :\`<span>\${esc(f.name)}</span>\`).join('')}\${r.status==='Pending'?r.files.map(f=>
+          \`<button type="button" class="dropdoc" data-pqdoc="\${esc(f.id)}" title="Remove \${esc(f.name)}">&times;</button>\`).join(''):''}</div>\`:''}</td>
+        <td class="n">\${esc(r.date)}</td>
+        <td style="max-width:180px">\${esc(r.client||'—')}</td>
+        <td>\${esc(r.purpose)}</td>
+        <td class="n r">\${money(r.amount,2)}</td>
+        <td>\${esc(modeLabel(r.mode))}</td>
+        <td>\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}</td>
+        <td style="color:var(--ink2);max-width:280px">\${
+          r.status==='Rejected' && r.why ? \`<b>Turned down:</b> \${esc(r.why)}\`
+          : r.remarks ? esc(r.remarks)
+          : r.status==='Pending' ? \`Waiting for accounts to approve
+              <button class="btn ghost sm" data-pqpull="\${esc(r.id)}" type="button" style="margin-left:8px">Withdraw</button>\`
+          : r.status==='Withdrawn' ? 'You took this one back'
+          : '&mdash;'}</td></tr>\`).join('')
+        :'<tr><td colspan="8" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>`,
+`      <tbody>\${mine.length?mine.map(r=>\`<tr>
+        <td class="n nw">\${esc(r.date)}</td>
+        <td class="n nw">\${esc(r.order||'—')}</td>
+        <td class="n r nw">\${payAmt(r)}</td>
+        <td class="cell">\${esc(r.client||'—')}</td>
+        <td class="cell">\${esc(r.purpose)}</td>
+        <td>\${esc(modeShort(r.mode))}</td>
+        <td class="cell">\${esc(r.payee||'—')}</td>
+        <td>\${r.files.map(f=>\`<span class="docwrap">\${f.url
+              ? \`<a class="doc" href="\${esc(f.url)}" target="_blank" rel="noopener" title="\${esc(f.name)}">\${esc(f.name)}</a>\`
+              : \`<span class="doc">\${esc(f.name)}</span>\`}\${r.status==='Pending'
+              ? \`<button type="button" class="dropdoc" data-pqdoc="\${esc(f.id)}" title="Remove \${esc(f.name)}">&times;</button>\` : ''}</span>\`).join('')
+            }\${(r.status==='Pending' || r.status==='Approved') && r.files.length < 5
+              ? \`<button type="button" class="adddoc" data-pqadd="\${esc(r.id)}">\${r.files.length?'+ another':'+ document'}</button>\`
+              : (r.files.length ? '' : '<span style="color:var(--ink3)">—</span>')}</td>
+        <td class="cell">\${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>
+        <td>\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}\${
+          r.status==='Rejected' && r.why ? \`<div class="sub bad">\${esc(r.why)}</div>\`
+          : r.remarks ? \`<div class="sub">\${esc(r.remarks)}</div>\`
+          : r.status==='Pending' ? '<div class="sub">with accounts</div>'
+          : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>
+        <td class="act">\${r.status==='Pending'
+          ? \`<button class="btn ghost sm" data-pqpull="\${esc(r.id)}" type="button">Withdraw</button>\`
+          : '<span style="color:var(--ink3)">—</span>'}</td></tr>\`).join('')
+        :'<tr><td colspan="11" style="padding:26px;text-align:center;color:var(--ink3)">You have not raised a payment request yet.</td></tr>'}</tbody></table></div>`,
+  'and the rows to go under them');
+
+app = swap(app,
+`    <div class="tw"><table>
+      <colgroup>`,
+`    <div class="tw paytab"><table>
+      <colgroup>`,
+  'my requests get the payment table styling');
+
+/* ---------------------------------------- the shape of the form, and the table
+ *
+ * Small things, each from looking at it with real requests in it.
+ */
+
+
+
+/* The last column was a dash on every row that had been decided — a column of
+ * nothing, which Avin spotted. Withdraw only ever appears on a pending row and
+ * a payment status only ever on an approved one, so the two can share it and
+ * neither ever collides with the other. That also unstacks the Status cell,
+ * where Approved and Paid were sitting on top of each other. */
+app = swap(app,
+`        <th>Additional information</th><th>Status</th><th class="act"></th></tr></thead>`,
+`        <th>Additional information</th><th>Status</th><th>Payment</th></tr></thead>`,
+  'the empty last column becomes the payment status');
+
+app = swap(app,
+`        <td>\${statusPill2(r.status)}\${r.payStatus?\` <span class="pill mute">\${esc(r.payStatus)}</span>\`:''}\${
+          r.status==='Rejected' && r.why ? \`<div class="sub bad">\${esc(r.why)}</div>\`
+          : r.remarks ? \`<div class="sub">\${esc(r.remarks)}</div>\`
+          : r.status==='Pending' ? '<div class="sub">with accounts</div>'
+          : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>
+        <td class="act">\${r.status==='Pending'
+          ? \`<button class="btn ghost sm" data-pqpull="\${esc(r.id)}" type="button">Withdraw</button>\`
+          : '<span style="color:var(--ink3)">—</span>'}</td></tr>\`).join('')`,
+`        <td>\${statusPill2(r.status)}\${
+          r.status==='Rejected' && r.why ? \`<div class="sub bad">\${esc(r.why)}</div>\`
+          : r.remarks ? \`<div class="sub">\${esc(r.remarks)}</div>\`
+          : r.status==='Pending' ? '<div class="sub">with accounts</div>'
+          : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>
+        <td>\${r.status==='Pending'
+          ? \`<button class="btn ghost sm" data-pqpull="\${esc(r.id)}" type="button">Withdraw</button>\`
+          : (r.payStatus ? \`<span class="pill \${r.payStatus==='Paid'?'good':(r.payStatus==='Initiated'?'warn':'mute')}">\${esc(r.payStatus)}</span>\`
+                         : '<span style="color:var(--ink3)">—</span>')}</td></tr>\`).join('')`,
+  'and Paid stops sitting on top of Approved');
+
+// order number is short, and the client name is not
+app = swap(app,
+`      <colgroup>\${[8.6, 7.6, 10.0, 11.4, 10.6, 7.0, 11.0, 8.6, 10.6, 10.2, 4.4]`,
+`      <colgroup>\${[9.6, 6.2, 10.2, 12.0, 9.8, 6.6, 9.6, 9.2, 10.2, 9.6, 7.0]`,
+  'the client gets the room the order number was not using');
+
+app = swap(app,
+`      <thead><tr><th>Date</th><th>Order number</th><th class="r">Amount</th><th>Client</th>`,
+`      <thead><tr><th>Date</th><th>Order #</th><th>Amount</th><th>Client</th>`,
+  'Order # is what it is called');
+
+
+
+
+
+/* The confirmation panel goes.
+ *
+ * It was written when the form stood alone and the list was somewhere below;
+ * a whole panel explaining that the request had been raised was the only proof
+ * there was. Now the two sit side by side and the new row appears at the top
+ * of My requests as the button is pressed — which is better proof than a panel
+ * saying so, and Avin is right that the panel is then just something to close.
+ *
+ * What survives is one line, because a table that already had rows in it does
+ * not obviously change when it gains one, and 'did that work' deserves an
+ * answer that is not 'look carefully'.
+ */
+app = swap(app,
+`  const form = \``,
+`  const raised = state.pqDone ? \`<div class="pqok">
+    <b>\${esc(state.pqDone.order || 'Your request')} raised</b> &mdash; it is at the top of the list, with accounts.
+    \${state.pqDone.notAttached && state.pqDone.notAttached.length
+      ? \`<br><span class="bad">\${esc(state.pqDone.notAttached.join(', '))} did not go up &mdash; open the request and attach it again.</span>\`
+      : ''}</div>\` : '';
+
+  const form = \``,
+  'and becomes one line above the form');
+
+app = swap(app,
+`  <section class="panel payform">
+    <header><h3>Raise a payment request</h3></header>
+    <div class="pad formbody">`,
+`  <section class="panel payform">
+    <header><h3>Raise a payment request</h3></header>
+    <div class="pad formbody">
+      \${raised}`,
+  'which sits where the form starts');
+
+
+
+// the header no longer says 'My own requests' — there is nobody else's here
+app = swap(app,
+`<h3>\${approver?'My own requests':'My requests'}</h3>`,
+`<h3>My requests</h3>`,
+  'the panel is just my requests now');
+
+// one file input for the whole screen, pointed at whichever request the
+// '+ document' button belonged to
+app = swap(app,
+`  return \`<div class="paygrid">`,
+`  return \`<input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="paygrid">`,
+  'somewhere for a later document to come from');
+
+/* ============================================== the accounts the money leaves by
+ *
+ * One Qashio card became three, so 'use my Qashio Card' stopped identifying
+ * anything and the last four digits are what everybody calls them by. Mashreq
+ * Card is not on the list Avin gave and is no longer offered — but the
+ * database still accepts it, because payments already made carry it and a
+ * dropped option must never make a past row unreadable.
+ */
+app = swap(app,
+`const ACCOUNTS = [
+  {id:'petty',   label:'Petty Cash',      remark:c=>\`Nissa, please handover cash to "\${c}"\`,
+   who:['Nissa Muradova — hands over the cash']},
+  {id:'mashreq', label:'Mashreq (AED)',   remark:()=>'Payment initiated. To be approved by Miraziz',
+   who:['Miraziz Makhamatzhanov — authorises the transfer']},
+  {id:'qashio',  label:'Qashio - 9073',   remark:()=>'Use my Qashio Card. I will authorize it',
+   who:['Avin Mascarenhas — authorises the card']},
+  {id:'mcard',   label:'Mashreq Card',    remark:()=>'Use Mashreq Card. OTP will be provided by Miraziz',
+   who:['Miraziz Makhamatzhanov — provides the OTP']}
+];`,
+`const ACCOUNTS = [
+  {id:'petty',      label:'Petty Cash',    remark:c=>\`Nissa, please handover cash to "\${c}"\`,
+   who:['Nissa Muradova — hands over the cash']},
+  {id:'mashreq',    label:'Mashreq (AED)', remark:()=>'Payment initiated. To be approved by Miraziz',
+   who:['Miraziz Makhamatzhanov — authorises the transfer']},
+  {id:'qashio',     label:'Qashio - 9073', remark:()=>'Use my Qashio Card 9073. I will authorize it',
+   who:['Avin Mascarenhas — authorises the card']},
+  {id:'qashio9444', label:'Qashio - 9444', remark:()=>'Use my Qashio Card 9444. I will authorize it',
+   who:['Avin Mascarenhas — authorises the card']},
+  {id:'qashio3639', label:'Qashio - 3639', remark:()=>'Use my Qashio Card 3639. I will authorize it',
+   who:['Avin Mascarenhas — authorises the card']},
+  /* Not offered any more — it is not on the list Avin gave. It stays here so
+   * that a payment already made through it still says what it says, rather
+   * than showing a blank where an account used to be. */
+  {id:'mcard',      label:'Mashreq Card',  retired:true,
+   remark:()=>'Use Mashreq Card. OTP will be provided by Miraziz',
+   who:['Miraziz Makhamatzhanov — provides the OTP']}
+];
+const OFFERED = () => ACCOUNTS.filter(a => !a.retired);`,
+  'three Qashio cards, and one account kept only for the past');
+
+app = swap(app,
+`            \${ACCOUNTS.map(x=>\`<button type="button" data-ac="\${x.id}" aria-pressed="\${st.account===x.id}" style="flex:1;white-space:nowrap">\${esc(x.label)}</button>\`).join('')}`,
+`            \${OFFERED().map(x=>\`<button type="button" data-ac="\${x.id}" aria-pressed="\${st.account===x.id}" style="flex:1;white-space:nowrap">\${esc(x.label)}</button>\`).join('')}`,
+  'the approval panel offers the five that are current');
+
+/* The reconciliation controls. Each one is a single field of a single row, so
+ * each is its own call: somebody works down the Paid column on Tuesday and the
+ * Books column on Friday, and neither should have to know about the other. */
+app = swap(app,
+`    document.querySelectorAll('[data-ps]').forEach(b=>b.onclick=()=>{ state.approve.payStatus=b.dataset.ps; render(); });`,
+`    document.querySelectorAll('[data-ps]').forEach(b=>b.onclick=()=>{ state.approve.payStatus=b.dataset.ps; render(); });
+
+    const recon = async (id, patch) => {
+      state.reconBusy = id; render();
+      await window.__db.reconcilePayment(id, patch);
+      state.reconBusy = null; render();
+    };
+    document.querySelectorAll('[data-paystat]').forEach(sel=>sel.onchange=()=>
+      recon(sel.dataset.paystat, {payStatus: sel.value.toLowerCase()}));
+    document.querySelectorAll('[data-acct]').forEach(sel=>sel.onchange=()=>{
+      if(!sel.value) return;              // '— not yet —' is not a change to make
+      recon(sel.dataset.acct, {account: sel.value}); });
+    document.querySelectorAll('[data-recon]').forEach(cb=>cb.onchange=()=>
+      recon(cb.dataset.recon, {[cb.dataset.field]: cb.checked}));`,
+  'the reconciliation list writes one field at a time');
+
+/* ------------------------------------------------- documents open over the page
+ *
+ * A signed link in a new tab means leaving the portal, waiting for a PDF
+ * viewer, and then hunting for the browser's own download button — and coming
+ * back is a fresh page load. Avin asked for a pop-up, and he is right: what he
+ * is actually doing is glancing at a receipt and saving it.
+ *
+ * So a document opens over the screen, with a download beside it. Images show
+ * as images, everything else in a frame; either way the link underneath is the
+ * same signed URL, so saving it is one click and the page behind is untouched.
+ */
+app = swap(app,
+`function vPayApprove(){`,
+`function vDocPop(){
+  const d = state.doc; if(!d) return '';
+  const img = /\\.(png|jpe?g|webp|heic|gif)$/i.test(d.name || '');
+  return \`
+  <div class="docpop" id="docPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="\${esc(d.name)}">
+      <header>
+        <b>\${esc(d.name)}</b>
+        <a class="btn ghost sm" href="\${esc(d.url)}" download="\${esc(d.name)}" target="_blank" rel="noopener">Download</a>
+        <button class="btn ghost sm" id="docShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody">\${img
+        ? \`<img src="\${esc(d.url)}" alt="\${esc(d.name)}">\`
+        : \`<iframe src="\${esc(d.url)}" title="\${esc(d.name)}"></iframe>\`}</div>
+    </div>
+  </div>\`;
+}
+
+function vPayApprove(){`,
+  'a document opens over the page');
+
+// every document link on both payment screens opens the pop-up instead
+app = swap(app,
+`  return \`
+  \${state.approve.ref ? vApprovePanel() : ''}
+  <section class="panel">
+    <header><h3>Requests waiting on you</h3>`,
+`  return \`
+  \${vDocPop()}
+  \${state.approve.ref ? vApprovePanel() : ''}
+  <section class="panel">
+    <header><h3>Requests waiting on you</h3>`,
+  'the pop-up lives on the approvals screen');
+
+app = swap(app,
+`      <td>\${r.files.length ? r.files.map(f=>f.url
+            ? \`<a class="doc" href="\${esc(f.url)}" target="_blank" rel="noopener" title="\${esc(f.name)}">\${esc(f.name)}</a>\`
+            : \`<span class="doc">\${esc(f.name)}</span>\`).join('')
+          : '<span style="color:var(--ink3)">—</span>'}</td>`,
+`      <td>\${r.files.length ? r.files.map(f=>f.url
+            ? \`<button type="button" class="doc" data-popdoc="\${esc(f.url)}" data-name="\${esc(f.name)}" title="\${esc(f.name)}">\${esc(f.name)}</button>\`
+            : \`<span class="doc">\${esc(f.name)}</span>\`).join('')
+          : '<span style="color:var(--ink3)">—</span>'}</td>`,
+  'the queue opens documents over the page');
+
+app = swap(app,
+`        <td>\${r.files.map(f=>\`<span class="docwrap">\${f.url
+              ? \`<a class="doc" href="\${esc(f.url)}" target="_blank" rel="noopener" title="\${esc(f.name)}">\${esc(f.name)}</a>\`
+              : \`<span class="doc">\${esc(f.name)}</span>\`}\${r.status==='Pending'`,
+`        <td>\${r.files.map(f=>\`<span class="docwrap">\${f.url
+              ? \`<button type="button" class="doc" data-popdoc="\${esc(f.url)}" data-name="\${esc(f.name)}" title="\${esc(f.name)}">\${esc(f.name)}</button>\`
+              : \`<span class="doc">\${esc(f.name)}</span>\`}\${r.status==='Pending'`,
+  'and so does my own list');
+
+app = swap(app,
+`    const rowFile=document.getElementById('pqRowFile');`,
+`    // data-doc already belongs to the documents screen; this is its own name
+    document.querySelectorAll('[data-popdoc]').forEach(b=>b.onclick=()=>{
+      state.doc={url:b.dataset.popdoc, name:b.dataset.name}; render(); });
+    const shut=document.getElementById('docShut');
+    if(shut) shut.onclick=()=>{ state.doc=null; render(); };
+    const pop=document.getElementById('docPop');
+    if(pop) pop.onclick=e=>{ if(e.target===pop){ state.doc=null; render(); } };
+
+    const rowFile=document.getElementById('pqRowFile');`,
+  'and the pop-up closes');
+
+/* ------------------------------------------- one page, two tabs, not two pages
+ *
+ * Approving belongs beside raising, not somewhere else in the rail. Avin asked
+ * for one entry with two tabs under it, which is also what the console does
+ * for its five sections, so the pattern already exists and this borrows it.
+ */
+app = swap(app,
+`  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
+   gate:u=>coInView(u)==='corplex' && canUpload(u)},`,
+`  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
+   gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},`,
+  'approving is a tab, not a rail entry');
+
+app = swap(app,
+`function vPayApprove(){`,
+`/* The two tabs of the payment page. Only accounts sees the second one, so for
+ * everybody else there is nothing to draw and the bar does not appear. */
+function payBar(){
+  if(!canUpload(state.user)) return '';
+  const tabs = [['payment','Request for payment'], ['payapprove','Approve payments']];
+  const waiting = reqs().filter(r=>r.status==='Pending').length;
+  return \`<div class="subbar"><div class="subtabs">\${tabs.map(([id,label])=>
+    \`<button data-paytab="\${id}" aria-current="\${state.tab===id}" type="button">\${esc(label)}\${
+      id==='payapprove' && waiting ? \` <i class="cnt">\${waiting}</i>\` : ''}</button>\`).join('')}</div></div>\`;
+}
+
+function vPayApprove(){`,
+  'the two tabs of the payment page');
+
+app = swap(app,
+`  return \`
+  \${vDocPop()}
+  \${state.approve.ref ? vApprovePanel() : ''}`,
+`  return \`
+  \${vDocPop()}
+  \${payBar()}
+  \${state.approve.ref ? vApprovePanel() : ''}`,
+  'the bar sits on the approvals tab');
+
+app = swap(app,
+`    document.querySelectorAll('[data-popdoc]').forEach(b=>b.onclick=()=>{`,
+`    document.querySelectorAll('[data-paytab]').forEach(b=>b.onclick=()=>{
+      state.tab=b.dataset.paytab; state.approve={ref:null,payStatus:'',account:'',remarks:''};
+      state.reject=null; render(); });
+    document.querySelectorAll('[data-popdoc]').forEach(b=>b.onclick=()=>{`,
+  'and the tabs switch');
+
+// the title follows the tab, since both live under one rail entry
+// both tabs sit under one rail entry, so both carry its title
+app = swap(app,
+`  const ttl = MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;`,
+`  const ttl = state.tab === 'payapprove' ? 'Payment request'
+            : MOBILE() ? (PAGETITLE[t.id] || t.label || t.title) : t.title;`,
+  'one page title over both tabs');
+
+/* --------------------------------------------------- room for eleven columns
+ *
+ * The raise screen was a fixed-height two-column layout with the form on the
+ * left and everything else squeezed into what was left. That was fine when the
+ * right-hand side held a queue of six columns. My own requests now carries
+ * eleven — date, order number, amount, client, purpose, mode, vendor, document,
+ * additional information, status and a way to withdraw — and in a 900px pane
+ * the last three fell off the edge and the vendor name wrapped over three
+ * lines.
+ *
+ * So the form and the confirmation keep the two columns, and the table gets
+ * the width of the page underneath them. The screen scrolls like every other
+ * screen instead of being pinned to the viewport.
+ */
+app = swap(app,
+`  return \`<input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="paygrid">
+    <div class="paycol left">\${form}</div>
+    <div class="paycol right">
+      \${state.pqDone ? vPaymentSent() : ''}
+      \${queuePanel}
+      \${minePanel}
+    </div>
+  </div>\`;`,
+`  return \`<input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="payone">
+    <div>\${form}</div>
+    <div>\${state.pqDone ? vPaymentSent() : ''}</div>
+  </div>
+  \${minePanel}\`;`,
+  'the form on top, the table across the page');
+
+app = swap(app,
+`  return \`<input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="payone">`,
+`  return \`\${vDocPop()}\${payBar()}
+  <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="payone">`,
+  'and on the raise screen, with the tabs above it');
+
+app = swap(app,
+`  mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile'].includes(state.tab));`,
+`  mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));`,
+  'and gets the width the columns need');
+
+
+
+/* --------------------------------------------- a form that survives a refusal
+ *
+ * What Avin saw when the first real request was refused: he pressed Submit,
+ * everything he had typed vanished, and nothing appeared to happen. Three
+ * separate mistakes stacked up to produce that.
+ *
+ *   The failing call ended in reload(), which redraws the screen — and the
+ *   form is drawn from nothing, so a redraw empties it. Losing somebody's
+ *   typing is bad on its own; losing it at the exact moment something went
+ *   wrong is what made the failure invisible.
+ *
+ *   The only report of the failure was a toast that removes itself after six
+ *   seconds. An error about a form belongs on the form, and stays until it is
+ *   fixed.
+ *
+ *   And the toast said 'The payment request did not save' — the app's words
+ *   for it, not the database's. The database usually says something precise
+ *   and useful, and it was being thrown away.
+ */
+app = swap(app,
+`<div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431"></div>`,
+`<div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431" value="\${esc(KEPT().order)}"></div>`,
+  'the order number survives a refusal');
+
+app = swap(app,
+`<input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0">`,
+`<input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="\${esc(KEPT().amount ? String(KEPT().amount) : '')}">`,
+  'and the amount');
+
+app = swap(app,
+`<input id="pqClient" autocomplete="off" spellcheck="false" placeholder="Start typing — two letters is enough">`,
+`<input id="pqClient" autocomplete="off" spellcheck="false" placeholder="Start typing — two letters is enough" value="\${esc(KEPT().client)}">`,
+  'and the client');
+
+app = swap(app,
+`<div class="field"><label for="pqPurpose">Purpose of payment <i>*</i></label><input id="pqPurpose" placeholder="Trade licence renewal, translator fee…"></div>`,
+`<div class="field"><label for="pqPurpose">Purpose of payment <i>*</i></label><input id="pqPurpose" placeholder="Trade licence renewal, translator fee…" value="\${esc(KEPT().purpose)}"></div>`,
+  'and the purpose');
+
+app = swap(app,
+`<div class="field"><label for="pqPayee">Vendor name <i>*</i></label><input id="pqPayee" placeholder="Who is being paid"></div>`,
+`<div class="field"><label for="pqPayee">Vendor name <i>*</i></label><input id="pqPayee" placeholder="Who is being paid" value="\${esc(KEPT().payee)}"></div>`,
+  'and the vendor');
+
+app = swap(app,
+`<select id="pqMode">\${MODES.map(m=>\`<option value="\${m.id}">\${esc(m.label)}</option>\`).join('')}</select>`,
+`<select id="pqMode">\${MODES.map(m=>\`<option value="\${m.id}"\${KEPT().mode===m.id?' selected':''}>\${esc(m.label)}</option>\`).join('')}</select>`,
+  'and how it was to be paid');
+
+app = swap(app,
+`<div class="field"><label for="pqNote">Additional information (if any)</label><input id="pqNote" placeholder="Anything Avin should know"></div>`,
+`<div class="field"><label for="pqNote">Additional information (if any)</label><input id="pqNote" placeholder="Anything Avin should know" value="\${esc(KEPT().extra)}"></div>`,
+  'and the note');
+
+// and the failure itself, said in the database's own words, on the form
+app = swap(app,
+`      \${state.pqErr ? \`<div class="pqerr">\${esc(state.pqErr)}</div>\` : ''}`,
+`      \${state.pqErr ? \`<div class="pqerr"><b>The request did not go through.</b><br>\${esc(state.pqErr)}\${
+        state.pqCode ? \`<br><i>\${esc(state.pqCode)}</i>\` : ''}</div>\` : ''}`,
+  'the refusal is on the form, in full');
+
+app = swap(app,
+`function vPaymentSent(){`,
+`/* Whatever is in the form right now, remembered.
+ *
+ * This screen redraws for reasons that have nothing to do with the person
+ * typing into it: attaching a document redraws, removing one redraws, and a
+ * decision taken by somebody else reloads the data and redraws. The form is
+ * built from scratch each time, so every one of those was quietly emptying it.
+ *
+ * That is what was actually wrong with 'no request is going through'. Avin
+ * filled the form in, attached a PDF — which redrew — and every field he had
+ * typed went blank. Pressing Submit then failed on the first empty field, and
+ * the message named a field he had definitely filled in, which reads as the
+ * portal being broken rather than as the form having been wiped.
+ *
+ * So the form is read into state on every keystroke, and drawn back from it.
+ * Nothing that redraws can take it away now, whatever caused the redraw. */
+function pqGrab(){
+  const v = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+  if(document.getElementById('pqPurpose') === null) return;   // not on screen
+  const f = state.pqForm || (state.pqForm = {});
+  const put = (k, id) => { const x = v(id); if(x !== undefined) f[k] = x; };
+  put('order','pqOrder'); put('amount','pqAmount'); put('client','pqClient');
+  put('purpose','pqPurpose'); put('payee','pqPayee'); put('extra','pqNote');
+  put('mode','pqMode');
+}
+
+/* What was typed, so a redraw can put it back. */
+function KEPT(){
+  const f = state.pqForm || {};
+  return {order:f.order||'', amount:f.amount||'', client:f.client||'',
+          purpose:f.purpose||'', payee:f.payee||'', extra:f.extra||'', mode:f.mode||''};
+}
+
+function vPaymentSent(){`,
+  'somewhere to keep it');
+
+/* ------------------------------------- telling the person who raised it
+ *
+ * The bell told Avin what was waiting on him and told the consultant nothing
+ * at all. Which is the same failure the Google Form had, only quieter: a
+ * request approved on Monday, and the person who raised it finding out on
+ * Thursday because they happened to look.
+ *
+ * So the bell now carries both halves. The approver's is a standing task and
+ * stays until the queue is empty. The consultant's is a notification and goes
+ * once they have been to the screen — a nudge that cannot be cleared is a
+ * nudge people learn to ignore, and the bell has to stay worth reading.
+ */
+app = swap(app,
+`  const pend = reqs().filter(r=>r.status==='Pending');
+  if(canUpload(u) && pend.length && coInView(u)==='corplex')
+    add('pay-req', \`\${pend.length} payment request\${pend.length===1?'':'s'} waiting on you\`,
+      \`AED \${money(pend.reduce((x,r)=>x+r.amount,0),2)} · oldest from \${pend[pend.length-1].by}\`, 'payment');`,
+`  const pend = reqs().filter(r=>r.status==='Pending');
+  if(canUpload(u) && pend.length && coInView(u)==='corplex')
+    add('pay-req', \`\${pend.length} payment request\${pend.length===1?'':'s'} waiting on you\`,
+      \`AED \${money(pend.reduce((x,r)=>x+r.amount,0),2)} · oldest from \${pend[pend.length-1].by}\`, 'payapprove');
+
+  // and what happened to mine, once and once only
+  reqs().filter(r=>r.by===u && !r.seen && (r.status==='Approved' || r.status==='Rejected'))
+    .forEach(r=>{
+      if(r.status==='Rejected')
+        add('pay-no-'+r.id, \`\${reqName(r)} was turned down\`,
+          r.why || 'No reason was given', 'payment', 'bad');
+      else
+        add('pay-ok-'+r.id, \`\${reqName(r)} was approved — AED \${money(r.amount,2)}\`,
+          r.remarks || (r.payStatus ? r.payStatus : 'Accounts will record the payment shortly'),
+          'payment', 'good');
+    });
+
+  // a request of mine that nobody has looked at yet, so it is not forgotten
+  reqs().filter(r=>r.by===u && r.status==='Pending').forEach(r=>
+    add('pay-wait-'+r.id, \`\${reqName(r)} is with accounts\`,
+      \`\${r.payee} · AED \${money(r.amount,2)} · raised \${r.date}\`, 'payment', 'warn'));`,
+  'the bell tells the consultant what happened to their request');
+
+/* Opening the screen is what says you have read it. Guarded so a redraw does
+ * not call it again — the reload inside it would render, which would call it
+ * again, which is a loop that runs until the tab is closed. */
+app = swap(app,
+`    const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
+    const again=document.getElementById('pqAnother');`,
+`    // every keystroke, so no redraw can cost somebody their typing
+    const body = document.querySelector('.payform .formbody');
+    if(body){
+      body.addEventListener('input', pqGrab);
+      body.addEventListener('change', pqGrab);
+    }
+    if(state.tab==='payment' && !state.pqSeen){
+      state.pqSeen = true;
+      const unread = reqs().some(r=>r.by===state.user && !r.seen
+        && (r.status==='Approved' || r.status==='Rejected'));
+      if(unread && window.__db && window.__db.seenPayments) window.__db.seenPayments();
+    }
+    const sb=document.getElementById('pqSubmit'); if(sb) sb.onclick=pqSubmit;
+    const again=document.getElementById('pqAnother');`,
+  'coming to the screen is what marks it read');
+
+// leaving the screen arms it again, so a decision taken later still nudges
+/* Remembered per browser, because it is a preference about this screen rather
+ * than anything about the person: the same account on a laptop and a monitor
+ * wants different answers. */
+app = swap(app,
+`  CHARTS = {};`,
+`  CHARTS = {};
+  {
+    const app = document.getElementById('app'), tg = document.getElementById('railTog');
+    let tucked = false;
+    try{ tucked = localStorage.getItem('corplexRail') === 'tucked'; }catch(e){}
+    app.classList.toggle('tucked', tucked);
+    if(tg && !tg.dataset.wired){
+      tg.dataset.wired = '1';
+      tg.onclick = () => {
+        const now = !document.getElementById('app').classList.contains('tucked');
+        document.getElementById('app').classList.toggle('tucked', now);
+        try{ localStorage.setItem('corplexRail', now ? 'tucked' : 'out'); }catch(e){}
+        tg.title = tg.ariaLabel = now ? 'Show the menu' : 'Hide the menu';
+      };
+    }
+    if(tg) tg.title = tg.ariaLabel = tucked ? 'Show the menu' : 'Hide the menu';
+  }`,
+  'the rail can be put away, and stays where it was put');
+
+/* Icons for the rail, which it has never had.
+ *
+ * A rail collapsed to nothing but initials is a puzzle, so 'icons only when
+ * hidden' needs icons to exist first. They earn their place expanded too: a
+ * list of sixteen words is scanned by reading, a list of sixteen marks is
+ * scanned by shape.
+ *
+ * One line each, drawn from the same 24-unit box as the icons already in the
+ * top bar so they sit at the same weight.
+ */
+app = swap(app,
+`function renderNav(){`,
+`const NAVICON = {
+  home:        'M3 11.2 12 4l9 7.2M6 9.8V20h12V9.8',
+  dashboard:   'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  commission:  'M12 3v18M16.5 7.2A4 4 0 0 0 12.8 5h-1.3a3 3 0 0 0 0 6h1a3 3 0 0 1 0 6h-1.5a4 4 0 0 1-3.5-2.2',
+  invoices:    'M6 3h9l4 4v14H6zM15 3v4h4M9 12h7M9 16h5',
+  team:        'M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM3 20a6 6 0 0 1 12 0M17 11a3 3 0 1 0-1.5-5.6M21 20a5 5 0 0 0-3.5-4.8',
+  leaderboard: 'M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0zM7 5H4v2a3 3 0 0 0 3 3M17 5h3v2a3 3 0 0 1-3 3',
+  company:     'M4 21V6l7-3v18M11 21V9l7 2.5V21M2 21h20M7 9h1M7 13h1M7 17h1M14 14h1M14 18h1',
+  tools:       'M4 5h16v14H4zM4 9h16M8 13h2M8 16.5h2M14 13h2M14 16.5h2',
+  payment:     'M3 7h18v11H3zM3 11h18M7 15h4',
+  payapprove:  'M3 7h18v11H3zM3 11h18M15.5 15.5l1.6 1.6 3.2-3.4',
+  profile:     'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21a8 8 0 0 1 16 0',
+  attend:      'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM12 7.5V12l3 2',
+  people:      'M8 11a3.2 3.2 0 1 0 0-6.4A3.2 3.2 0 0 0 8 11ZM2 20a6 6 0 0 1 12 0M16.5 11.5a2.6 2.6 0 1 0 0-5.2M22 20a4.6 4.6 0 0 0-3.4-4.4',
+  requests:    'M7 3v3M17 3v3M3.5 8.5h17M4 6h16v15H4zM8.5 14.5l2.2 2.2 4.5-4.6',
+  loans:       'M3 8h18v11H3zM3 12h18M6.5 5.5 17 3.2M7 15.5h3',
+  myslip:      'M6 3h12v18l-3-2-3 2-3-2-3 2zM9.5 8h5M9.5 12h5M9.5 16h3',
+  myticket:    'M3 10.5a2 2 0 0 0 0 3V18h18v-4.5a2 2 0 0 1 0-3V6H3zM9 6v12'
+};
+function navIcon(id){
+  const d = NAVICON[id];
+  if(!d) return '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>';
+  return \`<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+    stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="\${d}"/></svg>\`;
+}
+
+function renderNav(){`,
+  'the rail has icons, so it can be collapsed to them');
+
+app = swap(app,
+`  function btn(t){ return \`<button class="nav" data-tab="\${t.id}" aria-current="\${state.tab===t.id}" type="button">\${esc(t.label)}</button>\`; }`,
+`  // the title is what a collapsed rail has instead of the word
+  function btn(t){ return \`<button class="nav" data-tab="\${t.id}" aria-current="\${state.tab===t.id}" type="button" title="\${esc(t.label)}">\${navIcon(t.id)}<span>\${esc(t.label)}</span></button>\`; }`,
+  'and every tab carries one');
+
+/* ===================================== the trims Avin asked for after using it
+ *
+ * Each of these is small and each has a reason from the desk rather than from
+ * the design:
+ *
+ *   THE CLIENT'S BALANCE COMES OFF. It read straight off the sales workbook,
+ *   which is uploaded when it is uploaded — so a client who paid last week
+ *   still showed as owing, and a figure that is confidently wrong is worse
+ *   than no figure. It was my idea, not his, and it goes.
+ *
+ *   THE APPROVED PILL COMES OFF the decided list. Almost every row on it says
+ *   Approved; a column that says the same thing all the way down is a column
+ *   of nothing. Rejected and Withdrawn still show, because those are the rows
+ *   worth spotting.
+ *
+ *   PAYMENT STATUS becomes STATUS, BY becomes a first name, and the space
+ *   that frees goes to the client's name, which was the column running out.
+ */
+app = swap(app,
+`  const paidPill = c => c.known
+    ? (c.paid ? '<span class="pill good"><span class="dt"></span>client paid</span>'
+              : \`<span class="pill bad"><span class="dt"></span>AED \${money(c.out)} owing</span>\`)
+    : '<span class="pill mute">not in the sales book</span>';
+`,
+``,
+  'the sales workbook stops being quoted at the payment screen');
+
+app = swap(app,
+`      <td class="cell">\${esc(r.client||'—')}<div class="sub">\${paidPill(c)}</div></td>`,
+`      <td class="cell">\${esc(r.client||'—')}</td>`,
+  'and the client is just the client');
+
+app = swap(app,
+`  const row = (r, withRecon) => {
+    const c = clientStatus(r.client);
+    return`,
+`  const row = (r, withRecon) => {
+    return`,
+  'nothing left to look up');
+
+// the queue's own summary counted them too
+app = swap(app,
+`      <span class="hint">\${queue.length ? \`\${queue.length} pending &middot; AED \${money(queue.reduce((s,r)=>s+r.amount,0),2)} &middot; \${queue.filter(r=>clientStatus(r.client).paid).length} where the client has paid\` : 'nothing waiting'}</span></header>`,
+`      <span class="hint">\${queue.length ? \`\${queue.length} pending &middot; \${sumBy(queue)}\` : 'nothing waiting'}</span></header>`,
+  'and the summary does not either');
+
+app = swap(app,
+`    <p class="cap">Your test is whether the client has paid, so the answer sits under the client's name instead of you looking it up. <b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>`,
+`    <p class="cap"><b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>`,
+  'and the caption stops promising it');
+
+// Approved is not worth a pill on a list of approved things
+app = swap(app,
+`        : \`\${statusPill2(r.status)}\${
+           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}\`}</td>`,
+`        : \`\${r.status==='Approved' ? '' : statusPill2(r.status)}\${
+           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}\${
+           r.edits ? \`<div class="selfnote">corrected after approval\${r.editedBy?' by '+esc(NM(r.editedBy)):''}</div>\` : ''}\`}</td>`,
+  'the decided list stops saying Approved on every row');
+
+app = swap(app,
+`      <th>Payment status</th><th>Paid through</th>`,
+`      <th>Status</th><th>Paid through</th>`,
+  'Payment status is just Status');
+
+// a first name is enough to know whose it is
+app = swap(app,
+`      <td>\${nm(r.by)}</td>`,
+`      <td>\${esc(firstName(r.by))}</td>`,
+  'the requester is a first name');
+
+app = swap(app,
+`function statusPill2(s){`,
+`/* Enough to know whose it is. Nobody in the office shares a first name, and
+ * a full one took three lines in a column two words wide. */
+function firstName(n){ return String(NM(n) || '').trim().split(/\\s+/)[0] || n; }
+
+/* Amounts on this screen carry their currency, because not all of them are
+ * dirhams and a bare number that might be euros is not a figure at all. */
+function payAmt(r){ return \`\${esc(r.ccy || 'AED')} \${money(r.amount, 2)}\`; }
+function sumBy(list){
+  const per = {};
+  list.forEach(r => { per[r.ccy || 'AED'] = (per[r.ccy || 'AED'] || 0) + r.amount; });
+  return Object.entries(per).map(([c, v]) => \`\${c} \${money(v, 2)}\`).join(' + ');
+}
+
+function statusPill2(s){`,
+  'first names, and amounts that say which currency');
+
+/* The widths, redone. The gap between the order number and the amount was
+ * doing nothing and the client's name was wrapping to four lines; the ticks
+ * sat apart when they are read as one group of three. */
+app = swap(app,
+`  const wide   = colgroup([7.6, 7.4, 6.6, 6.6, 10.8, 10.8, 5.4, 10.0, 8.0, 11.2, 15.6]);`,
+`  const wide   = colgroup([7.4, 5.6, 6.0, 7.0, 13.4, 10.6, 5.2, 9.8, 7.8, 11.4, 15.8]);`,
+  'the queue gives its width to the client');
+
+app = swap(app,
+`  const widest = colgroup([6.6, 6.0, 5.6, 5.8, 6.8, 6.8, 4.2, 7.2, 6.6, 9.0, 6.8, 7.8, 8.2, 4.2, 4.2, 4.2]);`,
+`  const widest = colgroup([6.4, 4.4, 5.2, 6.2, 11.0, 7.6, 4.2, 7.6, 6.4, 8.8, 4.6, 6.6, 8.0, 4.2, 4.4, 4.4]);`,
+  'and so does the decided list');
+
+/* ================================ finding one, exporting them, and chasing them
+ *
+ * Three things the decided list needs once it is a year long rather than a
+ * week: a way to find one, a way to get them out, and a way to chase the ones
+ * waiting on somebody else.
+ */
+app = swap(app,
+`  const done  = reqs().filter(r=>r.status!=='Pending');`,
+`  const all   = reqs().filter(r=>r.status!=='Pending');
+  /* Order number and client, which are the two things anybody remembers about
+   * a payment. Not vendor or purpose: searching those turns up eleven results
+   * and the point of a search box is to turn up one. */
+  const find  = (state.paySearch || '').trim().toLowerCase();
+  const done  = !find ? all : all.filter(r =>
+    String(r.order || '').toLowerCase().includes(find) ||
+    String(r.client || '').toLowerCase().includes(find));
+
+  /* Waiting on Miraziz: initiated, and out of the Mashreq account. That pair
+   * is exactly what 'he has to authorise it in the banking portal' looks like
+   * in this table, which is why it can be gathered without anybody tagging
+   * anything. */
+  const forMiraziz = all.filter(r =>
+    r.status === 'Approved' && r.payStatus === 'Initiated' && r.account === 'mashreq');
+  const mirazizMsg = () => ['Hi Miraziz,', 'Kindly approve the following payments:', '']
+    .concat(forMiraziz.map((r, i) =>
+      \`\${i + 1}. \${r.ccy || 'AED'} \${money(r.amount, 2)} - \${r.order || '(no order number)'} - \${r.client || '(no client)'} - \${r.purpose}\`))
+    .join('\\n');`,
+  'the decided list can be searched, and the Mashreq ones gathered');
+
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Already decided</h3><span class="hint">\${done.length ? \`\${done.length} request\${done.length===1?'':'s'}\` : 'none yet'}</span></header>`,
+`  <section class="panel">
+    <header><h3>Already decided</h3>
+      <div class="dechead">
+        \${forMiraziz.length ? \`<button class="btn ghost sm" id="payWa" type="button">
+          Ask Miraziz to approve \${forMiraziz.length}</button>\` : ''}
+        <button class="btn ghost sm" id="payCsv" type="button"\${all.length?'':' disabled'}>Export CSV</button>
+        <input id="paySearch" class="paysearch" type="search" placeholder="Order number or client"
+          value="\${esc(state.paySearch || '')}" aria-label="Search the decided payments">
+      </div>
+      <span class="hint">\${find
+        ? \`\${done.length} of \${all.length}\`
+        : (all.length ? \`\${all.length} request\${all.length===1?'':'s'}\` : 'none yet')}</span></header>`,
+  'a search box, an export and a nudge for Miraziz');
+
+app = swap(app,
+`        : '<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">Nothing has been decided yet.</td></tr>'}</tbody>`,
+`        : \`<tr><td colspan="16" style="padding:26px;text-align:center;color:var(--ink3)">\${
+            find ? 'Nothing matches &ldquo;' + esc(state.paySearch) + '&rdquo;.' : 'Nothing has been decided yet.'}</td></tr>\`}</tbody>`,
+  'and it says when nothing matches');
+
+/* The message itself, over the page, because WhatsApp will not let an app post
+ * into a group by itself — so the send stays a deliberate tap, and what is
+ * being sent is on screen first. */
+app = swap(app,
+`function vDocPop(){`,
+`function vWaPop(){
+  if(!state.waMsg) return '';
+  return \`
+  <div class="docpop" id="waPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="Message for Miraziz" style="height:auto;max-height:86vh">
+      <header>
+        <b>For the payments group</b>
+        <button class="btn ghost sm" id="waCopy" type="button">Copy</button>
+        <a class="btn sm" id="waGo" href="https://wa.me/?text=\${encodeURIComponent(state.waMsg)}"
+           target="_blank" rel="noopener">Open WhatsApp</a>
+        <button class="btn ghost sm" id="waShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody" style="display:block;padding:16px;background:var(--panel)">
+        <pre class="wamsg">\${esc(state.waMsg)}</pre>
+        <p class="cap" style="padding:12px 2px 0">WhatsApp does not let an app post into a group by itself,
+          so this opens with the message ready and the send stays yours.</p>
+      </div>
+    </div>
+  </div>\`;
+}
+
+function vDocPop(){`,
+  'the message for Miraziz, shown before it is sent');
+
+app = swap(app,
+`  return \`
+  \${vDocPop()}
+  \${payBar()}`,
+`  return \`
+  \${vDocPop()}\${vWaPop()}
+  \${payBar()}`,
+  'and it lives on the approvals screen');
+
+// and the three of them wired
+app = swap(app,
+`    document.querySelectorAll('[data-paytab]').forEach(b=>b.onclick=()=>{`,
+`    {
+      const sb2 = document.getElementById('paySearch');
+      if(sb2){
+        // typed into, not submitted: the list narrows as you go
+        sb2.oninput = () => { state.paySearch = sb2.value; render();
+          const again = document.getElementById('paySearch');
+          if(again){ again.focus(); again.setSelectionRange(again.value.length, again.value.length); } };
+      }
+      const csv = document.getElementById('payCsv');
+      if(csv) csv.onclick = () => exportPayments();
+      const wa = document.getElementById('payWa');
+      if(wa) wa.onclick = () => { state.waMsg = window.__mirazizMsg || ''; render(); };
+      const shut = document.getElementById('waShut');
+      if(shut) shut.onclick = () => { state.waMsg = null; render(); };
+      const wp = document.getElementById('waPop');
+      if(wp) wp.onclick = e => { if(e.target === wp){ state.waMsg = null; render(); } };
+      const cp = document.getElementById('waCopy');
+      if(cp) cp.onclick = async () => {
+        try{ await navigator.clipboard.writeText(state.waMsg || ''); cp.textContent = 'Copied'; }
+        catch(e){ cp.textContent = 'Select it and copy'; } };
+      const go = document.getElementById('waGo');
+      if(go) go.onclick = () => { setTimeout(()=>{ state.waMsg = null; render(); }, 300); };
+    }
+    document.querySelectorAll('[data-paytab]').forEach(b=>b.onclick=()=>{`,
+  'the search, the export and the message are wired');
+
+/* The export. Avin's columns, in Avin's order, and nothing else — a CSV that
+ * carries everything is a CSV nobody opens twice. */
+app = swap(app,
+`function vWaPop(){`,
+`function exportPayments(){
+  const rows = (reqs() || []).filter(r => r.status !== 'Pending');
+  const cell = v => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const acct = id => (ACCOUNTS.find(a => a.id === id) || {}).label || '';
+  const lines = [['Order No','Amount','Client','Purpose','Vendor','Paid through'].join(',')]
+    .concat(rows.map(r => [r.order || '', (r.ccy || 'AED') + ' ' + r.amount.toFixed(2),
+      r.client || '', r.purpose || '', r.payee || '', acct(r.account)].map(cell).join(',')));
+  /* A byte-order mark, because Excel opens a plain UTF-8 CSV as Latin-1 and
+   * turns every accented client name into mojibake. */
+  const blob = new Blob(['\\ufeff' + lines.join('\\r\\n')], {type: 'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'CorpLex payments ' + HDATE() + '.csv';
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
+
+function vWaPop(){`,
+  'the export writes the six columns asked for');
+
+// the message is built where the rows are, and read where the button is
+app = swap(app,
+`    .join('\\n');`,
+`    .join('\\n');
+  window.__mirazizMsg = forMiraziz.length ? mirazizMsg() : '';`,
+  'the message is ready before the button is pressed');
+
+/* -------------------------------------------- the raise tab, side by side
+ * Avin asked for the form and his own requests next to each other. The form
+ * is a fixed narrow thing and the table wants everything left, which is the
+ * layout the grid was already for; what was underneath goes beside it. */
+app = swap(app,
+`  return \`\${vDocPop()}\${payBar()}
+  <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="payone">
+    <div>\${form}</div>
+    <div>\${state.pqDone ? vPaymentSent() : ''}</div>
+  </div>
+  \${minePanel}\`;`,
+`  return \`\${vDocPop()}\${payBar()}
+  <input type="file" id="pqRowFile" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" hidden>
+  <div class="payone">
+    <div>\${form}</div>
+    <div>\${minePanel}</div>
+  </div>\`;`,
+  'the form and my requests, side by side');
+
+/* Folding the rail was landing on Home, because the button is inside the mark
+ * block and the mark block is the Home link. A click on the toggle is about
+ * the rail and nothing else. */
+app = swap(app,
+`      tg.onclick = () => {`,
+`      tg.onclick = (e) => {
+        e.stopPropagation();`,
+  'folding the rail stays where you are');
+
+/* ------------------------------------------------------------- the currency
+ * AED by default and almost always. The other two are there because they come
+ * up, not because they are common, so they sit behind the amount rather than
+ * taking a field of their own. */
+app = swap(app,
+`<div class="field"><label for="pqAmount">Amount (AED) <i>*</i></label><input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="\${esc(KEPT().amount ? String(KEPT().amount) : '')}"></div>`,
+`<div class="field"><label for="pqAmount">Amount <i>*</i></label>
+          <div class="amtrow">
+            <select id="pqCcy" aria-label="Currency">\${['AED','EUR','USD'].map(c=>
+              \`<option value="\${c}"\${(KEPT().ccy||'AED')===c?' selected':''}>\${c}</option>\`).join('')}</select>
+            <input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="\${esc(KEPT().amount ? String(KEPT().amount) : '')}">
+          </div></div>`,
+  'the amount says which currency');
+
+// The order number is six or seven characters and had half the row; the amount
+// is the figure everything else hangs off and had the other half, shared with
+// a currency box. So: the amount leads, the currency follows it, and the order
+// number takes only what it needs.
+app = swap(app,
+`      <div class="frow">
+        <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431" value="\${esc(KEPT().order)}"></div>
+        <div class="field"><label for="pqAmount">Amount <i>*</i></label>
+          <div class="amtrow">
+            <select id="pqCcy" aria-label="Currency">\${['AED','EUR','USD'].map(c=>
+              \`<option value="\${c}"\${(KEPT().ccy||'AED')===c?' selected':''}>\${c}</option>\`).join('')}</select>
+            <input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="\${esc(KEPT().amount ? String(KEPT().amount) : '')}">
+          </div></div>
+      </div>`,
+`      <div class="frow amtfrow">
+        <div class="field"><label for="pqOrder">Order number <i>*</i></label><input id="pqOrder" placeholder="PR2431" value="\${esc(KEPT().order)}"></div>
+        <div class="field"><label for="pqAmount">Amount <i>*</i></label>
+          <div class="amtrow">
+            <input id="pqAmount" class="num" type="number" placeholder="0.00" step="0.01" min="0" value="\${esc(KEPT().amount ? String(KEPT().amount) : '')}">
+            <select id="pqCcy" aria-label="Currency">\${['AED','EUR','USD'].map(c=>
+              \`<option value="\${c}"\${(KEPT().ccy||'AED')===c?' selected':''}>\${c}</option>\`).join('')}</select>
+          </div></div>
+      </div>`,
+  'the amount leads and the order number takes what it needs');
+
+app = swap(app,
+`      mode:    document.getElementById('pqMode').value,
+      amount:  parseFloat(document.getElementById('pqAmount').value) || 0`,
+`      mode:    document.getElementById('pqMode').value,
+      ccy:     (document.getElementById('pqCcy') || {}).value || 'AED',
+      amount:  parseFloat(document.getElementById('pqAmount').value) || 0`,
+  'and it is sent with the request');
+
+app = swap(app,
+`  put('order','pqOrder'); put('amount','pqAmount'); put('client','pqClient');
+  put('purpose','pqPurpose'); put('payee','pqPayee'); put('extra','pqNote');
+  put('mode','pqMode');`,
+`  put('order','pqOrder'); put('amount','pqAmount'); put('client','pqClient');
+  put('purpose','pqPurpose'); put('payee','pqPayee'); put('extra','pqNote');
+  put('mode','pqMode'); put('ccy','pqCcy');`,
+  'and it survives a redraw with everything else');
+
+app = swap(app,
+`  return {order:f.order||'', amount:f.amount||'', client:f.client||'',
+          purpose:f.purpose||'', payee:f.payee||'', extra:f.extra||'', mode:f.mode||''};`,
+`  return {order:f.order||'', amount:f.amount||'', client:f.client||'',
+          purpose:f.purpose||'', payee:f.payee||'', extra:f.extra||'',
+          mode:f.mode||'', ccy:f.ccy||'AED'};`,
+  'and it is remembered');
+
+/* ------------------------------------------------------ a client not on the list
+ *
+ * The combo only ever offered clients already in the sales workbook, and told
+ * anybody else to 'check the spelling or ask Avin to add it' — which is not a
+ * thing that can be done from that screen, so it was a dead end. A new client
+ * is a perfectly ordinary thing for a payment request to be about, and the
+ * name is only ever a label here: it is not creating a client anywhere, it is
+ * saying who this payment was for.
+ */
+app = swap(app,
+`  if(!hits.length){ box.innerHTML = '<div class="empty">No client matches — check the spelling or ask Avin to add it</div>'; box.classList.remove('hidden'); return; }
+  box.innerHTML = hits.map(c=>\`<button type="button" data-client="\${esc(c)}"><span>\${esc(c)}</span></button>\`).join('');
+  box.classList.remove('hidden');`,
+`  const typed = inp.value.trim();
+  const exact = hits.some(c => c.toLowerCase() === v);
+  // Whatever was typed is always offered, unless it is already on the list.
+  const addNew = exact ? '' :
+    \`<button type="button" class="addnew" data-client="\${esc(typed)}">
+       <span>Use &ldquo;\${esc(typed)}&rdquo;</span><i>not on the client list &mdash; add it as typed</i></button>\`;
+  box.innerHTML = hits.map(c=>\`<button type="button" data-client="\${esc(c)}"><span>\${esc(c)}</span></button>\`).join('') + addNew;
+  box.classList.remove('hidden');`,
+  'a client that is not on the list can still be named');
+
+app = swap(app,
+`  box.querySelectorAll('[data-client]').forEach(b=>b.onmousedown=(ev)=>{
+    ev.preventDefault(); inp.value = b.dataset.client; box.classList.add('hidden'); pqBadge();
+  });`,
+`  box.querySelectorAll('[data-client]').forEach(b=>b.onmousedown=(ev)=>{
+    ev.preventDefault(); inp.value = b.dataset.client; box.classList.add('hidden');
+    pqGrab(); pqBadge();
+  });`,
+  'and choosing one is remembered like everything else on the form');
+
+/* The badge under the client box read off the sales workbook too, and said
+ * 'Not matched yet' at somebody typing a perfectly real client name. Same
+ * reason as the balances: the workbook is uploaded when it is uploaded. */
+app = swap(app,
+`function pqBadge(){`,
+`function pqBadge(){
+  // nothing to say: the client is a label on this screen, not a lookup
+  const b0 = document.getElementById('pqBadge'); if(b0) b0.innerHTML = '';
+  return;
+}
+function pqBadgeOld(){`,
+  'the client box stops grading what was typed');
+
+/* ================================================================ correcting one
+ *
+ * 'Give me option to edit the payment request received in case they make any
+ * mistakes while submitting.' Somebody types 1200 for 12000, or the wrong
+ * order number, and until now the only remedy was to turn it down and ask for
+ * it again — which throws the documents away with it.
+ *
+ * The row opens into the same fields it was raised with. Correcting a pending
+ * request leaves no mark, because nothing has been decided; correcting one
+ * that is already approved does, permanently and on the row, because somebody
+ * approved a figure and that figure has changed.
+ */
+app = swap(app,
+`function vWaPop(){`,
+`function vPayEdit(){
+  const r = (reqs() || []).find(x => x.id === state.payEdit);
+  if(!r) return '';
+  const e = state.payEditForm || {};
+  const v = (k, d) => e[k] !== undefined ? e[k] : d;
+  return \`
+  <div class="docpop" id="edPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="Correct this request" style="height:auto;max-height:90vh;width:min(620px,100%)">
+      <header>
+        <b>Correcting \${esc(reqName(r))}</b>
+        <button class="btn ghost sm" id="edShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody" style="display:block;padding:16px;background:var(--panel);overflow:auto">
+        \${r.status === 'Approved' ? \`<div class="upmsg warn" style="margin:0 0 14px">
+          <b>This one has already been approved.</b> Correcting it now is allowed, and the
+          request will say so permanently &mdash; the row will read <i>corrected after approval</i>
+          with your name on it.</div>\` : ''}
+        <div class="edform">
+          <label><span>Order number</span><input id="edOrder" value="\${esc(v('order', r.order))}"></label>
+          <label><span>Amount</span>
+            <div class="amtrow">
+              <select id="edCcy">\${['AED','EUR','USD'].map(c=>
+                \`<option value="\${c}"\${v('ccy', r.ccy)===c?' selected':''}>\${c}</option>\`).join('')}</select>
+              <input id="edAmount" class="num" type="number" step="0.01" min="0" value="\${esc(String(v('amount', r.amount)))}">
+            </div></label>
+          <label class="wide"><span>Client</span><input id="edClient" value="\${esc(v('client', r.client))}"></label>
+          <label class="wide"><span>Purpose</span><input id="edPurpose" value="\${esc(v('purpose', r.purpose))}"></label>
+          <label class="wide"><span>Vendor</span><input id="edPayee" value="\${esc(v('payee', r.payee))}"></label>
+          <label><span>Mode</span><select id="edMode">\${MODES.map(m=>
+            \`<option value="\${m.id}"\${v('mode', r.mode)===m.id?' selected':''}>\${esc(m.label)}</option>\`).join('')}</select></label>
+          <label class="wide"><span>Additional information</span><input id="edExtra" value="\${esc(v('extra', r.note))}"></label>
+        </div>
+        \${state.payEditErr ? \`<div class="pqerr" style="margin-top:12px"><b>Not saved.</b><br>\${esc(state.payEditErr)}</div>\` : ''}
+        <div class="drow" style="margin-top:16px">
+          <button class="btn" id="edSave" type="button">Save the correction</button>
+          <button class="btn ghost" id="edCancel" type="button">Leave it as it is</button>
+        </div>
+      </div>
+    </div>
+  </div>\`;
+}
+
+function vWaPop(){`,
+  'a request can be corrected');
+
+// the way in: a pencil beside the status, on anything still live
+app = swap(app,
+`        : \`\${r.status==='Approved' ? '' : statusPill2(r.status)}\${`,
+`        : \`\${r.status==='Approved'
+             ? '<button class="btn ghost sm ed" data-payedit="' + esc(r.id) + '" type="button" title="Correct this request">Correct</button>'
+             : statusPill2(r.status)}\${`,
+  'and the way to open it');
+
+// and on a pending one, beside Approve
+app = swap(app,
+`             <button class="btn ghost sm x" data-reject="\${esc(r.id)}" type="button" title="Turn it down">&times;</button>`,
+`             <button class="btn ghost sm ed" data-payedit="\${esc(r.id)}" type="button" title="Correct this request">Correct</button>
+             <button class="btn ghost sm x" data-reject="\${esc(r.id)}" type="button" title="Turn it down">&times;</button>`,
+  'a pending one can be corrected before it is decided');
+
+app = swap(app,
+`  \${vDocPop()}\${vWaPop()}
+  \${payBar()}`,
+`  \${vDocPop()}\${vWaPop()}\${vPayEdit()}
+  \${payBar()}`,
+  'and the correction opens over the page');
+
+app = swap(app,
+`      const shut = document.getElementById('waShut');`,
+`      document.querySelectorAll('[data-payedit]').forEach(b => b.onclick = () => {
+        state.payEdit = b.dataset.payedit; state.payEditForm = null; state.payEditErr = ''; render(); });
+      const edGrab = () => {
+        const g = id => { const el = document.getElementById(id); return el ? el.value : undefined; };
+        state.payEditForm = {order:g('edOrder'), amount:g('edAmount'), client:g('edClient'),
+          purpose:g('edPurpose'), payee:g('edPayee'), mode:g('edMode'), extra:g('edExtra'), ccy:g('edCcy')};
+      };
+      const edBody = document.querySelector('#edPop .edform');
+      if(edBody){ edBody.addEventListener('input', edGrab); edBody.addEventListener('change', edGrab); }
+      const edOff = () => { state.payEdit = null; state.payEditForm = null; state.payEditErr = ''; render(); };
+      const edC = document.getElementById('edCancel'); if(edC) edC.onclick = edOff;
+      const edX = document.getElementById('edShut');  if(edX) edX.onclick = edOff;
+      const edP = document.getElementById('edPop');
+      if(edP) edP.onclick = e => { if(e.target === edP) edOff(); };
+      const edS = document.getElementById('edSave');
+      if(edS) edS.onclick = async () => {
+        edGrab();
+        const f = state.payEditForm || {};
+        edS.disabled = true; edS.textContent = 'Saving…';
+        const out = await window.__db.editPayment(state.payEdit, f);
+        if(out && out.error){
+          state.payEditErr = out.error; render(); return;
+        }
+        edOff();
+      };
+      const shut = document.getElementById('waShut');`,
+  'and it is wired');
+
+app = swap(app,
+`  CHARTS = {};`,
+`  CHARTS = {};
+  if(state.tab !== 'payment') state.pqSeen = false;`,
+  'and leaving it arms the next one');
+
+// and the styling for the pieces that did not exist before
+shell = swap(shell,
+`  /* reading a workbook, and saying what was in it before anything is written */`,
+`  /* payment requests: the documents on one, and turning one down */
+  .pqfiles{display:flex;flex-direction:column;gap:6px;margin:-4px 0 4px}
+  .pqfile{display:flex;align-items:center;gap:9px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:8px;padding:6px 8px 6px 11px;font-size:12.5px}
+  .pqfile span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pqfile i{font-style:normal;color:var(--ink3);font-size:11.5px;white-space:nowrap}
+  .pqfile button{background:none;border:0;color:var(--ink3);font-size:16px;line-height:1;
+    padding:0 3px;font-family:inherit}
+  .pqfile button:hover{color:var(--bad)}
+  .pqerr{color:var(--bad);background:var(--badBg);border-left:3px solid var(--bad);
+    border-radius:0 8px 8px 0;padding:10px 13px;font-size:12.5px;line-height:1.6;margin:-2px 0 2px}
+  .pqerr b{font-weight:600}
+  .pqerr i{font-style:normal;opacity:.7;font-size:11.5px;letter-spacing:.03em}
+  .pqdocs{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+  .pqdocs a,.pqdocs span{font-size:11px;color:var(--ink3);text-decoration:underline;
+    max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pqdocs a:hover{color:var(--accent2)}
+  .pqdocs .dropdoc{background:none;border:0;color:var(--ink3);font-size:13px;line-height:1;padding:0 2px;font-family:inherit}
+  .pqdocs .dropdoc:hover{color:var(--bad)}
+  .actpair{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;align-items:center}
+  .btn.sm.x{padding:4px 9px;font-size:14px;line-height:1;color:var(--bad)}
+  .btn.sm.x:hover{border-color:var(--bad);background:var(--badBg)}
+
+  /* the two payment tables: a lot of narrow columns, so each one is told what
+     it is — a date never wraps, a purpose always may */
+  .paytab table{table-layout:auto}
+  .paytab td,.paytab th{vertical-align:top}
+  .paytab td.nw,.paytab th.nw{white-space:nowrap}
+  /* Break at spaces, not mid-word: 'anywhere' turned Dubai Economy (DED) into
+     'Dubai Econo / my (DED)', which reads as a rendering fault. */
+  .paytab td.cell{max-width:190px;overflow-wrap:break-word;word-break:normal;hyphens:none}
+  .paytab .sub{font-size:11px;color:var(--ink3);margin-top:3px;line-height:1.45}
+  .paytab .sub.bad{color:var(--bad)}
+  .paytab .sub .pill{font-size:10.5px;padding:1px 7px}
+  .paytab .doc{display:inline-block;max-width:110px;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;vertical-align:bottom;font-size:11.5px;color:var(--ink2);text-decoration:underline}
+  .paytab a.doc:hover{color:var(--accent2)}
+  .paytab .docwrap{display:inline-flex;align-items:center;gap:2px;margin-right:6px}
+  .paytab .adddoc{background:none;border:1px dashed var(--line);border-radius:6px;color:var(--ink3);
+    font-family:inherit;font-size:11px;padding:2px 8px;white-space:nowrap;margin-top:3px;display:inline-block}
+  .paytab .adddoc:hover{border-color:var(--accent);color:var(--accent2)}
+
+  /* The raise screen: the form beside the confirmation, and the table across
+     the page underneath both. My own requests carries eleven columns now, and
+     in the old right-hand pane the last three fell off the edge. */
+  /* Side by side when there is room for both, stacked when there is not.
+     Eleven columns in the eight hundred pixels left over on a 1440 laptop is
+     not a table, it is a row of ellipses — the date, the order number and the
+     amount were all being cut. 'Room' is measured on the space this screen
+     actually has rather than the width of the window, so folding the rail
+     away is enough to bring the form back alongside the table. That is what
+     the fold is for. The wrapper exists only to be the thing measured: size
+     containment on anything larger would trap the document pop-up inside it. */
+  .payonew{container-type:inline-size}
+  .payone{display:grid;grid-template-columns:minmax(0,1fr);
+    gap:14px;align-items:start;margin-bottom:14px}
+  .payone > div:empty{display:none}
+  /* Stacked, the form has the whole page to spread across, and a one-line
+     Name of the employee eleven hundred pixels wide looks like a mistake.
+     Alongside the table its column is 350px, so this never applies there. */
+  .payone .payform{max-width:720px}
+  @container (min-width:1240px){
+    .payone{grid-template-columns:minmax(300px,350px) minmax(0,1fr)}
+  }
+
+  /* Approve and the cross belong on one line. Wrapped, the cross read as a
+     second separate thing rather than the other half of one choice. */
+  .paytab td.act{white-space:nowrap}
+  .paytab .actpair{flex-wrap:nowrap}
+
+  /* the reconciliation half of a decided row: two pickers and three boxes,
+     laid out the way the sheet Avin keeps lays them out */
+  .paytab select.acsel{font-size:12px;padding:4px 6px;max-width:126px}
+  .paytab select.acsel.stpaid{color:var(--good);font-weight:600}
+  .paytab select.acsel.stunpaid{color:var(--ink3)}
+  .paytab select.acsel.stinitiated{color:var(--warn)}
+  .paytab th.c,.paytab td.c{text-align:center;padding-left:6px;padding-right:6px}
+  .paytab input.rtick{width:auto;margin:0;accent-color:var(--good);transform:scale(1.15)}
+  /* Both payment tables lay out by decided width rather than by content.
+     A content-sized table has a minimum it will not shrink past — sixteen
+     columns came to 1,610px — so it scrolled sideways on a laptop and on a
+     1920 monitor alike, because a browser window is never the whole screen.
+     Fixed layout with percentage columns has no such minimum: everything
+     gives up width together and the table is exactly as wide as its panel. */
+  .paytab table{table-layout:fixed;width:100%}
+  /* Headings are nowrap everywhere else, which is right for a table that sizes
+     itself to its content and wrong for one with decided columns: the heading
+     hangs into the next column instead of the column being wide enough. */
+  .paytab th{white-space:normal;line-height:1.3;font-size:10px;letter-spacing:.05em}
+  /* A heading that breaks mid-word — BOO / KS — reads as damage. These three
+     are one short word each and get the width to stay one. */
+  .paytab th.c{font-size:9px;letter-spacing:.03em}
+  /* Every heading reads from the left, including the amount, which was the one
+     right-aligned one and looked like a mistake next to ten that were not.
+     Bottom-aligned so a heading that takes two lines still sits on the same
+     baseline as the ones that take one. */
+  .paytab th{text-align:left;vertical-align:bottom}
+  .paytab th.c{text-align:center}
+  .paytab th.r,.paytab td.r{text-align:left}
+
+  /* the amount leads, the currency follows, and the order number is short */
+  .amtfrow{grid-template-columns:minmax(0,0.72fr) minmax(0,1fr)}
+  .amtrow select{order:2;width:66px}
+  .amtrow input{order:1}
+
+  /* raised, said once and quietly: the row appearing beside it is the proof */
+  .pqok{border-left:3px solid var(--good);background:var(--goodBg);color:var(--ink);
+    border-radius:0 8px 8px 0;padding:9px 13px;font-size:12.5px;line-height:1.6;margin:-2px 0 4px}
+  .pqok b{font-weight:600}
+  .pqok .bad{color:var(--bad)}
+  .paytab td,.paytab th{overflow-wrap:break-word;word-break:normal}
+  .paytab td.cell{max-width:none}
+  .paytab.recon table{font-size:12.5px}
+  .paytab.recon td,.paytab.recon th{padding:8px 7px}
+  /* My requests sits in half a screen beside the form, so it takes the same
+     compact type as the reconciliation table rather than the roomy default. */
+  .payone .paytab table{font-size:12.5px}
+  .payone .paytab td,.payone .paytab th{padding:8px 7px}
+
+  /* ------------------------------------------------ a table read like a sheet
+     One line a row. What made these tall was never the columns: it was a note
+     under Status wrapping to four lines on every row, and a client name
+     wrapping to three. Cut to one line, thirty fit where six did. */
+  .paytab td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+  .paytab td.act,.paytab td.c{overflow:visible}
+  .paytab td,.paytab th{padding:5px 7px;border-right:1px solid var(--line2)}
+  .paytab td:last-child,.paytab th:last-child{border-right:0}
+  .paytab table{font-size:12.5px}
+  .paytab .pill{font-size:10.5px;padding:1px 7px}
+  .paytab .why{color:var(--ink3);font-size:11.5px;margin-left:5px}
+  .paytab tbody tr:hover td{background:var(--panel2)}
+  .paytab .btn.sm{padding:3px 8px;font-size:11.5px}
+  .paytab .actpair{gap:4px}
+  .paytab select.acsel{padding:2px 4px;font-size:11.5px}
+  .paytab .doc{max-width:100%;display:inline-block;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;vertical-align:middle}
+  .paytab .adddoc{margin-top:0;padding:1px 6px}
+  .paytab input.rtick{transform:scale(1);margin:0}
+  /* the pencil, last in the row */
+  /* the pencil sits in the narrowest column there is, so it is a mark and
+     not a button with room around it */
+  .paytab .btn.sm.ed{padding:2px 4px;line-height:0;border-color:transparent}
+  .paytab .btn.sm.ed:hover{border-color:var(--accent)}
+
+  /* what a cut cell is hiding, with a way to take it */
+  .cellpop{position:absolute;z-index:90;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;box-shadow:var(--shadow);padding:11px 13px;font-size:12.5px;
+    line-height:1.6;color:var(--ink);display:flex;flex-direction:column;gap:9px;align-items:flex-start}
+  .cellpop .ct{white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;
+    -webkit-user-select:text;user-select:text}
+  /* a control in a fixed column takes the column's width, not its own */
+  .paytab select.acsel{width:100%;max-width:none;min-width:0}
+  .paytab .doc{max-width:100%}
+  .paytab .actpair .btn{padding:4px 8px}
+  .paytab .btn.sm.ed{padding:3px 8px;font-size:11px;color:var(--ink3)}
+  .paytab .btn.sm.ed:hover{color:var(--accent2);border-color:var(--accent)}
+
+  /* the header of the decided list: search, export, and the Miraziz nudge */
+  .dechead{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap}
+  .paysearch{width:190px;padding:5px 10px;font-size:12.5px}
+  .wamsg{margin:0;white-space:pre-wrap;font-family:'IBM Plex Sans',sans-serif;
+    font-size:13px;line-height:1.75;color:var(--ink);background:var(--panel2);
+    border:1px solid var(--line);border-radius:10px;padding:16px}
+
+  /* currency beside the amount */
+  .amtrow{display:flex;gap:6px}
+  .amtrow select{width:74px;flex:0 0 auto}
+  .amtrow input{flex:1;min-width:0}
+
+  /* correcting a request */
+  .edform{display:grid;grid-template-columns:1fr 1fr;gap:13px 14px}
+  .edform label{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .edform label.wide{grid-column:1/-1}
+  .edform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}
+
+  /* a client who is not on the list yet */
+  .combolist .addnew{border-top:1px solid var(--line)}
+  .combolist .addnew i{display:block;font-style:normal;font-size:11px;color:var(--ink3);margin-top:2px}
+
+  /* the rail, put away: icons only, and everything that was words is gone */
+  .rail button.nav svg{flex:0 0 auto}
+  .railtog{position:absolute;top:14px;right:10px;background:none;border:0;padding:5px;
+    border-radius:7px;color:var(--brandDim);line-height:0;cursor:pointer}
+  .railtog:hover{background:rgba(255,255,255,.09);color:var(--brandInk)}
+  /* The rail is pinned and must not travel with the page. It was, until I
+     gave it position:relative to hang the fold toggle off — which silently
+     replaced the position:sticky in the base stylesheet and let the whole
+     rail scroll away on any long screen. Sticky is a positioning context of
+     its own, so the toggle is just as happy inside it; this restates the
+     base rule rather than replacing it. checklook.mjs now scrolls every
+     screen and checks the rail is still where it was. */
+  .rail{position:sticky;top:0;align-self:start;height:100vh;
+    overflow-y:auto;overscroll-behavior:contain;z-index:30}
+  #app.tucked{grid-template-columns:62px minmax(0,1fr)}
+  #app.tucked .rail{padding:16px 7px;gap:12px;align-items:center}
+  #app.tucked .rail .markco,
+  #app.tucked .rail .navlabel,
+  #app.tucked .rail button.nav span,
+  #app.tucked .rail .who .m,
+  #app.tucked .rail .who b,
+  #app.tucked .rail .who span,
+  #app.tucked .rail .who .buildno,
+  #app.tucked .rail .appmark .one{display:none}
+  /* The wordmark does not shrink to 62px and a squashed logo is worse than
+     none. Collapsed, the rail is the toggle and the icons. */
+  #app.tucked .rail .mark{padding:0;width:100%}
+  #app.tucked .rail .appmark{display:none}
+  #app.tucked .rail nav{width:100%}
+  #app.tucked .rail button.nav{justify-content:center;padding:9px 0}
+  #app.tucked .rail button.nav[aria-current="true"]{box-shadow:none;background:var(--accent);color:#fff}
+  #app.tucked .rail .who{border-top:1px solid rgba(255,255,255,.12);padding-top:12px;width:100%;
+    display:flex;justify-content:center}
+  #app.tucked .rail .who .out{margin:0;padding:6px 8px;width:auto}
+  #app.tucked .railtog{position:static;margin:0 auto}
+  #app.tucked .railtog svg{transform:rotate(180deg)}
+  /* a screen too narrow for a rail already hides it; the toggle must not fight that */
+  @media(max-width:860px){ #app.tucked{grid-template-columns:minmax(0,1fr)} }
+  /* In a fixed layout a column cannot grow, so anything that refuses to wrap
+     hangs over the edge and the panel scrolls after all. Only the date and the
+     amount keep nowrap, and both are short enough to be given room. */
+  .paytab.recon td.act{white-space:normal}
+  .paytab.recon .actpair{flex-wrap:wrap}
+  .paytab.recon td.c{padding-left:3px;padding-right:3px}
+  .paytab.recon .pill{white-space:normal}
+  .subtabs .cnt{display:inline-block;min-width:17px;padding:0 5px;margin-left:5px;
+    border-radius:99px;background:var(--warn);color:#fff;font-size:10.5px;font-style:normal;
+    font-weight:700;line-height:17px;text-align:center;vertical-align:middle}
+  .subtabs button[aria-current="true"] .cnt{background:var(--accentInk);color:var(--accent)}
+
+  /* a document, over the page rather than in place of it */
+  .docpop{position:fixed;inset:0;z-index:80;background:rgba(20,12,24,.62);
+    display:flex;align-items:center;justify-content:center;padding:28px}
+  .docbox{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    box-shadow:var(--shadow);width:min(980px,100%);height:min(88vh,900px);
+    display:flex;flex-direction:column;overflow:hidden}
+  .docbox header{display:flex;align-items:center;gap:10px;padding:11px 14px;
+    border-bottom:1px solid var(--line);background:var(--panel2)}
+  .docbox header b{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;font-size:14px;font-weight:600}
+  .docbody{flex:1;min-height:0;background:var(--sunk);display:flex;
+    align-items:center;justify-content:center;overflow:auto}
+  .docbody iframe{width:100%;height:100%;border:0;background:#fff}
+  .docbody img{max-width:100%;max-height:100%;object-fit:contain}
+  button.doc{background:none;border:0;padding:0;font-family:inherit;cursor:pointer;
+    text-align:left}
+  .selfnote{color:var(--warn);font-size:11px;margin-top:3px}
+  .rjbox{padding:14px 16px}
+  .rjbox label{display:block;font-size:12.5px;color:var(--ink2);margin-bottom:8px}
+  .rjbox input{width:100%}
+
+  /* reading a workbook, and saying what was in it before anything is written */`,
+  'the look of the documents and the refusal');
+
+
+/* ------------------------------------------------- a year is a year, not 2026
+ *
+ * The prototype knew about one year and said so in four places: the selector
+ * offered a hardcoded ['2025','2026'], every screen but a listed few was
+ * blocked unless state.year was the literal string '2026', the message behind
+ * that block said the year 'has not been uploaded yet' whether or not it had,
+ * and a layout class was applied only in 2026.
+ *
+ * The upload screen makes all four wrong on the day it is first used: 2025
+ * lands in the database, the figures are there, the commission is there, and
+ * the portal says it has not been uploaded. So the question each of these asks
+ * becomes the real one — does the portal hold this year — and the answer comes
+ * from the data rather than from a constant.
+ */
+app = swap(app,
+`  ys.innerHTML = ['2025','2026'].map(y=>\`<button data-y="\${y}" aria-pressed="\${state.year===y}" type="button">\${y}</button>\`).join('');`,
+`  // The years the portal actually holds, newest first, plus whichever year is
+  // being looked at so the selector never loses the button you just pressed.
+  const heldYears = [...new Set(Object.keys(DATA.yearFigures || {}).concat(state.year))]
+    .filter(Boolean).sort().reverse();
+  ys.innerHTML = heldYears.map(y=>\`<button data-y="\${y}" aria-pressed="\${state.year===y}" type="button">\${y}</button>\`).join('');`,
+  'the year selector offers the years there are');
+
+app = swap(app,
+`  mainEl.classList.toggle('fixed', ['payment','invoices'].includes(state.tab) && state.year==='2026');`,
+`  // the payment screen scrolls like every other screen: its table is eleven
+  // columns wide and a viewport-height pane cut the last three off
+  mainEl.classList.toggle('fixed', ['invoices'].includes(state.tab));`,
+  'the invoice layout is not about one year, and payments are not pinned');
+
+/* Which screens this is even about. The prototype named the ones it did NOT
+ * apply to — seventeen of them, by hand — which is an inverse list, and an
+ * inverse list rots: every screen added since had to be remembered here or it
+ * would vanish the moment somebody picked a year.
+ *
+ * It rotted immediately. Written as 'not one of these seventeen' with the year
+ * held rather than the literal 2026, it blanked the HOME screen of every
+ * person who cannot see sales at all — a POA consultant has no sales year in
+ * their data, so no year is ever 'held' for them, so every screen not on the
+ * list was replaced by a notice about uploading a workbook they have never
+ * heard of. Home included.
+ *
+ * The question was always 'is this a sales screen', and SALESTABS has always
+ * been the answer. */
+app = swap(app,
+`  if(state.year !== '2026' && !['admin','payroll','tickets','myticket','payslips','myslip','tools','payment','attend','requests','people','hradmin','profile','docsadmin','revisions','loans','exits'].includes(state.tab)){`,
+`  const yearHeld = !!(DATA.yearFigures && DATA.yearFigures[state.year]);
+  const newestYear = Object.keys(DATA.yearFigures || {}).sort().pop() || state.year;
+  if(SALESTABS.includes(state.tab) && activeCo().sales && !yearHeld){`,
+  'a year is missing when it is missing, and only where a year means anything');
+
+app = swap(app,
+`      <p style="color:var(--ink2);max-width:52ch;margin:0 auto 18px">Once the \${state.year} workbook is uploaded on the admin screen, this selector switches the whole portal — dashboard, commission, invoices and leaderboard — to that year, and the company view gains a year-on-year comparison.</p>
+      <button class="btn" type="button" onclick="state.year='2026';render()">Back to 2026</button>`,
+`      <p style="color:var(--ink2);max-width:52ch;margin:0 auto 18px">Upload the \${state.year} workbook under <b>Sales &rarr; Weekly upload</b> and this selector switches the whole portal — dashboard, commission, invoices and leaderboard — to that year.</p>
+      <button class="btn" type="button" data-backyear="\${esc(newestYear)}">Back to \${esc(newestYear)}</button>`,
+  'and it says where to go and back to a year there is');
+
+// onclick="" in the markup was the prototype's shortcut; the portal binds its
+// handlers, and a bound handler is one that cannot be broken by a rename.
+app = swap(app,
+`    </div></section>\`;
+    return;
+  }
+  const CON = state.mode==='console';`,
+`    </div></section>\`;
+    v.querySelectorAll('[data-backyear]').forEach(bt =>
+      bt.onclick = () => { state.year = bt.dataset.backyear; render(); });
+    return;
+  }
+  const CON = state.mode==='console';`,
+  'the back-to-a-year button is wired, not inlined');
+
+/* ------------------------------------------ eligible net sales, on the table
+ *
+ * The consultant table showed net sales and 'not counted' and left the reader
+ * to subtract. Eligible net sales is the figure the whole commission hangs
+ * on — the band comes off it, and every rate is applied to it — so leaving it
+ * to mental arithmetic on the one screen where the commission is also shown
+ * was a strange omission. With it there the row reads as a sum that checks
+ * itself: eligible plus not counted is net sales, every time.
+ */
+app = swap(app,
+`        <th class="r">Net sales</th><th class="r">Not counted</th><th class="r">Outstanding</th>`,
+`        <th class="r">Net sales</th><th class="r">Eligible</th><th class="r">Not counted</th><th class="r">Outstanding</th>`,
+  'the consultant table has a column for eligible net sales');
+
+app = swap(app,
+`          <td class="n r">\${money(x.e.netTot)}</td>
+          <td class="n r"\${x.e.notColl>0?' style="color:var(--warn)"':''}>\${x.e.notColl>0?money(x.e.notColl):'—'}</td>`,
+`          <td class="n r">\${money(x.e.netTot)}</td>
+          <td class="n r"\${x.e.totElig>0?' style="color:var(--good)"':''}>\${x.e.totElig>0?money(x.e.totElig):'—'}</td>
+          <td class="n r"\${x.e.notColl>0?' style="color:var(--warn)"':''}>\${x.e.notColl>0?money(x.e.notColl):'—'}</td>`,
+  'and a figure for it on every row');
+
+app = swap(app,
+`          <td class="n r">\${money(people.reduce((s,x)=>s+x.e.netTot,0))}</td>
+          <td class="n r">\${money(totUnq)}</td>`,
+`          <td class="n r">\${money(people.reduce((s,x)=>s+x.e.netTot,0))}</td>
+          <td class="n r">\${money(people.reduce((s,x)=>s+x.e.totElig,0))}</td>
+          <td class="n r">\${money(totUnq)}</td>`,
+  'and on the team row');
+
+// The caption explains what the columns mean to each other, since eligible
+// and not counted are the two halves of net sales and that is not obvious.
+app = swap(app,
+`A shared invoice is credited to both the consultant who sold it and the project manager, so the team row adds up to more than the department's AED \${money(dn)} of net sales.`,
+`A shared invoice is credited to both the consultant who sold it and the project manager, so the team row adds up to more than the department's AED \${money(dn)} of net sales. <b>Eligible</b> and <b>Not counted</b> are the two halves of net sales: eligible is settled and paid on time and is what the commission band and every rate are worked out on; not counted is the rest, either still outstanding or collected too late to earn on.`,
+  'the caption says what eligible means');
+
+// The caption said "their 2026 sales" while you were looking at 2025.
+app = swap(app,
+`their 2026 sales stay in the department's figures`,
+`their \${esc(state.year)} sales stay in the department's figures`,
+  'the caption names the year on the screen');
+
+// The panel's own hint named one file, forever. It is a year that gets
+// replaced, and which file it came from is on the screen already.
+app = swap(app,
+`<span class="hint">accounts-manager accounts only &middot; Sales_Report_Management_2026.xlsx</span>`,
+`<span class="hint">accounts only &middot; one whole year at a time</span>`,
+  'the upload panel stops naming one file');
+
+/* And what the buttons do. The read happens on this machine and can take a
+ * second or two on a year of invoices, so the button says so while it works;
+ * the write is the only step that touches the database, and it is the only
+ * one behind a button that names the year it will replace. */
+app = swap(app,
+`  if(state.tab==='admin'){
+    const ub=document.getElementById('uploadBtn'); if(ub) ub.onclick=()=>{state.uploaded=true;render();};
+    const rb=document.getElementById('resetBtn'); if(rb) rb.onclick=()=>{state.uploaded=false;render();};
+    const pb=document.getElementById('publishBtn'); if(pb) pb.onclick=()=>{
+      pb.textContent='Published to 15 staff ✓'; pb.disabled=true; pb.style.background='var(--good)'; pb.style.borderColor='var(--good)';};
+  }`,
+`  {
+    /* No tab guard here. The prototype's was \`state.tab==='admin'\`, and the
+     * console has since been reorganised: the panel now lives on a page called
+     * salesup, so that guard stopped matching and every one of these buttons
+     * silently did nothing. getElementById is the guard — if the element is on
+     * the screen, the handler belongs to it. */
+    const pick=document.getElementById('supPick'), file=document.getElementById('supFile');
+    if(pick && file){
+      pick.onclick=()=>file.click();
+      file.onchange=async ()=>{
+        const f=file.files && file.files[0]; if(!f) return;
+        state.supBusy=true; state.supErr=''; render();
+        try{
+          const {w, payload} = await window.__db.readSalesFile(f);
+          state.sup={
+            file:f.name, year:w.year, payload,
+            invoices:w.invoices.length, rows:payload.invoices.length,
+            clients:w.all.clientCount,
+            inv:w.all.totals.inv, net:w.all.totals.net, elig:w.all.totals.elig,
+            byDept:w.byDept, voided:w.voided.length, problems:w.problems,
+            unmatched:[...new Set(w.invoices.flatMap(i=>[i.seller,i.pm])
+              .filter(n=>n && !w.masters.dept[n]))]
+          };
+        }catch(e){ state.supErr=(e && e.message) || String(e); state.sup=null; }
+        state.supBusy=false; file.value=''; render();
+      };
+    }
+    const cancel=document.getElementById('supCancel');
+    if(cancel) cancel.onclick=()=>{ state.sup=null; state.supErr=''; render(); };
+    const again=document.getElementById('supAgain');
+    if(again) again.onclick=()=>{ state.supDone=null; state.sup=null; state.supErr=''; render(); };
+    const go=document.getElementById('supGo');
+    if(go) go.onclick=async ()=>{
+      const s=state.sup; if(!s) return;
+      state.supBusy=true; render();
+      const out=await window.__db.uploadSales('corplex', s.year, s.file, s.payload);
+      state.supBusy=false;
+      if(out){ state.supDone={...out, invoices:s.invoices}; state.sup=null; }
+      render();
+    };
+  }`,
+  'the upload screen is wired to the reader and the database');
+
+/* --------------------------------------------------- staff accounts, by company */
+app = swap(app,
+`function vAdmin(){
+  const staff = USERS.map(u=>u.name).concat(FORMER);`,
+`function vAdmin(){
+  // The sales roster, filtered to one entity when a company is chosen. Somebody
+  // who has left keeps the company they left from, which is what makes a
+  // year-to-date figure add up.
+  const staff = USERS.map(u=>u.name).concat(FORMER)
+    .filter(n => !state.salesCo || companyOf(n).key === state.salesCo);`,
+  'the sales roster follows the company filter');
+
+app = swap(app,
+`      <header><h3>Staff accounts</h3><span class="hint">\${USERS.length} active logins &middot; \${FORMER.length} deactivated</span></header>`,
+`      <header><h3>Staff accounts</h3>
+        <div class="seg" style="margin-left:auto">\${
+          [['', 'Everyone'], ['corplex','CorpLex'], ['poa','POA'], ['lex','Lex Estates']]
+            .map(([k,l])=>\`<button data-sco="\${k}" aria-pressed="\${(state.salesCo||'')===k}" type="button">\${esc(l)}</button>\`).join('')}</div></header>`,
+  'staff accounts split by company');
+
+/* ------------------------------------------------------------- leave policy
+ *
+ * Annual days, the monthly accrual, what carries and for how long, and the
+ * sick ladder have been settings all along: read by every leave screen, shown
+ * as a read-only pill, and changeable only by me. This makes them Avin's.
+ *
+ * The screen says the uncomfortable part out loud, because it is true: these
+ * are not display values. Every balance in the portal is computed from them,
+ * so changing the accrual moves what everybody has accrued since the opening
+ * date — including leave already taken against a balance that will no longer
+ * exist. The opening date itself is deliberately not editable here.
+ */
+app = swap(app,
+`function readHash(){`,
+`const LP = () => HR().leavePolicy || {};
+const SP = () => HR().sick || {};
+const LF = () => state.lpForm || (state.lpForm = {
+  annual:   String(LP().annualDays ?? ''),
+  accrual:  String(LP().accrualPerMonth ?? ''),
+  carry:    String((LP().carry || {}).days ?? ''),
+  expires:  String((LP().carry || {}).expiresMonths ?? ''),
+  probation:String(LP().probationMonths ?? ''),
+  full:     String(SP().fullDays ?? ''),
+  half:     String(SP().halfDays ?? ''),
+  unpaid:   String(SP().unpaidDays ?? '')});
+
+function vLeaveRules(){
+  const f = LF(), upl = canUpload(state.user);
+  const yr = (+f.accrual || 0) * 12;
+  const off = Math.abs(yr - (+f.annual || 0)) > 1;
+  return \`
+  <section class="panel">
+    <header><h3>Annual leave</h3>
+      <span class="hint" style="margin-left:auto">every balance in the portal is computed from these</span></header>
+    <div class="pad">
+      <div class="jform">
+        <label><span>Days a year</span><input id="lpAnnual" inputmode="decimal" value="\${esc(f.annual)}"\${upl?'':' disabled'}></label>
+        <label><span>Accrued each month</span><input id="lpAccrual" inputmode="decimal" value="\${esc(f.accrual)}"\${upl?'':' disabled'}></label>
+        <label><span>Probation, in months</span><input id="lpProb" inputmode="decimal" value="\${esc(f.probation)}"\${upl?'':' disabled'}></label>
+        <label><span>Days that may carry forward</span><input id="lpCarry" inputmode="decimal" value="\${esc(f.carry)}"\${upl?'':' disabled'}></label>
+        <label><span>Carried leave expires after, months</span><input id="lpExp" inputmode="decimal" value="\${esc(f.expires)}"\${upl?'':' disabled'}></label>
+        <label><span>Counted in</span><input value="\${esc(LP().basis || 'working days')}" disabled></label>
+        <p class="jnote wide">Twelve months at <b>\${esc(f.accrual || '0')}</b> a day comes to
+          <b>\${(Math.round(yr*100)/100)} days a year</b>\${off?\` &mdash; which is not the <b>\${esc(f.annual||'0')}</b> above. The database will refuse the pair until they agree.\`:', which matches the entitlement above.'}</p>
+      </div>
+      <div class="drow">
+        <button class="btn" id="lpSave" type="button"\${upl && !off ?'':' disabled'}>Save the leave policy</button>
+        <span class="jwhy">\${state.lpSaved==='leave'?'Saved. Every balance has been recomputed.':''}</span>
+      </div>
+      <div class="note" style="margin-top:16px;border-left-color:var(--warn);font-size:13.5px">
+        <b>These are not display figures.</b> Balances are worked out from them, from the
+        opening date of \${esc(dayLabel(LP().openingAt || '')) || '\\u2014'} \${esc(String(LP().openingAt||'').slice(0,4))}
+        onwards. Lowering the accrual reduces what everybody has accumulated since that
+        date, including leave already taken against it. The opening date is not editable
+        here on purpose &mdash; moving it rewrites the whole calculation, and that belongs
+        at a year end, done deliberately.
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h3>Sick leave</h3>
+      <span class="hint" style="margin-left:auto">the UAE ladder &mdash; full pay, then half, then unpaid</span></header>
+    <div class="pad">
+      <div class="jform">
+        <label><span>Days at full pay</span><input id="spFull" inputmode="decimal" value="\${esc(f.full)}"\${upl?'':' disabled'}></label>
+        <label><span>Then at half pay</span><input id="spHalf" inputmode="decimal" value="\${esc(f.half)}"\${upl?'':' disabled'}></label>
+        <label><span>Then unpaid</span><input id="spUnpaid" inputmode="decimal" value="\${esc(f.unpaid)}"\${upl?'':' disabled'}></label>
+      </div>
+      <div class="drow">
+        <button class="btn" id="spSave" type="button"\${upl?'':' disabled'}>Save the sick policy</button>
+        <span class="jwhy">\${state.lpSaved==='sick'?'Saved.':''}</span>
+      </div>
+      <p class="cap">A year of sickness runs down the ladder in that order once probation is over.
+        The portal shows each person what is left of each rung on their own leave page.</p>
+    </div>
+  </section>\`;
+}
+
+function readHash(){`,
+  'the leave policy, editable');
+
+/* =========================================================== five sections
+ *
+ * Avin: "the console is completely messy and unorganized, we better make
+ * minimum tabs and add sub tabs?"
+ *
+ * Eleven tabs in one strip, listed in the order they were built. Two of them
+ * he touches daily, four once a month, three when something falls due, two
+ * twice a year, and the list said nothing about which was which.
+ *
+ * So: five sections, each with its own sub-tabs, and the long screens cut at
+ * the panel boundaries they already had. Rules & staff had quietly become
+ * three unrelated pages sharing one scroll — the joiner form, the office
+ * network, and the whole of Sales — and splitting that is most of the reason
+ * this was worth doing.
+ */
+app = swap(app,
+`  {id:'payroll',     group:'con',   label:'Payroll',          title:'Payroll', gate:canAdmin, con:true},
+  {id:'payslips',    group:'con',   label:'Payslips',         title:'Payslips', gate:canAdmin, con:true},
+  {id:'revisions',   group:'con',   label:'Revisions',        title:'Salary revisions', gate:canUpload, con:true},
+  {id:'tickets',     group:'con',   label:'Air ticket',       title:'Air ticket tracker', gate:canAdmin, con:true},
+  {id:'gratuity',    group:'con',   label:'Gratuity',         title:'Gratuity provision', gate:canAdmin, con:true},
+  {id:'exits',       group:'con',   label:'Exits',            title:'Exit & final settlement', gate:canUpload, con:true},
+  {id:'hradmin',     group:'con',   label:'Attendance',       title:'Attendance & leave', gate:canAdmin, con:true},
+  {id:'regular',     group:'con',   label:'Regularization',   title:'Regularization', gate:canAdmin, con:true},
+  {id:'docsadmin',   group:'con',   label:'Documents',        title:'Document expiry', gate:canAdmin, con:true},
+  {id:'digest',      group:'con',   label:'Emails',           title:'Emails the portal sends', gate:canAdmin, con:true},
+  {id:'admin',       group:'con',   label:'Rules & staff',    title:'Rules & staff', gate:canAdmin, con:true}
+`,
+`  // ---- Pay: the month, and everything that lands on a payslip
+  {id:'payroll',    group:'con', sec:'pay',    label:'Payroll',        title:'Payroll', gate:canAdmin, con:true},
+  {id:'payslips',   group:'con', sec:'pay',    label:'Payslips',       title:'Payslips', gate:canAdmin, con:true},
+  {id:'revisions',  group:'con', sec:'pay',    label:'Revisions',      title:'Salary revisions', gate:canUpload, con:true},
+  {id:'tickets',    group:'con', sec:'pay',    label:'Air ticket',     title:'Air ticket tracker', gate:canAdmin, con:true},
+  {id:'gratuity',   group:'con', sec:'pay',    label:'Gratuity',       title:'Gratuity provision', gate:canAdmin, con:true},
+  {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canUpload, con:true},
+  // ---- People: the day, and the rules the day is measured against
+  {id:'hradmin',    group:'con', sec:'people', label:'Attendance',     title:'Attendance', gate:canAdmin, con:true},
+  {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:canAdmin, con:true},
+  {id:'regular',    group:'con', sec:'people', label:'Regularization', title:'Regularization', gate:canAdmin, con:true},
+  {id:'shifts',     group:'con', sec:'people', label:'Shifts',         title:'Shifts and reporting lines', gate:canAdmin, con:true},
+  {id:'holidays',   group:'con', sec:'people', label:'Holidays',       title:'Public holidays', gate:canAdmin, con:true},
+  {id:'leaverules', group:'con', sec:'people', label:'Leave policy',   title:'Leave policy', gate:canUpload, con:true},
+  {id:'leavebal',   group:'con', sec:'people', label:'Leave balances', title:'Annual leave balances', gate:canAdmin, con:true},
+  // ---- Sales: was buried at the bottom of Rules & staff
+  {id:'salesup',    group:'con', sec:'sales',  label:'Weekly upload',  title:'Weekly sales upload', gate:canUpload, con:true},
+  {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:canAdmin, con:true},
+  {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:canAdmin, con:true},
+  {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:canAdmin, con:true},
+  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:canAdmin, con:true},
+  // ---- Staff
+  {id:'addstaff',   group:'con', sec:'staff',  label:'Add somebody',   title:'Add somebody to the staff list', gate:canUpload, con:true},
+  {id:'probation',  group:'con', sec:'staff',  label:'Probation',      title:'Probation', gate:canAdmin, con:true},
+  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:canAdmin, con:true},
+  // ---- Documents: the hero stays put as you move between these four
+  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:canAdmin, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Fill in dates',  title:'Fill in document dates', gate:canAdmin, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
+  {id:'directory',  group:'con', sec:'docs',   label:'Staff directory',title:'Staff directory', gate:canAdmin, con:true}
+`,
+  'the console tab table, grouped into sections');
+
+// The bar itself: sections in the aubergine strip, sub-tabs beneath it.
+app = swap(app,
+`function conBar(){
+  const tabs = CONTABS();
+  return \`<div class="conbar">
+    <h2>Accounts console</h2>
+    <span class="cwho">\${canUpload(state.user)?'Full access':'View only'} &middot; \${esc(state.user)}</span>
+    <div class="ctabs">\${tabs.map(t=>\`<button data-ctab="\${esc(t.id)}" aria-current="\${state.tab===t.id}" type="button">\${esc(t.label)}</button>\`).join('')}</div>
+    <button class="cback" id="conBack" type="button">Back to my portal</button>
+  </div>\`;
+}`,
+`const SECTIONS = [['pay','Pay'], ['people','People'], ['sales','Sales'],
+                  ['staff','Staff'], ['docs','Documents']];
+const secOf   = id => (TABS.find(t=>t.id===id) || {}).sec || 'pay';
+const secTabs = s  => CONTABS().filter(t => t.sec === s);
+// A section nobody may open is a section nobody sees: the gates are per screen,
+// so a section with nothing left in it disappears rather than opening empty.
+const liveSections = () => SECTIONS.filter(([k]) => secTabs(k).length);
+
+function conBar(){
+  const here = secOf(state.tab);
+  const subs = secTabs(here);
+  return \`<div class="conbar">
+    <h2>Accounts console</h2>
+    <span class="cwho">\${canUpload(state.user)?'Full access':'View only'} &middot; \${esc(state.user)}</span>
+    <div class="ctabs">\${liveSections().map(([k,l])=>\`<button data-csec="\${k}" aria-current="\${here===k}" type="button">\${esc(l)}</button>\`).join('')}</div>
+    <button class="cback" id="conBack" type="button">Back to my portal</button>
+  </div>
+  \${subs.length > 1 ? \`<div class="subbar">
+    <div class="subtabs">\${subs.map(t=>\`<button data-ctab="\${esc(t.id)}" aria-current="\${state.tab===t.id}" type="button">\${esc(t.label)}</button>\`).join('')}</div>
+  </div>\` : ''}\`;
+}`,
+  'sections in the bar, sub-tabs beneath it');
+
+/* Cutting the long screens.
+ *
+ * The console screens were written as scrolls of panels, and the sub-tab strip
+ * cuts them where they were already divided. Each leaf renders its parent and
+ * keeps the panels named below.
+ *
+ * That is deliberate rather than lazy: the panels of one screen share the
+ * parent's working — its month, its filters, its totals — so splitting the
+ * source into separate functions would have meant computing the same thing
+ * several times over and then keeping the copies in step by hand, which is
+ * exactly the kind of duplication that drifts. The parent is rendered into a
+ * detached element, so nothing a discarded panel contains ever reaches the
+ * page, ids included.
+ */
+app = swap(app,
+`function readHash(){`,
+`const PAGE = {
+  office:     ['admin',   ['Where the office is']],
+  addstaff:   ['admin',   ['Add somebody to the staff list']],
+  probation:  ['admin',   ['Probation']],
+  salesup:    ['admin',   ['Weekly upload']],
+  salestpl:   ['admin',   ['Upload template']],
+  salesrules: ['admin',   ['Commission rules']],
+  salesstaff: ['admin',   ['Staff accounts']],
+  salesptr:   ['admin',   ['Referral partners']],
+  hradmin:    ['hradmin', ['attendance', 'Exceptions'], true],
+  shifts:     ['hradmin', ['Shifts and reporting lines']],
+  leavebal:   ['hradmin', ['Annual leave balances'], true],
+  holidays:   ['hradmin', ['Public holidays']],
+  // Avin: 'once opened, keep the hero of expired, expiring etc' — so the four
+  // document pages all carry the same strip, and moving between them does not
+  // make the count you were reading disappear.
+  docsadmin:  ['docs',    ['Document expiry'], true],
+  docdates:   ['docs',    ['Fill in document dates'], true],
+  profiles:   ['docs',    ['Profile completeness'], true],
+  directory:  ['docs',    ['Staff directory'], true]
+};
+const PAGESRC = {admin: () => vAdmin(), hradmin: () => vHRAdmin(), docs: () => vDocsAdmin()};
+
+function pageOf(id){
+  const spec = PAGE[id];
+  if(!spec) return '<p style="color:var(--ink3)">Nothing here.</p>';
+  const [src, want, hero] = spec;
+  const box = document.createElement('div');
+  box.innerHTML = PAGESRC[src]();
+  const out = [];
+  const wanted = el => {
+    const h = el.querySelector('h3');
+    return !!h && want.some(w => h.textContent.indexOf(w) >= 0);
+  };
+  for(const c of [...box.children]){
+    if(c.classList.contains('strip')){ if(hero) out.push(c.outerHTML); continue; }
+    if(c.matches('section.panel')){ if(wanted(c)) out.push(c.outerHTML); continue; }
+    for(const p of [...c.querySelectorAll('section.panel')])
+      if(wanted(p)) out.push(p.outerHTML);
+  }
+  return out.join('\\n');
+}
+const PAGEVIEW = {};
+Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });
+
+function readHash(){`,
+  'cutting the long console screens into pages');
+
+// The router gains the leaves. Everything the old tabs pointed at still exists;
+// what changed is that four of them now name one panel rather than a scroll.
+app = swap(app,
+  `profile:vProfile, docsadmin:vDocsAdmin, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,`,
+  `profile:vProfile, loans:vAsks, revisions:vRevisions, gratuity:vGratuity, exits:vExits,\n                  leaverules:vLeaveRules, ...PAGEVIEW,`,
+  'the router gains the leaf pages');
+
+// An address bookmarked before the regrouping still opens something sensible.
+app = swap(app,
+  `  if(state.tab === 'letters'){ state.tab = 'loans'; state.askTab = 'letters'; }`,
+  `  if(state.tab === 'letters'){ state.tab = 'loans'; state.askTab = 'letters'; }
+  // Rules & staff was split five ways; an old link lands on the joiner form.
+  if(state.tab === 'admin') state.tab = 'addstaff';`,
+  'old links still land somewhere');
+
+// Choosing a section opens its first screen.
+app = swap(app,
+  `  document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });`,
+  `  document.querySelectorAll('[data-ctab]').forEach(b=>b.onclick=()=>{ state.tab=b.dataset.ctab; state.slipOpen=null; render(); });
+  document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
+    const first = secTabs(b.dataset.csec)[0];
+    if(first){ state.tab = first.id; state.slipOpen = null; render(); } });`,
+  'choosing a section');
+
+/* --- the demo login screen is boot.js's job now --- */
+
+app = swap(app,
+  `document.getElementById('signout').onclick = ()=>{
+  document.getElementById('app').classList.add('hidden');
+  document.getElementById('login').classList.remove('hidden');
+  window.scrollTo(0,0);
+};
+document.getElementById('loginForm').onsubmit = (ev)=>{
+  ev.preventDefault();
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  render();
+};
+render();`,
+  `document.getElementById('signout').onclick = ()=>window.__db.signOut();
+window.render = render;
+window.addEventListener('hashchange', () => { readHash(); render(); });
+/* The first paint happens at the very foot of this file, not here — see the
+   note there. Moving it cost nothing and stopped a deep link throwing. */`,
+  'login handlers, and the page you were on');
+
+// The sign-in screen is shown before app.js has loaded, so the logo has to be
+// in the page already rather than set by script afterwards.
+{
+  const m = /corplex: \{rail:'(data:image\/png;base64,[A-Za-z0-9+/=]+)'/.exec(app);
+  if(!m) throw new Error('could not find the CorpLex logo in app.js');
+  shell = swap(shell, '<img id="loginMark" alt="">',
+    `<img id="loginMark" alt="CorpLex One" src="${m[1]}">`, 'login logo');
+  shell = swap(shell, '<img id="bootMark" alt="">',
+    `<img id="bootMark" alt="CorpLex One" src="${m[1]}">`, 'opening logo');
+}
+
+/* --------------------------------------------------------------- handlers */
+// Two unrelated things sharing a data attribute means every handler binds to
+// every element carrying it, silently. That is how clicking a date field on a
+// profile came to download a set of invoices.
+{
+  const bound = {};
+  for(const m of app.matchAll(/document\.querySelectorAll\(\s*'\[(data-[a-z-]+)\]'\s*\)/g))
+    bound[m[1]] = (bound[m[1]] || 0) + 1;
+  const clash = Object.entries(bound).filter(([, n]) => n > 1).map(([a]) => a);
+  if(clash.length) throw new Error('bound by more than one handler: ' + clash.join(', '));
+  console.log(`handlers    ${Object.keys(bound).length} attributes, each bound once`);
+}
+
+/* ------------------------------------------------- one source for the status
+ *
+ * `state.payStatus` was a copy of the newest run's status, seeded once when
+ * the page loaded. Everything else read from it: the home page's to-do list,
+ * whether a payslip counts as released, the run selector's open/closed label.
+ *
+ * A copy seeded once is fine while nothing can change it. Now five buttons
+ * can, and each of them may be refused — so a copy would leave the home page
+ * offering to approve a month that was approved ten seconds ago, or claiming a
+ * payslip is out when the database refused to close the run. Every reader now
+ * asks the data.
+ */
+{
+  const uses = (app.match(/state\.payStatus/g) || []).length;
+  if(uses === 0) throw new Error('state.payStatus is gone — this swap is stale');
+  app = app.replace(/state\.payStatus/g, 'PAYST()');
+  app = swap(app,
+    `function vPayroll(){`,
+    `// The newest run's status, read from the database every time rather than
+// from a copy kept on the page. See the note in mkweb.mjs.
+const PAYST = () => (DATA.payroll && DATA.payroll.status) || 'draft';
+
+function vPayroll(){`,
+    'one place that knows the run status');
+  console.log(`run status  ${uses} readers, all asking the data`);
+}
+
+/* ================================================ the console is a desk job
+ *
+ * Avin: "let all the backend work be only on desktop version, and let the app
+ * be very lite."
+ *
+ * He is right, and it corrects something I had been doing badly: making the
+ * payroll register wrap at 390px is effort spent making a bad idea work.
+ * Nobody should approve a month, correct a joining or set a leave policy on a
+ * phone, and offering it invites exactly that.
+ *
+ * So the console entrance is not drawn on a phone, and a console address
+ * opened on one says so rather than quietly becoming a different app. Turning
+ * the phone sideways, or opening the same link on a laptop, brings it back —
+ * nothing is lost, it is just not carried around.
+ */
+app = swap(app,
+`  const cbtn = document.getElementById('consoleBtn');
+  if(canAdmin(state.user)){`,
+`  const cbtn = document.getElementById('consoleBtn');
+  if(canAdmin(state.user) && !MOBILE()){`,
+  'no console entrance on a phone');
+
+app = swap(app,
+  `  if(state.mode==='console' && !canAdmin(state.user)){ state.mode='staff'; state.tab='home'; }`,
+  `  if(state.mode==='console' && !canAdmin(state.user)){ state.mode='staff'; state.tab='home'; }
+  // A console link opened on a phone is answered, not redirected. Being moved
+  // somewhere else without explanation is how a person concludes the link is
+  // broken.
+  if(state.mode==='console' && MOBILE()){ state.mode = 'staff'; state.tab = 'deskonly'; }`,
+  'a console link on a phone gets an answer');
+
+app = swap(app,
+  `  people:'People', myslip:'My payslip', myticket:'My air ticket', attend:'My attendance', profile:'My profile'};`,
+  `  people:'People', myslip:'My payslip', myticket:'My air ticket', attend:'My attendance', profile:'My profile',
+  deskonly:'Accounts console'};`,
+  'the desk-only page has a name of its own');
+
+app = swap(app,
+`function vRevisions(){`,
+`function vDeskOnly(){
+  return \`
+  <section class="panel">
+    <header><h3>This one is for a desk</h3></header>
+    <div class="pad">
+      <p style="margin:0 0 14px;color:var(--ink2);font-size:15px;max-width:60ch">
+        The accounts console &mdash; payroll, payslips, salary revisions, the air
+        ticket register, gratuity, sales and the staff rules &mdash; is wide,
+        detailed work, and a phone is the wrong place to do it. A payroll month
+        approved by thumb is a payroll month approved without reading it.</p>
+      <p style="margin:0 0 20px;color:var(--ink3);font-size:14px;max-width:60ch">
+        Open <b>one.corplex.ae</b> on a laptop and it is all there, exactly as you
+        left it. Everything you need day to day &mdash; checking in, leave, your
+        payslip, your air ticket &mdash; is below.</p>
+      <button class="btn" id="deskBack" type="button">Back to my portal</button>
+    </div>
+  </section>\`;
+}
+
+function vRevisions(){`,
+  'what a console link says on a phone');
+
+app = swap(app,
+  `                  leaverules:vLeaveRules, ...PAGEVIEW,`,
+  `                  leaverules:vLeaveRules, deskonly:vDeskOnly, ...PAGEVIEW,`,
+  'the desk-only page is routable');
+
+app = swap(app,
+  `  document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{`,
+  `  { const d = document.getElementById('deskBack');
+    if(d) d.onclick = ()=>{ state.mode='staff'; state.tab='home'; render(); window.scrollTo({top:0}); }; }
+  document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{`,
+  'the way back from the desk-only page');
+
+/* The calculator and payment requests are desk jobs too. What is left on a
+ * phone is what somebody needs standing in a corridor: their day, their leave,
+ * the people list, their payslip and their air ticket. */
+app = swap(app,
+  `const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company'];`,
+  `const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company',
+                 'tools','payment','payapprove'];`,
+  'the phone keeps only what a corridor needs');
+
+
+/* ------------------------------------------------- sales, one year at a time
+ *
+ * The sales screens were written when the portal held a single year, so they
+ * read DATA.totals and DATA.engine[who][quarter] with no year in sight. That
+ * was right until 2025 was loaded beside 2026 and its Q1 quietly replaced the
+ * other. The year segment at the top of the page had, until now, nothing to
+ * change.
+ *
+ * Rather than teach a dozen views about years, the three places that actually
+ * look something up now do: a person's quarter, their invoices, and the
+ * company-wide figures, which are swapped onto DATA when the year changes.
+ */
+app = swap(app,
+  `const eng = (u,q) => (DATA.engine[u] && DATA.engine[u][q]) || null;`,
+  `const eng = (u,q) => {
+  const per = DATA.engine[u] || {};
+  // Older data has no year layer; a portal holding one year keeps working.
+  const y = per[state.year] || (per.Q1 || per.Q2 || per.Q3 || per.Q4 ? per : null);
+  return (y && y[q]) || null;
+};`,
+  'a quarter belongs to a year');
+
+app = swap(app,
+  `function invRows(u,p){ const rs=DATA.inv[u]||[]; return p==='FY'?rs.slice():rs.filter(r=>r[IC.q]===p); }`,
+  `function invRows(u,p){
+  const rs = (DATA.inv[u] || []).filter(r => !r[IC.sort] || String(r[IC.sort]).slice(0,4) === state.year);
+  return p === 'FY' ? rs.slice() : rs.filter(r => r[IC.q] === p);
+}`,
+  'invoices belong to a year too');
+
+app = swap(app,
+  `  const keepY = window.scrollY;`,
+  `  // The company-wide figures for the year being looked at, put where every
+  // sales screen already reads them from.
+  if(DATA.yearFigures && DATA.yearFigures[state.year])
+    Object.assign(DATA, DATA.yearFigures[state.year]);
+  const keepY = window.scrollY;`,
+  'the year segment changes the figures');
+
+/* --------------------------------------------------------------- sections */
+// A console tab with no section never appears in the bar; a PAGE keyed to an
+// id that is not a tab renders 'Nothing here.' Both are one-character mistakes
+// and both look, from the outside, exactly like a permission being enforced.
+{
+  const rows = [...app.matchAll(/\{id:'([a-z]+)',\s*group:'con',\s*sec:'([a-z]+)'/g)];
+  const ids  = new Set(rows.map(m => m[1]));
+  const secs = new Set(rows.map(m => m[2]));
+  const conAll = [...app.matchAll(/\{id:'([a-z]+)',\s*group:'con'/g)].map(m => m[1]);
+  const noSec = conAll.filter(id => !ids.has(id));
+  if(noSec.length) throw new Error('console tabs with no section: ' + noSec.join(', '));
+
+  const declared = [...app.matchAll(/\['(pay|people|sales|staff|docs)','[A-Za-z ]+'\]/g)]
+    .map(m => m[1]);
+  const empty = declared.filter(s => !secs.has(s));
+  if(empty.length) throw new Error('sections with no screens: ' + empty.join(', '));
+
+  const pageBlock = app.slice(app.indexOf('const PAGE = {'), app.indexOf('const PAGESRC'));
+  const pageIds = [...pageBlock.matchAll(/^\s{2}([a-z]+):\s*\[/gm)].map(m => m[1]);
+  const orphan = pageIds.filter(id => !ids.has(id));
+  if(orphan.length) throw new Error('PAGE entries that are not tabs: ' + orphan.join(', '));
+  console.log(`sections    ${secs.size} sections, ${ids.size} screens, ${pageIds.length} cut from a parent`);
+}
+
+/* ---------------------------------------------------------------- wiring */
+// A table map.js reads but boot.js never fetches is a screen that comes up
+// empty and looks exactly like a permission being enforced. Fail the build.
+{
+  const boot = fs.readFileSync(path.join(OUT,'boot.js'), 'utf8');
+  const mapjs = fs.readFileSync(path.join(OUT,'map.js'), 'utf8');
+  const wants = new Set([...mapjs.matchAll(/\bdb\.([a-z_]+)\b/g)].map(m => m[1]));
+  const start = boot.indexOf('const TABLES');
+  const block = boot.slice(start, boot.indexOf('};', start));
+  const has = new Set([...block.matchAll(/^\s{2}([a-z_]+):/gm)].map(m => m[1]));
+  const missing = [...wants].filter(k => !has.has(k));
+  if(missing.length) throw new Error('boot.js never fetches: ' + missing.join(', '));
+  console.log(`wiring      ${wants.size} tables, all fetched`);
+}
+
+/* ============================================ a table that reads like a sheet
+ *
+ * 'Earlier I was able to see 30 transactions in a sheet at least. Now I am
+ * able to see hardly a few on one page.'
+ *
+ * The columns were not the problem. What made those rows tall was a note under
+ * Status — 'approved by the person who raised it' — wrapping to four lines on
+ * every row, and a client name wrapping to three. Avin wants neither, and one
+ * line per row.
+ *
+ * So every cell is one line, cut with an ellipsis where it does not fit, and
+ * hovering a cut cell opens what it says with a Copy beside it. Nothing is
+ * hidden; it is one hover away instead of four lines tall.
+ *
+ * The self-approval note goes at his instruction. The database still records
+ * who approved and who corrected — decided_by, edited_by, edits — so the
+ * record is intact; it is only off the screen.
+ */
+app = swap(app,
+`        : \`\${r.status==='Approved'
+             ? '<button class="btn ghost sm ed" data-payedit="' + esc(r.id) + '" type="button" title="Correct this request">Correct</button>'
+             : statusPill2(r.status)}\${
+           r.self?'<div class="selfnote">approved by the person who raised it</div>':''}\${
+           r.edits ? \`<div class="selfnote">corrected after approval\${r.editedBy?' by '+esc(NM(r.editedBy)):''}</div>\` : ''}\`}</td>
+      \${withRecon ? recon(r) : ''}
+    </tr>`,
+`        : ''}</td>
+    </tr>`,
+  'the act cell stops carrying notes');
+
+/* The pencil goes to the very end, after the last tick, where an edit control
+ * belongs on a sheet: it is the thing you reach for last, not a column you
+ * read past twelve times a screen. */
+app = swap(app,
+`      <td class="act">\${r.status==='Pending'
+        ? \`<div class="actpair">
+             <button class="btn sm" data-approve="\${esc(r.ref)}" type="button">Approve</button>
+             <button class="btn ghost sm ed" data-payedit="\${esc(r.id)}" type="button" title="Correct this request">Correct</button>
+             <button class="btn ghost sm x" data-reject="\${esc(r.id)}" type="button" title="Turn it down">&times;</button>
+           </div>\``,
+`      \${withRecon ? recon(r) : ''}
+      <td class="act">\${r.status==='Pending'
+        ? \`<div class="actpair">
+             <button class="btn sm" data-approve="\${esc(r.ref)}" type="button">Approve</button>
+             <button class="btn ghost sm x" data-reject="\${esc(r.id)}" type="button" title="Turn it down">&times;</button>
+             \${pencil(r)}
+           </div>\`
+        : pencil(r)`,
+  'the pencil is the last thing in the row');
+
+app = swap(app,
+`function statusPill2(s){`,
+`/* One mark, at the end, for correcting. A word in a column read twelve times
+ * a screen is eleven readings of a word nobody needed. */
+function pencil(r){
+  if(r.status !== 'Pending' && r.status !== 'Approved') return '';
+  return \`<button class="btn ghost sm ed" data-payedit="\${esc(r.id)}" type="button"
+    title="Correct this request" aria-label="Correct this request"><svg viewBox="0 0 24 24" width="13" height="13"
+    fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-3-3L5 17v3z"/></svg></button>\`;
+}
+
+function statusPill2(s){`,
+  'a pencil, not the word');
+
+// a decided request that was refused says so where the status lives
+app = swap(app,
+`    if(r.status !== 'Approved') return '<td></td><td></td><td></td><td></td><td></td>';`,
+`    if(r.status !== 'Approved')
+      return \`<td>\${statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>\`;`,
+  'and a refusal shows in the status column, where it belongs');
+
+// the header follows the row: status, account, three ticks, then the pencil
+app = swap(app,
+`  const head  = \`\${wide}<thead><tr>\${cols}<th class="act"></th></tr></thead>\`;
+  const head2 = \`\${widest}<thead><tr>\${cols}<th class="act"></th>
+      <th>Status</th><th>Paid through</th>
+      <th class="c">Books</th><th class="c">Bigin</th><th class="c">Receipt</th></tr></thead>\`;`,
+`  const head  = \`\${wide}<thead><tr>\${cols}<th class="act"></th></tr></thead>\`;
+  const head2 = \`\${widest}<thead><tr>\${cols}
+      <th>Status</th><th>Paid through</th>
+      <th class="c" title="Books">Bk</th><th class="c" title="Bigin">Bg</th>
+      <th class="c" title="Receipt">Rc</th><th class="act"></th></tr></thead>\`;`,
+  'and so does the header');
+
+/* Every cell one line, and what does not fit is one hover away with a Copy
+ * beside it. Nothing is lost — a long client name is cut on screen and whole
+ * in the card, which is the trade that buys thirty rows instead of six. */
+app = swap(app,
+`      <td class="cell">\${esc(r.client||'—')}</td>
+      <td class="cell">\${esc(r.purpose)}</td>
+      <td>\${esc(modeShort(r.mode))}</td>
+      <td class="cell">\${esc(r.payee||'—')}</td>`,
+`      <td class="cell"\${full(r.client)}>\${esc(r.client||'—')}</td>
+      <td class="cell"\${full(r.purpose)}>\${esc(r.purpose)}</td>
+      <td>\${esc(modeShort(r.mode))}</td>
+      <td class="cell"\${full(r.payee)}>\${esc(r.payee||'—')}</td>`,
+  'the long columns of the queue can be read in full');
+
+// both tables carry the note column, and both get the same treatment
+app = app.split(`      <td class="cell">\${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>`)
+         .join(`      <td class="cell"\${full(r.note)}>\${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>`);
+app = app.split(`        <td class="cell">\${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>`)
+         .join(`        <td class="cell"\${full(r.note)}>\${r.note ? esc(r.note) : '<span style="color:var(--ink3)">—</span>'}</td>`);
+if(!app.includes('data-full')) throw new Error('nothing was marked as hidable');
+console.log('payments    long cells can be read in full on hover');
+
+app = swap(app,
+`function pencil(r){`,
+`/* Marks a cell as having more in it than fits. The hover card only appears
+ * when the text is actually cut, so a short client name behaves like a
+ * perfectly ordinary cell. */
+function full(v){ const t = String(v || '').trim(); return t ? \` data-full="\${esc(t)}"\` : ''; }
+
+function pencil(r){`,
+  'a cell can say what it is hiding');
+
+// withdrawn requests leave the list: nobody decided them and there is nothing
+// to reconcile, so they are only a row to read past
+app = swap(app,
+`  const all   = reqs().filter(r=>r.status!=='Pending');`,
+`  const all   = reqs().filter(r=>r.status!=='Pending' && r.status!=='Withdrawn');`,
+  'a withdrawn request leaves the decided list');
+
+/* The widths, again, with the three ticks pulled tight and everything they
+ * give up going to the client, the purpose and the note — the three columns
+ * that actually carry sentences. */
+app = swap(app,
+`  const wide   = colgroup([7.4, 5.6, 6.0, 7.0, 13.4, 10.6, 5.2, 9.8, 7.8, 11.4, 15.8]);`,
+`  /* The two tables sit one above the other, so their columns line up: the
+   * first ten are the same shares in both, and the queue's action column is
+   * exactly as wide as the six reconciliation columns it sits above. Two
+   * tables with different column stops read as two tables; the same stops
+   * read as one sheet, which is what Avin is after. */
+  const wide   = colgroup(SHARES.slice(0, 10)
+    .concat(SHARES.slice(10).reduce((a, b) => a + b, 0)));`,
+  'the queue widens where the words are');
+
+app = swap(app,
+`  const widest = colgroup([6.4, 4.4, 5.2, 6.2, 11.0, 7.6, 4.2, 7.6, 6.4, 8.8, 4.6, 6.6, 8.0, 4.2, 4.4, 4.4]);`,
+`  const widest = colgroup(SHARES);`,
+  'and so does the decided list, at the expense of the ticks');
+
+// and the export leaves out the withdrawn ones for the same reason
+app = swap(app,
+`  const rows = (reqs() || []).filter(r => r.status !== 'Pending');`,
+`  const rows = (reqs() || []).filter(r => r.status !== 'Pending' && r.status !== 'Withdrawn');`,
+  'and the export does too');
+
+// my own requests gets the same one-line treatment
+app = swap(app,
+`        <td class="cell">\${esc(r.client||'—')}</td>
+        <td class="cell">\${esc(r.purpose)}</td>
+        <td>\${esc(modeShort(r.mode))}</td>
+        <td class="cell">\${esc(r.payee||'—')}</td>`,
+`        <td class="cell"\${full(r.client)}>\${esc(r.client||'—')}</td>
+        <td class="cell"\${full(r.purpose)}>\${esc(r.purpose)}</td>
+        <td>\${esc(modeShort(r.mode))}</td>
+        <td class="cell"\${full(r.payee)}>\${esc(r.payee||'—')}</td>`,
+  'my requests reads in one line too');
+
+app = swap(app,
+`        <td>\${statusPill2(r.status)}\${
+          r.status==='Rejected' && r.why ? \`<div class="sub bad">\${esc(r.why)}</div>\`
+          : r.remarks ? \`<div class="sub">\${esc(r.remarks)}</div>\`
+          : r.status==='Pending' ? '<div class="sub">with accounts</div>'
+          : r.status==='Withdrawn' ? '<div class="sub">you took this one back</div>' : ''}</td>`,
+`        <td class="cell"\${full(r.status==='Rejected' && r.why ? 'Turned down: ' + r.why
+            : r.remarks ? r.remarks
+            : r.status==='Pending' ? 'With accounts' : '')}>\${statusPill2(r.status)}\${
+          r.status==='Rejected' && r.why ? \` <span class="why">\${esc(r.why)}</span>\`
+          : r.remarks ? \` <span class="why">\${esc(r.remarks)}</span>\` : ''}</td>`,
+  'and its status is one line, with the rest on hover');
+
+/* The card. It only appears over a cell whose text is actually cut, and it
+ * stays while the pointer is on it so the Copy can be reached — a browser's
+ * own tooltip cannot be copied out of, which is the whole reason for this. */
+app = swap(app,
+`function full(v){`,
+`function cellHover(){
+  if(window.__cellHover) return;
+  window.__cellHover = true;
+  const card = document.createElement('div');
+  card.className = 'cellpop hidden';
+  card.innerHTML = '<div class="ct"></div><button class="btn ghost sm" type="button">Copy</button>';
+  document.body.appendChild(card);
+  const txt = card.querySelector('.ct'), cpy = card.querySelector('button');
+  let over = false, timer = null, current = '';
+  const hide = () => { clearTimeout(timer); timer = setTimeout(() => {
+    if(!over) card.classList.add('hidden'); }, 140); };
+  card.addEventListener('mouseenter', () => { over = true; clearTimeout(timer); });
+  card.addEventListener('mouseleave', () => { over = false; hide(); });
+  cpy.onclick = async () => {
+    try{ await navigator.clipboard.writeText(current); cpy.textContent = 'Copied'; }
+    catch(e){ cpy.textContent = 'Select and copy'; }
+  };
+  document.addEventListener('mouseover', e => {
+    const td = e.target && e.target.closest && e.target.closest('[data-full]');
+    if(!td) return;
+    // nothing to say if it all fits
+    if(td.scrollWidth <= td.clientWidth + 1) return;
+    clearTimeout(timer);
+    current = td.dataset.full;
+    txt.textContent = current;
+    cpy.textContent = 'Copy';
+    card.classList.remove('hidden');
+    const r = td.getBoundingClientRect();
+    const w = Math.min(460, Math.max(240, r.width * 2.4));
+    card.style.width = w + 'px';
+    card.style.left = Math.max(8, Math.min(window.innerWidth - w - 12, r.left - 6)) + 'px';
+    card.style.top  = (r.bottom + window.scrollY + 3) + 'px';
+  });
+  document.addEventListener('mouseout', e => {
+    const td = e.target && e.target.closest && e.target.closest('[data-full]');
+    if(td) hide();
+  });
+}
+
+function full(v){`,
+  'the hover card, made once and reused');
+
+app = swap(app,
+`  CHARTS = {};
+  if(state.tab !== 'payment') state.pqSeen = false;`,
+`  CHARTS = {};
+  cellHover();
+  if(state.tab !== 'payment') state.pqSeen = false;`,
+  'and armed on every render');
+
+// two swaps met in the middle and left the ternary with two else-branches
+app = swap(app,
+`        : pencil(r)
+        : ''}</td>`,
+`        : pencil(r)}</td>`,
+  'one else-branch, not two');
+
+/* ------------------------------------------- what a screenshot would show
+ *
+ * checklook.mjs now opens these screens at 1440 and 1920 and measures them
+ * instead of reading them, and its first run found nine things Avin would
+ * otherwise have found for me: a date cut to '04 Sep 2...', an amount cut to
+ * 'AED 1,20...', DOCUMENT breaking after DOCUMEN, a Rejected pill with its
+ * end shaved off. An amount is money, and money that has to be hovered over
+ * to be read is not a table anybody trusts.
+ *
+ * The room comes from two columns, and neither of them loses anything:
+ *
+ *   * an amount in dirhams stops saying so. Almost every row here is AED and
+ *     the ones that are not still carry their code — which is the convention
+ *     of the workbook these rows came out of, and of every bank statement
+ *     Avin reconciles them against.
+ *   * a date in the current year stops carrying the year.
+ *
+ * That is about sixty pixels, and it goes to the status, the mode, the three
+ * ticks and the document. Everything short enough to be cut but too short to
+ * be worth a column of its own — the date, the first name, the order number,
+ * the amount, the mode, the status — now carries the whole of itself on
+ * hover, so nothing on the screen is unreadable even at 1440. */
+
+app = swap(app,
+`function payAmt(r){ return \`\${esc(r.ccy || 'AED')} \${money(r.amount, 2)}\`; }`,
+`/* AED is the default and the overwhelming majority, so it goes unsaid and
+ * the column gets its width back. A euro or a dollar still says which. */
+function payAmt(r){ const c = r.ccy || 'AED';
+  return (c === 'AED' ? '' : esc(c) + ' ') + money(r.amount, 2); }
+/* …but the hover card, and anything read out of the table, says it in full. */
+function payFull(r){ return \`\${r.ccy || 'AED'} \${money(r.amount, 2)}\`; }
+
+/* The year is this year on all but a handful of rows, and eleven characters
+ * of date in a column that has room for six is how '04 Sep 2026' became
+ * '04 Sep 2...'. An older one keeps its year, because that is the row where
+ * the year is the interesting part. */
+function payDate(d){
+  const s = String(d || ''), y = ' ' + new Date().getFullYear();
+  return s.endsWith(y) ? s.slice(0, -y.length) : s;
+}`,
+  'an amount in dirhams is just a number, and this year needs no year');
+
+app = swap(app,
+`      <td class="n nw">\${esc(r.date)}</td>
+      <td>\${esc(firstName(r.by))}</td>
+      <td class="n nw">\${esc(r.order||'—')}</td>
+      <td class="n r nw">\${payAmt(r)}</td>`,
+`      <td class="n nw"\${full(r.date)}>\${esc(payDate(r.date))}</td>
+      <td\${full(r.by)}>\${esc(firstName(r.by))}</td>
+      <td class="n nw"\${full(r.order)}>\${esc(r.order||'—')}</td>
+      <td class="n r nw"\${full(payFull(r))}>\${payAmt(r)}</td>`,
+  'the queue: nothing short is unreadable');
+
+app = swap(app,
+`        <td class="n nw">\${esc(r.date)}</td>
+        <td class="n nw">\${esc(r.order||'—')}</td>
+        <td class="n r nw">\${payAmt(r)}</td>`,
+`        <td class="n nw"\${full(r.date)}>\${esc(payDate(r.date))}</td>
+        <td class="n nw"\${full(r.order)}>\${esc(r.order||'—')}</td>
+        <td class="n r nw"\${full(payFull(r))}>\${payAmt(r)}</td>`,
+  'and neither is anything in my own requests');
+
+/* The mode column, in both tables. The anchor carries the line above it
+ * because six spaces of indent is a substring of eight, and the same cell
+ * appears at both depths. */
+app = swap(app,
+`      <td class="cell"\${full(r.purpose)}>\${esc(r.purpose)}</td>
+      <td>\${esc(modeShort(r.mode))}</td>`,
+`      <td class="cell"\${full(r.purpose)}>\${esc(r.purpose)}</td>
+      <td\${full(modeShort(r.mode))}>\${esc(modeShort(r.mode))}</td>`,
+  'Transfer is longer than its column, and now says so');
+app = swap(app,
+`        <td class="cell"\${full(r.purpose)}>\${esc(r.purpose)}</td>
+        <td>\${esc(modeShort(r.mode))}</td>`,
+`        <td class="cell"\${full(r.purpose)}>\${esc(r.purpose)}</td>
+        <td\${full(modeShort(r.mode))}>\${esc(modeShort(r.mode))}</td>`,
+  'in my own requests too');
+
+/* A turned-down row shows why in the status column, which is the only place
+ * on the decided table where the reason has ever been. It was being cut. */
+app = swap(app,
+`      return \`<td>\${statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>\`;`,
+`      return \`<td\${full(r.status === 'Rejected' && r.why ? 'Turned down: ' + r.why : r.status)}>\${
+        statusPill2(r.status)}</td><td></td><td></td><td></td><td></td>\`;`,
+  'and a refusal says why on hover');
+
+/* DOCUMENT needs 59 pixels of heading over a column that holds a file chip.
+ * Bk, Bg and Rc set the precedent and Avin took to them; this is the same
+ * trade, and the caption underneath still spells it out. */
+app = swap(app,
+`      <th>Document</th><th>Additional information</th>\`;`,
+`      <th title="Document">Doc</th><th>Additional information</th>\`;`,
+  'Doc, because Document does not fit');
+
+/* The shares, measured rather than guessed. Every fixed column is now at
+ * least as wide as the longest thing that can appear in it at 1440 — a
+ * Rejected pill, a Transfer, an eight-figure amount — and what is left over
+ * goes, as before, to the three columns that carry sentences. */
+app = swap(app,
+`  const SHARES = [5.4, 3.8, 5.0, 6.4, 12.9, 12.2, 4.0, 8.1, 5.8, 12.4,
+                  6.6, 7.4, 2.2, 2.2, 2.4, 3.2];`,
+`  /* These sum to a hundred, and the 0.99 below is the only slack. The old
+   * set summed to a hundred and eight, which the browser quietly scaled back
+   * to fit — so the numbers said one thing and the screen showed another, and
+   * the tick columns ended up a pixel narrower than the two letters over
+   * them. A share here is now the share the column actually gets. */
+  const SHARES = [5.10, 5.20, 5.75, 6.68, 11.44, 10.58, 5.66, 7.19, 4.83, 9.04,
+                  8.40, 8.35, 2.69, 2.69, 2.69, 3.71];`,
+  'the shares, measured at 1440, and summing to what they claim');
+
+app = swap(app,
+`    \`<col style="width:\${(w * 0.94).toFixed(2)}%">\`).join('')}</colgroup>\`;`,
+`    \`<col style="width:\${(w * 0.99).toFixed(2)}%">\`).join('')}</colgroup>\`;`,
+  'and one per cent of slack, which is all a scrollbar needs');
+
+app = swap(app,
+`    <p class="cap"><b>Bk</b> Books &middot; <b>Bg</b> Bigin &middot; <b>Rc</b> Receipt.
+      A cell that is cut off says the rest when you hover it, with a Copy beside it.
+      The pencil at the end corrects a request.</p>`,
+`    <p class="cap"><b>Bk</b> Books &middot; <b>Bg</b> Bigin &middot; <b>Rc</b> Receipt.
+      Amounts are dirhams unless the row says otherwise, and a date without a year is this year.
+      <b>Click an order number</b> to copy that payment's details. The icon under <b>Doc</b> opens the document.
+      A cell that is cut off says the rest when you hover it, with a Copy beside it.
+      The pencil at the end corrects a request.</p>`,
+  'and the caption says what the columns stopped saying');
+
+/* My requests, in the half screen beside the form.
+ *
+ * Eleven columns in eight hundred pixels is not a table, it is a list of
+ * ellipses: at 1440 the date, the order number and the amount were all cut,
+ * and ADDITIONAL INFORMATION broke in the middle of INFORMATION. The form
+ * beside it is 350 pixels of a 1440 screen that has already given 236 to the
+ * rail.
+ *
+ * So the two sit side by side when there is room for both and stack when
+ * there is not — and 'room' is measured on the space this screen actually
+ * has, not on the width of the window, so folding the rail away on a laptop
+ * is enough to bring them back alongside each other. That is what the fold
+ * is for. The wrapper exists only to be the thing measured; the document
+ * pop-up stays outside it, because size containment would trap it. */
+app = swap(app,
+`  <div class="payone">
+    <div>\${form}</div>
+    <div>\${minePanel}</div>
+  </div>\`;`,
+`  <div class="payonew"><div class="payone">
+    <div>\${form}</div>
+    <div>\${minePanel}</div>
+  </div></div>\`;`,
+  'the two-up gets something to measure');
+
+/* the stylesheet above carries the container query itself */
+
+app = swap(app,
+`      <colgroup>\${[9.6, 6.2, 10.2, 12.0, 9.8, 6.6, 9.6, 9.2, 10.2, 9.6, 7.0]
+        .map(w => \`<col style="width:\${(w*0.97).toFixed(2)}%">\`).join('')}</colgroup>
+      <thead><tr><th>Date</th><th>Order #</th><th>Amount</th><th>Client</th>
+        <th>Purpose</th><th>Mode</th><th>Vendor</th><th>Document</th>
+        <th>Additional information</th><th>Status</th><th>Payment</th></tr></thead>`,
+`      <colgroup>\${[5.8, 6.0, 7.0, 14.5, 13.5, 5.8, 9.0, 8.0, 12.4, 9.0, 9.0]
+        .map(w => \`<col style="width:\${(w*0.97).toFixed(2)}%">\`).join('')}</colgroup>
+      <thead><tr><th>Date</th><th>Order #</th><th class="r">Amount</th><th>Client</th>
+        <th>Purpose</th><th>Mode</th><th>Vendor</th><th title="Document">Doc</th>
+        <th>Additional information</th><th>Status</th><th>Payment</th></tr></thead>`,
+  'and my own requests get the same measured shares');
+
+app = swap(app,
+`    <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.</p>`,
+`    <p class="cap">Every request stays here with its status, so nothing depends on an email being spotted.
+      Amounts are dirhams unless the row says otherwise. A cell that is cut off says the rest when you hover it.</p>`,
+  'and say so underneath');
+
+/* The payroll register, measured the same way.
+ *
+ * Two things it was doing and nobody had said: DEDUCTIONS broke after
+ * DEDUCTIO, and a company's own salary total — the bold row, which is wider
+ * than the ordinary rows above it — came out as '132,800...'. A total that
+ * cannot be read is worse than no total.
+ *
+ * Deductions becomes Ded., beside Comm. and Emp ID, and the width it gives up
+ * goes to the three columns that hold a bold seven-figure total. */
+app = swap(app,
+`\${pth('adv','Advance','r')}\${pth('mob','Mobile','r')}\${pth('ded','Deductions','r')}\${pth('net','Net','r')}`,
+`\${pth('adv','Advance','r')}\${pth('mob','Mobile','r')}\${pth('ded','Ded.','r')}\${pth('net','Net','r')}`,
+  'Ded., beside Comm.');
+
+app = swap(app,
+`    : [17,6,4.5,7.5,7,7,7,7,8,7,6.5,7.5,8]);`,
+`    /* Salary, Gross and Net carry the bold company totals, which are wider
+     * than anything in the rows above them; the four optional columns beside
+     * them hold four figures at most. */
+    : [14,7,4.5,9,6.5,6.5,6.5,6.5,9,7,6.5,7,9.5]);`,
+  'the register, measured at 1440');
+
+/* Every consultant, measured.
+ *
+ * Twelve columns sized by their contents came to twenty-three pixels more
+ * than the panel at 1440, and the twenty-three that fell off the edge were
+ * the right-hand half of BALANCE — the last column, and the one figure on
+ * the screen that says what is still owed to somebody. Percentages have no
+ * minimum, so the table is exactly as wide as the panel and the columns give
+ * up width in proportion, the same fix the payment tables got. */
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr>
+        <th>Consultant</th><th>Role</th><th class="r">Invoices</th>`,
+`    <div class="tw"><table class="teamtab">
+      \${showComm
+        ? colsOf([11, 9.1, 7.1, 8.1, 8.1, 7.2, 7.2, 7.2, 9.6, 8.9, 8, 8.5])
+        : colsOf([15, 15, 9, 10, 10, 10, 10, 10, 11])}
+      <thead><tr>
+        <th>Consultant</th><th>Role</th><th class="r">Invoices</th>`,
+  'the consultant table fits the panel it is in');
+
+/* One list of people, one table per company.
+ *
+ * 'Split them into tables for three companies rather than one table, just
+ * like how you have done for payroll.' The payroll register has always read
+ * that way — a bar naming the company and how many people are in it, then
+ * that company's rows, then the next — and a single table of thirty-one
+ * names needs a Company column repeated on every row and still leaves you
+ * counting to find POA's eighteen.
+ *
+ * Nobody's company is guessed here. companyOf() is the same function the
+ * rest of the portal uses and it honours the org-chart override, so a person
+ * paid by one company and working for another sits in the same place on
+ * every screen at once, rather than in whichever place each screen decided.
+ *
+ * `cols` is a shared colgroup, and it is not optional: three stacked tables
+ * of the same headings that start their columns in different places read as
+ * three tables, and the same stops read as one sheet. That is the whole
+ * point of doing this.
+ */
+app = swap(app,
+`function companyOf(user){`,
+`function byCompany(list, o){
+  const who  = o.who  || (r => r.name);
+  const code = o.code || (r => companyOf(who(r)).code);
+  const out = Object.values(DATA.companies).map(c => {
+    const rs = list.filter(r => code(r) === c.code);
+    if(!rs.length) return '';
+    return \`<div class="regblock">
+      <div class="regbar"><b>\${esc(c.name)}</b>
+        <span>\${rs.length} \${rs.length === 1 ? 'person' : 'people'}</span>
+        \${o.note ? \`<em>\${o.note(rs, c)}</em>\` : ''}</div>
+      <div class="tw\${o.cls ? ' tw-' + o.cls : ''}"><table class="cotab\${o.cls ? ' ' + o.cls : ''}">\${o.cols || ''}
+        \${o.head}<tbody>\${rs.map(o.row).join('')}\${o.foot ? o.foot(rs, c) : ''}</tbody></table></div>
+    </div>\`;
+  }).join('');
+  return out || \`<div class="regblock"><p class="cap" style="padding:22px">\${
+    esc(o.empty || 'Nobody to show here yet.')}</p></div>\`;
+}
+
+function companyOf(user){`,
+  'a list of people, a company at a time');
+
+app = swap(app,
+`function payDate(d){`,
+`/* A colgroup from a list of shares. One per cent of slack, so a scrollbar
+ * never appears over blank space. */
+function colsOf(ws){
+  return '<colgroup>' + ws.map(w =>
+    \`<col style="width:\${(w * 0.99).toFixed(2)}%">\`).join('') + '</colgroup>';
+}
+
+function payDate(d){`,
+  'a colgroup, from shares');
+
+/* The card fee calculator, four cards in two columns.
+ *
+ * The Stripe table and the POS table underneath it are read one against the
+ * other — that is the whole point of the screen — and their AMOUNT, VAT and
+ * TOTAL columns started in different places, because each table was sized by
+ * the length of its own descriptions. Same fix as the payment tables: fixed
+ * shares, so the four cards are one comparison rather than four. */
+app = swap(app,
+`      <table>
+        <thead><tr><th>\${esc(CUR)}</th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>`,
+`      <table style="table-layout:fixed;width:100%">
+        \${colsOf([49, 17, 14, 20])}
+        <thead><tr><th>\${esc(CUR)}</th><th class="r">Amount</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>`,
+  'the four fee cards share one set of column stops');
+
+/* =============================================== a list of people, by company
+ *
+ * Every screen below showed the whole group in one table. They now show one
+ * table per company, the way the payroll register always has. Where a table
+ * carried a Company column it loses it — once the rows are under a bar that
+ * says CorpLex, repeating CorpLex on every line is a column of width spent
+ * saying nothing — and the width goes to the columns that were short.
+ */
+
+// ---- the staff directory
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr><th>Name</th><th>Company</th><th>Work phone</th><th>Emirates ID</th><th>Work email</th></tr></thead>
+      <tbody>\${USERS.map(x=>x.name).map(n=>\`<tr>
+        <td class="nw">\${esc(n)}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(companyOf(n).name)}</td>
+        <td class="n nw">\${esc(phoneOf(n)||'—')}</td>
+        <td class="n nw" style="color:var(--ink2)">\${eidOf(n)?\`<span data-eid="\${esc(eidOf(n))}">\${esc(maskEID(eidOf(n)))}</span>\`:'—'}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(emailOf(n)||'—')}</td></tr>\`).join('')}
+      </tbody></table></div>`,
+`    \${byCompany(USERS.map(x=>x.name), {
+      who: n => n,
+      cols: colsOf([27, 19, 22, 32]),
+      head: \`<thead><tr><th>Name</th><th>Work phone</th><th>Emirates ID</th><th>Work email</th></tr></thead>\`,
+      row: n => \`<tr>
+        <td class="nw">\${esc(n)}</td>
+        <td class="n nw">\${esc(phoneOf(n)||'—')}</td>
+        <td class="n nw" style="color:var(--ink2)">\${eidOf(n)?\`<span data-eid="\${esc(eidOf(n))}">\${esc(maskEID(eidOf(n)))}</span>\`:'—'}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(emailOf(n)||'—')}</td></tr>\`,
+      empty: 'Nobody on the staff list yet.'
+    })}`,
+  'the directory, a company at a time');
+
+// ---- profile completeness
+app = swap(app,
+`    <div class="tw"><table class="invtable">
+      <thead><tr><th class="s1">Employee</th><th style="width:180px">Done</th><th>Still needed</th><th>Last updated</th></tr></thead>
+      <tbody>\${rows.map(r=>\`<tr>
+        <td class="s1 nw">\${nm(r.n)}</td>
+        <td><div class="pfbar sm"><i style="width:\${r.d.pct}%;background:var(--\${r.d.pct===100?'good':r.d.pct>=60?'accent':'warn'})"></i></div>
+          <span style="font-size:12px;color:var(--ink2)">\${r.d.pct}%</span></td>
+        <td style="color:var(--ink2);font-size:12.5px">\${r.d.missing.length?esc(r.d.missing.slice(0,4).join(', '))+(r.d.missing.length>4?' +'+(r.d.missing.length-4):''):'—'}</td>
+        <td class="n nw" style="color:var(--ink2)">\${r.p.updated?esc(dayLabel(r.p.updated))+' '+r.p.updated.slice(0,4):'never'}</td></tr>\`).join('')}
+      </tbody></table></div>`,
+`    \${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([26, 19, 37, 18]),
+      note: rs => \`\${rs.filter(r=>r.d.pct===100).length} of \${rs.length} complete\`,
+      head: \`<thead><tr><th>Employee</th><th>Done</th><th>Still needed</th><th>Last updated</th></tr></thead>\`,
+      row: r => \`<tr>
+        <td class="nw">\${nm(r.n)}</td>
+        <td><div class="pfbar sm"><i style="width:\${r.d.pct}%;background:var(--\${r.d.pct===100?'good':r.d.pct>=60?'accent':'warn'})"></i></div>
+          <span style="font-size:12px;color:var(--ink2)">\${r.d.pct}%</span></td>
+        <td style="color:var(--ink2);font-size:12.5px"\${full(r.d.missing.join(', '))}>\${r.d.missing.length?esc(r.d.missing.slice(0,4).join(', '))+(r.d.missing.length>4?' +'+(r.d.missing.length-4):''):'—'}</td>
+        <td class="n nw" style="color:var(--ink2)">\${r.p.updated?esc(dayLabel(r.p.updated))+' '+r.p.updated.slice(0,4):'never'}</td></tr>\`,
+      empty: 'Nobody has a profile yet.'
+    })}`,
+  'profile completeness, a company at a time');
+
+// ---- shifts and reporting lines
+app = swap(app,
+`      <div class="tw"><table>
+        <thead><tr><th>Employee</th><th>Shift</th><th>Approved by</th></tr></thead>
+        <tbody>\${list.map(n=>\`<tr><td class="nw">\${esc(n)}</td>
+          <td class="nw"><select class="ff" data-shift="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            \${SHIFTS().map(s=>\`<option value="\${esc(s.id)}"\${shiftOf(n).id===s.id?' selected':''}>\${esc(s.label)} &middot; \${esc(s.start)}&ndash;\${esc(s.end)}</option>\`).join('')}
+          </select></td>
+          <td class="nw"><select class="ff" data-mgr="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            <option value="">Nobody</option>
+            \${list.filter(m=>m!==n).map(m=>\`<option value="\${esc(m)}"\${mgrName(n)===m?' selected':''}>\${esc(m)}</option>\`).join('')}
+          </select></td></tr>\`).join('')}
+        </tbody></table></div>`,
+`      \${byCompany(list, {
+        who: n => n,
+        cols: colsOf([30, 34, 36]),
+        head: \`<thead><tr><th>Employee</th><th>Shift</th><th>Reports to</th></tr></thead>\`,
+        row: n => \`<tr><td class="nw">\${esc(n)}</td>
+          <td><select class="ff" data-shift="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            \${SHIFTS().map(s=>\`<option value="\${esc(s.id)}"\${shiftOf(n).id===s.id?' selected':''}>\${esc(s.label)} &middot; \${esc(s.start)}&ndash;\${esc(s.end)}</option>\`).join('')}
+          </select></td>
+          <td><select class="ff" data-mgr="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            <option value="">Nobody</option>
+            \${list.filter(m=>m!==n).map(m=>\`<option value="\${esc(m)}"\${mgrName(n)===m?' selected':''}>\${esc(m)}</option>\`).join('')}
+          </select></td></tr>\`,
+        empty: 'Nobody on the shift list yet.'
+      })}`,
+  'shifts, a company at a time');
+
+// ---- fill in document dates
+app = swap(app,
+`    <div class="tw"><table class="invtable">
+      <thead><tr><th class="s1">Employee</th><th>Company</th><th>Emirates ID number</th>
+        \${types.map(t=>\`<th class="r">\${esc(t.label)}</th>\`).join('')}</tr></thead>
+      <tbody>\${rows.length?rows.map(n=>\`<tr>
+        <td class="s1 nw">\${nm(n)}\${gaps(n)?\` <span class="pill mute">\${gaps(n)} blank</span>\`:''}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(companyOf(n).name)}</td>
+        <td><input class="ff" data-deid="\${esc(n)}" value="\${esc(eidOf(n))}" placeholder="784-0000-0000000-0"
+          style="font-variant-numeric:tabular-nums;min-width:180px"></td>
+        \${types.map(t=>cell(n, t.k)).join('')}</tr>\`).join('')
+        :\`<tr><td colspan="\${types.length+3}" style="color:var(--ink3)">Nobody matches that.</td></tr>\`}
+      </tbody></table></div>`,
+`    \${byCompany(rows, {
+      who: n => n, cls: 'invtable',
+      cols: colsOf([25, 23].concat(types.map(() => 52 / types.length))),
+      note: rs => \`\${rs.filter(n => gaps(n)).length} still to fill in\`,
+      head: \`<thead><tr><th>Employee</th><th>Emirates ID number</th>
+        \${types.map(t=>\`<th class="r">\${esc(t.label)}</th>\`).join('')}</tr></thead>\`,
+      row: n => \`<tr>
+        <td class="nw">\${nm(n)}\${gaps(n)?\` <span class="pill mute">\${gaps(n)} blank</span>\`:''}</td>
+        <td><input class="ff" data-deid="\${esc(n)}" value="\${esc(eidOf(n))}" placeholder="784-0000-0000000-0"
+          style="font-variant-numeric:tabular-nums;width:100%;min-width:0"></td>
+        \${types.map(t=>cell(n, t.k)).join('')}</tr>\`,
+      empty: 'Nobody matches that.'
+    })}`,
+  'document dates, a company at a time');
+
+// ---- annual leave balances
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr><th>Employee</th><th>Joined</th><th>Leave year</th><th class="r">On 31 Aug 2026</th>
+        <th class="r">Credited since</th><th class="r">Taken since</th><th class="r">Available</th><th class="r">Requested</th></tr></thead>
+      <tbody>\${list.filter(n=>!noLeave(n)).map(n=>{const B=leaveBal(n); return \`<tr>
+        <td class="nw">\${esc(n)}</td>
+        <td class="n nw">\${esc(B.doj)||'<span style="color:var(--ink3)">not on file</span>'}</td>
+        <td class="nw">\${B.yearNo?\`Year \${B.yearNo}, to \${esc(dayLabel(B.yearEnd))} \${B.yearEnd.slice(0,4)}\`:'<span style="color:var(--ink3)">needs a joining date</span>'}</td>
+        <td class="r"><input class="ff cfin" type="number" step="0.01"
+          data-carry="\${esc(n)}" value="\${B.carriedSet?B.carried:''}" placeholder="—" step="0.01"></td>
+        <td class="n r">\${B.noDoj?'—':B.accrued}</td><td class="n r">\${B.taken||'—'}</td>
+        <td class="n r netcol"\${B.left<0?' style="color:var(--bad)"':''}>\${B.noDoj?'—':B.left}</td>
+        <td class="n r">\${B.pendDays||'—'}</td></tr>\`;}).join('')}
+        <tr class="tot"><td>\${list.filter(n=>!noLeave(n)).length}</td><td></td><td>on the scheme</td>
+          <td class="n r">\${Math.round(list.filter(n=>!noLeave(n)).reduce((s,n)=>s+leaveBal(n).carried,0)*100)/100}</td>
+          <td class="n r">\${Math.round(list.reduce((s,n)=>s+leaveBal(n).accrued,0)*100)/100}</td>
+          <td class="n r">\${list.reduce((s,n)=>s+leaveBal(n).taken,0)}</td>
+          <td class="n r netcol">\${Math.round(list.reduce((s,n)=>s+leaveBal(n).left,0)*100)/100}</td>
+          <td class="n r">\${list.reduce((s,n)=>s+leaveBal(n).pendDays,0)}</td></tr>
+      </tbody></table></div>`,
+`    \${byCompany(list.filter(n=>!noLeave(n)), {
+      who: n => n,
+      cols: colsOf([19, 11, 20, 11, 10, 10, 9.5, 9.5]),
+      note: rs => \`\${Math.round(rs.reduce((s,n)=>s+leaveBal(n).left,0)*100)/100} days available\`,
+      head: \`<thead><tr><th>Employee</th><th>Joined</th><th>Leave year</th><th class="r">On 31 Aug 2026</th>
+        <th class="r">Credited since</th><th class="r">Taken since</th><th class="r">Available</th><th class="r">Requested</th></tr></thead>\`,
+      row: n => { const B = leaveBal(n); return \`<tr>
+        <td>\${esc(n)}</td>
+        <td class="n nw">\${esc(B.doj)||'<span style="color:var(--ink3)">not on file</span>'}</td>
+        <td class="nw"\${full(B.yearNo?\`Year \${B.yearNo}, to \${dayLabel(B.yearEnd)} \${B.yearEnd.slice(0,4)}\`:'')}>\${B.yearNo?\`Year \${B.yearNo}, to \${esc(dayLabel(B.yearEnd))} \${B.yearEnd.slice(0,4)}\`:'<span style="color:var(--ink3)">needs a joining date</span>'}</td>
+        <td class="r"><input class="ff cfin" type="number" step="0.01"
+          data-carry="\${esc(n)}" value="\${B.carriedSet?B.carried:''}" placeholder="—"></td>
+        <td class="n r">\${B.noDoj?'—':B.accrued}</td><td class="n r">\${B.taken||'—'}</td>
+        <td class="n r netcol"\${B.left<0?' style="color:var(--bad)"':''}>\${B.noDoj?'—':B.left}</td>
+        <td class="n r">\${B.pendDays||'—'}</td></tr>\`; },
+      foot: rs => \`<tr class="tot"><td>\${rs.length} on the scheme</td><td></td><td></td>
+        <td class="n r">\${Math.round(rs.reduce((s,n)=>s+leaveBal(n).carried,0)*100)/100}</td>
+        <td class="n r">\${Math.round(rs.reduce((s,n)=>s+leaveBal(n).accrued,0)*100)/100}</td>
+        <td class="n r">\${rs.reduce((s,n)=>s+leaveBal(n).taken,0)}</td>
+        <td class="n r netcol">\${Math.round(rs.reduce((s,n)=>s+leaveBal(n).left,0)*100)/100}</td>
+        <td class="n r">\${rs.reduce((s,n)=>s+leaveBal(n).pendDays,0)}</td></tr>\`,
+      empty: 'Nobody is on the leave scheme yet.'
+    })}`,
+  'leave balances, a company at a time');
+
+// ---- the month's attendance
+app = swap(app,
+`    <div class="tw"><table class="invtable">
+      <thead><tr><th class="s1">Employee</th><th>Shift</th><th class="r">Office</th><th class="r">Home</th>
+        <th class="r">Annual</th><th class="r">Sick</th><th class="r">Unpaid</th><th class="r">Unexplained</th>
+        <th class="r">Late</th><th class="r">Hours</th><th class="r">Days calculated</th><th class="r">In the \${esc(P.month.split(' ')[0])} file</th><th>Check</th></tr></thead>
+      <tbody>\${rows.map(r=>\`<tr>
+        <td class="s1 nw">\${nm(r.n)}</td><td class="n nw" style="color:var(--ink2)">\${esc(shiftOf(r.n).start)}&ndash;\${esc(shiftOf(r.n).end)}</td>`,
+`    \${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([12.5, 9, 6, 6, 6.5, 5.5, 6.5, 9, 5.5, 6.5, 8, 8, 10.5]),
+      head: \`<thead><tr><th>Employee</th><th>Shift</th><th class="r">Office</th><th class="r">Home</th>
+        <th class="r">Annual</th><th class="r">Sick</th><th class="r">Unpaid</th><th class="r">Unexplained</th>
+        <th class="r">Late</th><th class="r">Hours</th><th class="r">Days calculated</th><th class="r">In the \${esc(P.month.split(' ')[0])} file</th><th>Check</th></tr></thead>\`,
+      empty: 'Nobody has attendance this month.',
+      row: r => \`<tr>
+        <td>\${nm(r.n)}</td><td class="n nw" style="color:var(--ink2)">\${esc(shiftOf(r.n).start)}&ndash;\${esc(shiftOf(r.n).end)}</td>`,
+  'attendance, a company at a time');
+
+app = swap(app,
+`        <td class="nw">\${r.diff===null?\`<span class="pill mute">\${samePay?'not on the run':'no run for this month'}</span>\`
+          : r.diff===0?'<span class="pill good"><span class="dt"></span>Matches</span>'
+          : \`<span class="pill warn"><span class="dt"></span>\${r.diff>0?'+':''}\${r.diff} day\${Math.abs(r.diff)===1?'':'s'}</span>\`}</td></tr>\`).join('')}
+      </tbody></table></div>`,
+`        <td class="nw">\${r.diff===null?\`<span class="pill mute">\${samePay?'not on the run':'no run for this month'}</span>\`
+          : r.diff===0?'<span class="pill good"><span class="dt"></span>Matches</span>'
+          : \`<span class="pill warn"><span class="dt"></span>\${r.diff>0?'+':''}\${r.diff} day\${Math.abs(r.diff)===1?'':'s'}</span>\`}</td></tr>\`
+    })}`,
+  'and the row closes the helper rather than the table');
+
+// ---- the exceptions beside it
+app = swap(app,
+`      <div class="tw"><table>
+        <thead><tr><th>Employee</th><th>Date</th><th>What happened</th></tr></thead>
+        <tbody>\${exc.length?exc.slice(0,14).map(x=>\`<tr><td class="nw">\${nm(x.n)}</td>
+          <td class="n nw">\${esc(dayLabel(x.ds))}</td><td style="color:var(--ink2)">\${esc(x.why)}</td></tr>\`).join('')
+          :'<tr><td colspan="3" style="color:var(--ink3)">Nothing out of place this month.</td></tr>'}
+          \${exc.length>14?\`<tr class="tot"><td colspan="3">and \${exc.length-14} more</td></tr>\`:''}
+        </tbody></table></div>`,
+`      \${byCompany(exc.slice(0, 24), {
+        who: x => x.n,
+        cols: colsOf([26, 16, 58]),
+        head: \`<thead><tr><th>Employee</th><th>Date</th><th>What happened</th></tr></thead>\`,
+        row: x => \`<tr><td>\${nm(x.n)}</td>
+          <td class="n nw">\${esc(dayLabel(x.ds))}</td>
+          <td style="color:var(--ink2)"\${full(x.why)}>\${esc(x.why)}</td></tr>\`,
+        empty: 'Nothing out of place this month.'
+      })}
+      \${exc.length>24?\`<p class="cap">and \${exc.length-24} more</p>\`:''}`,
+  'exceptions, a company at a time');
+
+// ---- every regularisation request
+app = swap(app,
+`    <div class="tw"><table class="invtable">
+      <thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th>State</th><th>Decided</th></tr></thead>
+      <tbody>\${rows.length ? rows.map(r => \`<tr>
+        <td class="n">\${esc(r.id)}</td><td class="nw">\${esc(NM(r.who))}</td>
+        <td class="nw">\${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">\${esc(r.reason)}\${r.note?' \\u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:\${RGCOL(r.status)}">\${esc(r.status)}</span></td>
+        <td class="n">\${esc(r.decided)?esc(dayLabel(r.decided)):'\\u2014'}</td></tr>\`).join('')
+        : '<tr><td colspan="8" style="color:var(--ink3)">Nobody has asked to fix a day yet.</td></tr>'}
+      </tbody></table></div>`,
+`    \${byCompany(rows, {
+      who: r => NM(r.who), cls: 'invtable',
+      cols: REGCOLS,
+      head: \`<thead><tr><th>Ref</th><th>Who</th><th>Day</th><th class="n">In</th><th class="n">Out</th>
+        <th>Why</th><th>State</th><th>Decided</th></tr></thead>\`,
+      row: r => \`<tr>
+        <td class="n">\${esc(r.id)}</td><td>\${esc(NM(r.who))}</td>
+        <td class="nw">\${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px"\${full(r.reason + (r.note ? ' — ' + r.note : ''))}>\${esc(r.reason)}\${r.note?' \\u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:\${RGCOL(r.status)}">\${esc(r.status)}</span></td>
+        <td class="n">\${esc(r.decided)?esc(dayLabel(r.decided)):'\\u2014'}</td></tr>\`,
+      empty: 'Nobody has asked to fix a day yet.'
+    })}`,
+  'regularisations, a company at a time');
+
+// ---- salary on file
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr><th class="s1">Employee</th><th>Company</th><th class="r">Basic</th><th class="r">Other allowance</th>
+        <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>
+      <tbody>\${(()=>{
+        const rows = USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
+          .sort((a,b)=>a.localeCompare(b)).map(n=>({n, p:salParts(n)}));
+        if(!rows.length) return \`<tr><td colspan="7" style="color:var(--ink3)">Nothing on file.</td></tr>\`;
+        return rows.map(r=>\`<tr>
+          <td class="s1 nw">\${nm(r.n)}</td>
+          <td class="nw" style="color:var(--ink2)">\${esc(companyOf(r.n).name)}</td>
+          <td class="n r">\${money(r.p.basic,2)}</td><td class="n r">\${money(r.p.allow,2)}</td>
+          <td class="n r netcol">\${money(r.p.salary,2)}</td>
+          <td class="n r" style="color:var(--ink2)">\${r.p.salary?pct(r.p.basic/r.p.salary,1):'\\u2014'}</td>
+          <td class="nw" style="color:var(--ink2)">\${r.p.from?esc('From '+r.p.from):esc(r.p.src||'\\u2014')}\${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}</td></tr>\`).join('');
+      })()}
+      </tbody></table></div>`,
+`    \${byCompany(USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
+        .sort((a,b)=>a.localeCompare(b)).map(n=>({n, p:salParts(n)})), {
+      who: r => r.n,
+      cols: colsOf([22, 13, 15, 13, 12, 25]),
+      note: rs => \`\${money(rs.reduce((a,r)=>a+r.p.salary,0),2)} on file\`,
+      head: \`<thead><tr><th>Employee</th><th class="r">Basic</th><th class="r">Other allowance</th>
+        <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>\`,
+      row: r => \`<tr>
+        <td>\${nm(r.n)}</td>
+        <td class="n r">\${money(r.p.basic,2)}</td><td class="n r">\${money(r.p.allow,2)}</td>
+        <td class="n r netcol">\${money(r.p.salary,2)}</td>
+        <td class="n r" style="color:var(--ink2)">\${r.p.salary?pct(r.p.basic/r.p.salary,1):'\\u2014'}</td>
+        <td style="color:var(--ink2)"\${full(r.p.from?'From '+r.p.from:(r.p.src||''))}>\${r.p.from?esc('From '+r.p.from):esc(r.p.src||'\\u2014')}\${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}</td></tr>\`,
+      empty: 'Nothing on file.'
+    })}`,
+  'salary on file, a company at a time');
+
+// ---- probation
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr><th class="s1">Employee</th><th>Joined</th><th>Probation ends</th><th class="r">Days left</th><th></th></tr></thead>
+      <tbody>\${PROB().map(p=>\`<tr>
+        <td class="s1 nw">\${nm(p.who)}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(p.doj))} \${esc(p.doj.slice(0,4))}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(p.until))} \${esc(p.until.slice(0,4))}</td>
+        <td class="n r"\${p.days<=30?' style="color:var(--warn)"':''}>\${p.days}</td>
+        <td class="r nw">
+          <button class="btn sm" data-pbok="\${esc(p.who)}" type="button">Confirm</button>
+          <input class="pbdate" type="date" data-pbext="\${esc(p.who)}" value="" title="extend to">
+        </td></tr>\`).join('')}
+      </tbody></table></div>`,
+`    \${byCompany(PROB(), {
+      who: p => p.who,
+      cols: colsOf([26, 17, 18, 11, 28]),
+      head: \`<thead><tr><th>Employee</th><th>Joined</th><th>Probation ends</th><th class="r">Days left</th><th></th></tr></thead>\`,
+      row: p => \`<tr>
+        <td>\${nm(p.who)}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(p.doj))} \${esc(p.doj.slice(0,4))}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(dayLabel(p.until))} \${esc(p.until.slice(0,4))}</td>
+        <td class="n r"\${p.days<=30?' style="color:var(--warn)"':''}>\${p.days}</td>
+        <td class="r nw">
+          <button class="btn sm" data-pbok="\${esc(p.who)}" type="button">Confirm</button>
+          <input class="pbdate" type="date" data-pbext="\${esc(p.who)}" value="" title="extend to">
+        </td></tr>\`,
+      empty: 'Nobody is on probation.'
+    })}`,
+  'probation, a company at a time');
+
+// ---- payslips
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr><th>Employee</th><th>Emp ID</th><th>Company</th><th class="r">Gross</th><th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
+      <tbody>\${rows.map(r=>{const s=slipOf(r); return \`<tr\${state.slipOpen===r.id?' style="background:var(--panel2)"':''}>
+        <td class="nw">\${nm(r.name)}</td><td class="n">\${esc(r.id)}</td><td>\${esc(DATA.payroll.label[r.company]||r.company)}</td>
+        <td class="n r">\${money(s.gross,2)}</td><td class="n r">\${s.dedT?money(s.dedT,2):'&mdash;'}</td>
+        <td class="n r netcol">\${money(s.net,2)}</td>
+        <td class="r"><button class="btn ghost" data-slip="\${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>\`;}).join('')}
+        <tr class="tot"><td>\${rows.length} people</td><td></td><td></td>
+          <td class="n r">\${money(rows.reduce((a,r)=>a+slipOf(r).gross,0),2)}</td>
+          <td class="n r">\${money(rows.reduce((a,r)=>a+slipOf(r).dedT,0),2)}</td>
+          <td class="n r netcol">\${money(rows.reduce((a,r)=>a+slipOf(r).net,0),2)}</td><td></td></tr>
+      </tbody></table></div>`,
+`    \${byCompany(rows, {
+      code: r => r.company,
+      cols: colsOf([31, 12, 15, 15, 15, 12]),
+      note: rs => \`net \${money(rs.reduce((a,r)=>a+slipOf(r).net,0),2)}\`,
+      head: \`<thead><tr><th>Employee</th><th>Emp ID</th><th class="r">Gross</th><th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>\`,
+      row: r => { const s = slipOf(r); return \`<tr\${state.slipOpen===r.id?' style="background:var(--panel2)"':''}>
+        <td>\${nm(r.name)}</td><td class="n">\${esc(r.id)}</td>
+        <td class="n r">\${money(s.gross,2)}</td><td class="n r">\${s.dedT?money(s.dedT,2):'&mdash;'}</td>
+        <td class="n r netcol">\${money(s.net,2)}</td>
+        <td class="r"><button class="btn ghost" data-slip="\${esc(r.id)}" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>\`; },
+      foot: rs => \`<tr class="tot"><td>\${rs.length} \${rs.length===1?'person':'people'}</td><td></td>
+        <td class="n r">\${money(rs.reduce((a,r)=>a+slipOf(r).gross,0),2)}</td>
+        <td class="n r">\${money(rs.reduce((a,r)=>a+slipOf(r).dedT,0),2)}</td>
+        <td class="n r netcol">\${money(rs.reduce((a,r)=>a+slipOf(r).net,0),2)}</td><td></td></tr>\`,
+      empty: 'No payslips on this run.'
+    })}`,
+  'payslips, a company at a time');
+
+// ---- who is where over the next fortnight
+app = swap(app,
+`    <div class="tw"><table class="availtable">
+      <thead><tr><th class="s1">Name</th>\${days.map(d=>\`<th class="r\${d===today?' av-today':''}"><span>\${esc(dayName(d).slice(0,2))}</span><b>\${esc(dayLabel(d).slice(0,2))}</b></th>\`).join('')}</tr></thead>
+      <tbody>\${avail.map(n=>\`<tr><td class="s1 nw">\${whoLink(n)}</td>\${days.map(d=>{
+        const ds = dayStatus(n, d), short = STSHORT[ds.k] || '';
+        return \`<td class="av\${d===today?' av-today':''}\${ds.k==='Weekend'?' av-we':''}" style="background:\${['Weekend','Planned','Office'].includes(ds.k)?'transparent':tint(ds.k)}"
+          title="\${esc(n)} \\u2014 \${esc(dayLabel(d))}: \${esc(ds.label||ds.k)}">\${short}</td>\`;
+      }).join('')}</tr>\`).join('')}
+      </tbody></table></div>`,
+`    \${byCompany(avail, {
+      who: n => n, cls: 'availtable',
+      cols: colsOf([22].concat(days.map(() => 78 / days.length))),
+      head: \`<thead><tr><th>Name</th>\${days.map(d=>\`<th class="r\${d===today?' av-today':''}"><span>\${esc(dayName(d).slice(0,2))}</span><b>\${esc(dayLabel(d).slice(0,2))}</b></th>\`).join('')}</tr></thead>\`,
+      row: n => \`<tr><td>\${whoLink(n)}</td>\${days.map(d=>{
+        const ds = dayStatus(n, d), short = STSHORT[ds.k] || '';
+        return \`<td class="av\${d===today?' av-today':''}\${ds.k==='Weekend'?' av-we':''}" style="background:\${['Weekend','Planned','Office'].includes(ds.k)?'transparent':tint(ds.k)}"
+          title="\${esc(n)} \\u2014 \${esc(dayLabel(d))}: \${esc(ds.label||ds.k)}">\${short}</td>\`;
+      }).join('')}</tr>\`,
+      empty: 'Nothing planned in the next two weeks.'
+    })}`,
+  'the fortnight board, a company at a time');
+
+// ---- the air ticket entitlement register
+app = swap(app,
+`      <tbody>
+        \${rows.map(r=>\`<tr\${(r.lwd||r.status.startsWith('Remote'))?' style="color:var(--ink3)"':''}>
+          <td class="n nw">\${esc(r.id)}</td>
+          <td class="nw">\${nm(r.name)}</td>`,
+`      <tbody>
+        \${rows.map(r=>\`<tr\${(r.lwd||r.status.startsWith('Remote'))?' style="color:var(--ink3)"':''}>
+          <td class="n nw">\${esc(r.id)}</td>
+          <td>\${nm(r.name)}</td>`,
+  'a long name in the ticket register wraps rather than being cut');
+
+// ---- the air ticket entitlement register
+app = swap(app,
+`      <tbody>
+        \${rows.map(r=>\`<tr\${(r.lwd||r.status.startsWith('Remote'))?' style="color:var(--ink3)"':''}>
+          <td class="n nw">\${esc(r.id)}</td>
+          <td>\${nm(r.name)}</td>
+          <td class="nw">\${esc(r.country)}</td>
+          <td class="n nw">\${esc(r.doj)}</td>
+          <td class="n r">\${money(r.rate,0)}</td>
+          <td class="n nw">\${esc(r.lastPaid)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td class="n nw">\${esc(r.next)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td class="nw">\${esc(r.proc)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td class="nw">\${stPill(r.status)}</td>
+          <td class="n r">\${r.taken}</td>
+          <td class="n r"\${r.pending?' style="color:var(--bad);font-weight:600"':''}>\${r.pending||'—'}</td>
+          <td class="n r netcol">\${r.backlog?money(r.backlog,0):'—'}</td>
+        </tr>\`).join('')}
+        <tr class="tot"><td>\${rows.length}</td><td>people</td><td colspan="7"></td>
+          <td class="n r">\${rows.reduce((s,r)=>s+r.taken,0)}</td>
+          <td class="n r">\${rows.reduce((s,r)=>s+r.pending,0)}</td>
+          <td class="n r netcol">\${money(rows.reduce((s,r)=>s+r.backlog,0),0)}</td></tr>
+      </tbody></table></div>`,
+`      </table></div>
+    \${byCompany(rows, {
+      who: r => r.name, cls: 'invtable',
+      cols: colsOf([7, 14, 9, 9, 6.5, 9, 9, 8, 8.5, 5.5, 7, 6.5]),
+      head: TICKHEAD,
+      row: r => \`<tr\${(r.lwd||r.status.startsWith('Remote'))?' style="color:var(--ink3)"':''}>
+          <td class="n nw">\${esc(r.id)}</td>
+          <td>\${nm(r.name)}</td>
+          <td>\${esc(r.country)}</td>
+          <td class="n nw">\${esc(r.doj)}</td>
+          <td class="n r">\${money(r.rate,0)}</td>
+          <td class="n nw">\${esc(r.lastPaid)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td class="n nw">\${esc(r.next)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td>\${esc(r.proc)||'<span style="color:var(--ink3)">—</span>'}</td>
+          <td>\${stPill(r.status)}</td>
+          <td class="n r">\${r.taken}</td>
+          <td class="n r"\${r.pending?' style="color:var(--bad);font-weight:600"':''}>\${r.pending||'—'}</td>
+          <td class="n r netcol">\${r.backlog?money(r.backlog,0):'—'}</td>
+        </tr>\`,
+      foot: rs => \`<tr class="tot"><td>\${rs.length}</td><td>people</td><td colspan="7"></td>
+          <td class="n r">\${rs.reduce((s,r)=>s+r.taken,0)}</td>
+          <td class="n r">\${rs.reduce((s,r)=>s+r.pending,0)}</td>
+          <td class="n r netcol">\${money(rs.reduce((s,r)=>s+r.backlog,0),0)}</td></tr>\`,
+      empty: 'Nobody matches those filters.'
+    })}`,
+  'the ticket register, a company at a time');
+
+/* The sortable headings are built once and used by all three blocks — the
+ * sort still runs over the whole list, it is only shown a company at a time. */
+app = swap(app,
+`    <div class="tw"><table class="invtable">
+      <thead><tr>
+        \${th('id','Emp ID')}\${th('name','Employee')}\${th('country','Country')}\${th('dojS','Joined')}
+        \${th('rate','Rate','r')}\${th('lastPaid','Last taken')}\${th('nextS','Next due')}\${th('proc','Process in')}
+        \${th('status','Status')}\${th('taken','Taken','r')}\${th('pending','Pending','r')}\${th('backlog','Backlog','r')}
+      </tr></thead>`,
+`    \${(() => { window.TICKHEAD = \`<thead><tr>
+        \${th('id','Emp ID')}\${th('name','Employee')}\${th('country','Country')}\${th('dojS','Joined')}
+        \${th('rate','Rate','r')}\${th('lastPaid','Last taken')}\${th('nextS','Next due')}\${th('proc','Process in')}
+        \${th('status','Status')}\${th('taken','Taken','r')}\${th('pending','Pending','r')}\${th('backlog','Backlog','r')}
+      </tr></thead>\`; return ''; })()}
+    <div style="display:none"><table>`,
+  'the ticket headings, built once');
+
+// ---- who has not checked in yet today
+app = swap(app,
+`    <div class="tw"><table>
+      <thead><tr><th>Who</th><th>Shift</th><th>Manager</th><th class="r">Late by</th></tr></thead>
+      <tbody>\${late.map(n => { const g = nudgeFor(n); return \`<tr>
+        <td class="nw">\${esc(NM(n))}</td><td class="n">\${esc(shiftOf(n).start)}</td>
+        <td class="nw">\${esc(NM(mgrName(n)) || '\\u2014')}</td>
+        <td class="n r">\${g.by} min</td></tr>\`;}).join('')}
+      </tbody></table></div>`,
+`    \${byCompany(late, {
+      who: n => NM(n),
+      cols: colsOf([34, 16, 32, 18]),
+      head: \`<thead><tr><th>Who</th><th>Shift</th><th>Manager</th><th class="r">Late by</th></tr></thead>\`,
+      row: n => { const g = nudgeFor(n); return \`<tr>
+        <td>\${esc(NM(n))}</td><td class="n">\${esc(shiftOf(n).start)}</td>
+        <td>\${esc(NM(mgrName(n)) || '\\u2014')}</td>
+        <td class="n r">\${g.by} min</td></tr>\`; },
+      empty: 'Everybody is in.'
+    })}`,
+  'who is not in yet, a company at a time');
+
+/* ======================================= the payment request page, seven items
+ *
+ * From Avin's sheet, the Payment request rows. Numbers below are his.
+ */
+
+/* #7 — 'Check boxes take 2-3 seconds for it to turn the tick mark on and off.'
+ *
+ * They did, because the click disabled the box, redrew the whole screen, went
+ * to the database, reloaded every table in the portal and redrew again. All
+ * of that has to happen; none of it has to happen before the tick moves.
+ *
+ * So the tick moves first and the database follows. The row is updated in
+ * place, the screen is left alone, and only a refusal is allowed to redraw —
+ * putting the box back where it was, because a tick that stayed on after the
+ * server said no would be a lie about the books being reconciled. */
+app = swap(app,
+`    const recon = async (id, patch) => {
+      state.reconBusy = id; render();
+      await window.__db.reconcilePayment(id, patch);
+      state.reconBusy = null; render();
+    };`,
+`    const recon = async (id, patch, box) => {
+      const row = (reqs() || []).find(x => x.id === id);
+      const was = row ? {books:row.books, bigin:row.bigin, receipt:row.receipt,
+                         payStatus:row.payStatus, account:row.account} : null;
+      if(row) Object.assign(row, patch);        // the screen agrees with you at once
+      const ok = await window.__db.reconcilePayment(id, patch);
+      if(!ok){                                   // it did not take — put it back
+        if(row && was) Object.assign(row, was);
+        if(box) box.checked = !box.checked;
+        render();
+      }
+    };`,
+  'the tick moves when you click it, not when the server answers');
+
+app = swap(app,
+`    document.querySelectorAll('[data-recon]').forEach(cb=>cb.onchange=()=>
+      recon(cb.dataset.recon, {[cb.dataset.field]: cb.checked}));`,
+`    document.querySelectorAll('[data-recon]').forEach(cb=>cb.onchange=()=>
+      recon(cb.dataset.recon, {[cb.dataset.field]: cb.checked}, cb));`,
+  'and the box that was clicked is the one put back');
+
+// the disabled state went with it: a box you cannot click is a box that looks broken
+app = swap(app,
+`    const busy = state.reconBusy === r.id;`,
+`    const busy = false;   // nothing is disabled while it saves — see recon()`,
+  'nothing goes grey mid-tick');
+
+/* #4 — 'Currently the whatsapp will open as a share message. Can it be
+ * directed towards his number?'
+ *
+ * It can, and the number does not need typing in here: the portal already
+ * holds his work number in the directory, and knows he is the owner. If no
+ * number is on file it falls back to the share sheet rather than opening a
+ * chat with nobody. */
+app = swap(app,
+`function waMessage(r){`,
+`/* Who authorises a Mashreq transfer in the banking portal — the owner. Asked
+ * of the roster rather than written down twice. */
+function payAuthoriser(){
+  const u = (USERS || []).find(x => roleOf(x.name) === 'owner');
+  return u ? u.name : '';
+}
+function authoriserWa(){ return waNumber(phoneOf(payAuthoriser())); }
+
+/* Exactly the six lines Avin asked for, in his order and his wording, for
+ * copying out of the table and pasting into a chat. Deliberately not the
+ * longer approval message below: this one is what a payment IS, and nothing
+ * about who raised it or where it stands. */
+function orderMessage(r){
+  const amt = Number(r.amount) === Math.round(Number(r.amount))
+    ? String(Math.round(Number(r.amount)))
+    : Number(r.amount).toFixed(2);
+  const ccy = (r.ccy && r.ccy !== 'AED') ? r.ccy + ' ' : '';
+  return [
+    \`Order number:  \${r.order || '—'}\`,
+    \`Amount: \${ccy}\${amt}\`,
+    \`Client name: \${r.client || '—'}\`,
+    \`Purpose of payment: \${r.purpose || '—'}\`,
+    \`Mode of payment: \${(MODES.find(m=>m.id===r.mode)||{}).label || r.mode}\`,
+    \`Vendor Name: \${r.payee || '—'}\`
+  ].join('\\n');
+}
+
+function waMessage(r){`,
+  'the authoriser, and the six-line message');
+
+app = swap(app,
+`        <a class="btn sm" id="waGo" href="https://wa.me/?text=\${encodeURIComponent(state.waMsg)}"
+           target="_blank" rel="noopener">Open WhatsApp</a>`,
+`        <a class="btn sm" id="waGo" href="https://wa.me/\${authoriserWa()}?text=\${encodeURIComponent(state.waMsg)}"
+           target="_blank" rel="noopener">\${authoriserWa()
+             ? 'Open the chat with ' + esc(firstName(payAuthoriser())) : 'Open WhatsApp'}</a>`,
+  'the message opens in his chat, not the share sheet');
+
+app = swap(app,
+`      if(tab) tab.location='https://wa.me/?text='+encodeURIComponent(waMessage(r));`,
+`      if(tab) tab.location='https://wa.me/'+authoriserWa()+'?text='+encodeURIComponent(waMessage(r));`,
+  'and so does the one sent at the moment of approval');
+
+app = swap(app,
+`        <b>For the payments group</b>`,
+`        <b>\${authoriserWa() ? 'For ' + esc(firstName(payAuthoriser()))
+            : 'For the payments group'}</b>`,
+  'and it says whose chat it is');
+
+app = swap(app,
+`        <p class="cap" style="padding:12px 2px 0">WhatsApp does not let an app post into a group by itself,
+          so this opens with the message ready and the send stays yours.</p>`,
+`        <p class="cap" style="padding:12px 2px 0">\${authoriserWa()
+          ? 'This opens the chat with ' + esc(firstName(payAuthoriser())) + ' on ' + esc(phoneOf(payAuthoriser())) + ' with the message ready. Pressing send stays yours.'
+          : 'No work number is on file for the owner, so this opens the share sheet instead. Add one on their profile and it will go straight to the chat.'}</p>`,
+  'and says which number it is going to');
+
+/* #8 — 'Click on each order number should generate a message and auto copy.'
+ *
+ * The order number becomes the button, because that is the thing on the row
+ * you already look at to know which payment it is. One click copies the six
+ * lines and the number says Copied for a moment. Where the browser refuses
+ * the clipboard — it does over plain http, and inside some in-app browsers —
+ * the message opens in the card instead, with a Copy button that works. */
+/* The anchor carries the line above it: six spaces of indent is a substring
+ * of eight, and My requests has the same cell one level deeper. */
+app = swap(app,
+`      <td\${full(r.by)}>\${esc(firstName(r.by))}</td>
+      <td class="n nw"\${full(r.order)}>\${esc(r.order||'—')}</td>`,
+`      <td\${full(r.by)}>\${esc(firstName(r.by))}</td>
+      <td class="n nw"\${full(r.order)}>\${r.order
+        ? \`<button type="button" class="ordbtn" data-ordmsg="\${esc(r.id)}"
+             title="Copy the payment details">\${esc(r.order)}</button>\`
+        : '<span style="color:var(--ink3)">—</span>'}</td>`,
+  'the order number is the button');
+
+app = swap(app,
+`    document.querySelectorAll('[data-paystat]').forEach(sel=>sel.onchange=()=>`,
+`    document.querySelectorAll('[data-ordmsg]').forEach(b=>b.onclick=async()=>{
+      const r = (reqs()||[]).find(x=>x.id===b.dataset.ordmsg); if(!r) return;
+      const msg = orderMessage(r), said = b.textContent;
+      try{
+        await navigator.clipboard.writeText(msg);
+        b.textContent = 'Copied'; b.classList.add('copied');
+        setTimeout(()=>{ b.textContent = said; b.classList.remove('copied'); }, 1400);
+      }catch(e){
+        // no clipboard here — show it instead, where it can be selected
+        state.waMsg = msg; state.waTitle = r.order || 'This payment'; render();
+      }
+    });
+    document.querySelectorAll('[data-paystat]').forEach(sel=>sel.onchange=()=>`,
+  'one click copies the six lines');
+
+// the card is reused for that, so it says what it is holding
+app = swap(app,
+`        <b>\${authoriserWa() ? 'For ' + esc(firstName(payAuthoriser()))
+            : 'For the payments group'}</b>`,
+`        <b>\${state.waTitle ? esc(state.waTitle)
+            : authoriserWa() ? 'For ' + esc(firstName(payAuthoriser()))
+            : 'For the payments group'}</b>`,
+  'the card names what it is holding');
+
+app = swap(app,
+`      const wa = document.getElementById('payWa');
+      if(wa) wa.onclick = () => { state.waMsg = window.__mirazizMsg || ''; render(); };`,
+`      const wa = document.getElementById('payWa');
+      if(wa) wa.onclick = () => { state.waMsg = window.__mirazizMsg || ''; state.waTitle = ''; render(); };`,
+  'and the group message clears it');
+
+/* #1 — 'Document column size can be reduced - use just a doc icon if there is
+ * a document, i will open it anyway.'
+ *
+ * So the file name goes and an icon stays, one per document, each opening its
+ * own. The name is still on the hover. The column drops from just under five
+ * per cent to three, and the three that carry sentences take what it gives up. */
+app = swap(app,
+`      <td>\${r.files.length ? r.files.map(f=>f.url
+            ? \`<button type="button" class="doc" data-popdoc="\${esc(f.url)}" data-name="\${esc(f.name)}" title="\${esc(f.name)}">\${esc(f.name)}</button>\`
+            : \`<span class="doc">\${esc(f.name)}</span>\`).join('')
+          : '<span style="color:var(--ink3)">—</span>'}</td>`,
+`      <td class="c">\${r.files.length ? r.files.map(f=>f.url
+            ? \`<button type="button" class="docico" data-popdoc="\${esc(f.url)}" data-name="\${esc(f.name)}" title="\${esc(f.name)}" aria-label="Open \${esc(f.name)}">\${DOCICO}</button>\`
+            : \`<span class="docico off" title="\${esc(f.name)}">\${DOCICO}</span>\`).join('')
+          : '<span style="color:var(--ink3)">—</span>'}</td>`,
+  'a document is an icon, not a file name');
+
+app = swap(app,
+`function orderMessage(r){`,
+`const DOCICO = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" '
+  + 'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+  + '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+
+function orderMessage(r){`,
+  'the document glyph');
+
+/* The share the column gives up goes to the client, the purpose and the note. */
+app = swap(app,
+`  const SHARES = [5.10, 5.20, 5.75, 6.68, 11.44, 10.58, 5.66, 7.19, 4.83, 9.04,
+                  8.40, 8.35, 2.69, 2.69, 2.69, 3.71];`,
+`  /* These summed to 98.68, not 100 — a percent and a third of the table
+   * belonging to nothing, which at 1920 is thirty-seven pixels of white space
+   * on a row where the client's name is cut. It goes to the four columns that
+   * hold sentences, most of it to the client. */
+  const SHARES = [5.10, 5.20, 5.75, 6.68, 13.20, 9.90, 5.66, 8.10, 3.45, 8.43,
+                  8.40, 8.35, 2.69, 2.69, 2.69, 3.71];`,
+  'and the sentences take the width the file names were using');
+
+/* #3 — 'Ask Miraziz to approve, Export CSV, Search bar shall go at the right
+ * end of the header.' They were left of the count; now the count sits with
+ * the heading and the three controls have the right end to themselves. */
+app = swap(app,
+`    <header><h3>Already decided</h3>
+      <div class="dechead">`,
+`    <header><h3>Already decided</h3>
+      <span class="hint" style="margin-left:0">\${find
+        ? \`\${done.length} of \${all.length}\`
+        : (all.length ? \`\${all.length} request\${all.length===1?'':'s'}\` : 'none yet')}</span>
+      <div class="dechead">`,
+  'the count moves up beside the heading');
+
+app = swap(app,
+`          value="\${esc(state.paySearch || '')}" aria-label="Search the decided payments">
+      </div>
+      <span class="hint">\${find
+        ? \`\${done.length} of \${all.length}\`
+        : (all.length ? \`\${all.length} request\${all.length===1?'':'s'}\` : 'none yet')}</span></header>`,
+`          value="\${esc(state.paySearch || '')}" aria-label="Search the decided payments">
+      </div></header>`,
+  'and the three controls have the right end');
+
+/* #5 — 'Approved, Rejected, Withdrawn pills only must be seen. Hover over
+ * that to see the instruction.'
+ *
+ * The reason was printed beside the pill and made the column the widest thing
+ * on a row that was meant to be one line. It moves entirely onto the hover —
+ * which until now only appeared when a cell was actually cut, so the cell is
+ * marked as having something to say whether or not it is clipped. */
+app = swap(app,
+`        <td class="cell"\${full(r.status==='Rejected' && r.why ? 'Turned down: ' + r.why
+            : r.remarks ? r.remarks
+            : r.status==='Pending' ? 'With accounts' : '')}>\${statusPill2(r.status)}\${
+          r.status==='Rejected' && r.why ? \` <span class="why">\${esc(r.why)}</span>\`
+          : r.remarks ? \` <span class="why">\${esc(r.remarks)}</span>\` : ''}</td>`,
+`        <td class="cell"\${full(r.status==='Rejected' && r.why ? 'Turned down: ' + r.why
+            : r.remarks ? r.remarks
+            : r.status==='Pending' ? 'With accounts'
+            : r.status==='Withdrawn' ? 'You took this one back' : '')} data-always>\${
+          statusPill2(r.status)}</td>`,
+  'the pill alone, and the reason one hover away');
+
+app = swap(app,
+`    if(td.scrollWidth <= td.clientWidth + 1) return;`,
+`    // a cell marked data-always has something to say even when nothing is cut
+    if(!td.hasAttribute('data-always') && td.scrollWidth <= td.clientWidth + 1) return;`,
+  'a pill can carry a hover without being clipped');
+
+/* #2 — 'Currently whatever is in the table is exporting, add a from and to
+ * date to select particular date range and export / Or the best option would
+ * be to select certain rows and export.'
+ *
+ * Both, and neither costs a column. Export CSV now opens a panel rather than
+ * downloading on the spot: a From and a To at the top, and under them every
+ * row that matches, each with a tick. Everything arrives ticked, so the
+ * default is still 'export what is in the table' and untick is the work only
+ * when you want less than that.
+ *
+ * Row selection in the table itself would have meant a checkbox column on
+ * the decided table and an empty one on the queue above it to keep the two
+ * lining up — a column of width on every screen for something used once a
+ * month. In the panel it costs nothing. */
+app = swap(app,
+`function exportPayments(){
+  const rows = (reqs() || []).filter(r => r.status !== 'Pending' && r.status !== 'Withdrawn');`,
+`/* The rows the export panel is offering: decided, not withdrawn, inside the
+ * dates if any are set, and matching whatever is in the search box — because
+ * the panel opened from a table that was already filtered, and exporting
+ * something you cannot see would be a surprise. */
+function exportRows(){
+  const e = state.exp || {};
+  const find = (state.paySearch || '').trim().toLowerCase();
+  return (reqs() || [])
+    .filter(r => r.status !== 'Pending' && r.status !== 'Withdrawn')
+    .filter(r => !e.from || String(r.at || '').slice(0, 10) >= e.from)
+    .filter(r => !e.to   || String(r.at || '').slice(0, 10) <= e.to)
+    .filter(r => !find || ((r.order||'') + ' ' + (r.client||'')).toLowerCase().includes(find));
+}
+const exportPicked = () => exportRows().filter(r => !(state.exp && state.exp.off || {})[r.id]);
+
+function vExport(){
+  const e = state.exp;
+  if(!e || !e.open) return '';
+  const rows = exportRows(), picked = exportPicked();
+  return \`
+  <div class="docpop" id="expPop">
+    <div class="docbox" role="dialog" aria-modal="true" aria-label="Export to CSV" style="height:auto;max-height:86vh">
+      <header>
+        <b>Export to CSV</b>
+        <button class="btn ghost sm" id="expShut" type="button" aria-label="Close">&times;</button>
+      </header>
+      <div class="docbody" style="display:block;padding:16px;background:var(--panel);overflow:auto">
+        <div class="expdates">
+          <label>From <input type="date" id="expFrom" value="\${esc(e.from||'')}"></label>
+          <label>To <input type="date" id="expTo" value="\${esc(e.to||'')}"></label>
+          \${(e.from||e.to)?'<button class="btn ghost sm" id="expClear" type="button">Any date</button>':''}
+          <span class="hint" style="margin-left:auto">\${state.paySearch
+            ? 'matching &ldquo;' + esc(state.paySearch) + '&rdquo;' : 'every decided request'}</span>
+        </div>
+        \${rows.length ? \`
+        <div class="exphead">
+          <label class="pfchk"><input type="checkbox" id="expAll"\${picked.length===rows.length?' checked':''}><span>\${
+            picked.length} of \${rows.length} selected</span></label>
+        </div>
+        <div class="tw"><table class="paytab"><colgroup><col style="width:7%"><col style="width:15%"><col style="width:15%"><col style="width:18%"><col style="width:45%"></colgroup>
+          <thead><tr><th></th><th>Date</th><th class="r">Amount</th><th>Order no.</th><th>Client</th></tr></thead>
+          <tbody>\${rows.map(r => \`<tr>
+            <td class="c"><input type="checkbox" class="rtick" data-exprow="\${esc(r.id)}"\${
+              (e.off||{})[r.id] ? '' : ' checked'}></td>
+            <td class="n nw">\${esc(r.date)}</td>
+            <td class="n r nw">\${payAmt(r)}</td>
+            <td class="n nw">\${esc(r.order||'—')}</td>
+            <td class="cell"\${full(r.client)}>\${esc(r.client||'—')}</td></tr>\`).join('')}
+          </tbody></table></div>\` : '<p class="cap" style="padding:18px 2px">Nothing falls in that range.</p>'}
+      </div>
+      <div class="expfoot">
+        <button class="btn" id="expGo" type="button"\${picked.length?'':' disabled'}>Download \${
+          picked.length} row\${picked.length===1?'':'s'}</button>
+        <button class="btn ghost" id="expCancel" type="button">Never mind</button>
+      </div>
+    </div>
+  </div>\`;
+}
+
+function exportPayments(){
+  const rows = exportPicked();
+  if(!rows.length) return;`,
+  'the export asks what to export');
+
+app = swap(app,
+`  a.download = 'CorpLex payments ' + HDATE() + '.csv';`,
+`  const e = state.exp || {};
+  a.download = 'CorpLex payments ' +
+    (e.from || e.to ? (e.from || 'start') + ' to ' + (e.to || HDATE()) : HDATE()) + '.csv';`,
+  'and the file says which dates are in it');
+
+app = swap(app,
+`  \${vDocPop()}\${vWaPop()}\${vPayEdit()}`,
+`  \${vDocPop()}\${vWaPop()}\${vPayEdit()}\${vExport()}`,
+  'the export panel is on the screen');
+
+app = swap(app,
+`      const csv = document.getElementById('payCsv');
+      if(csv) csv.onclick = () => exportPayments();`,
+`      const csv = document.getElementById('payCsv');
+      if(csv) csv.onclick = () => { state.exp = {open:true, from:'', to:'', off:{}}; render(); };
+      const expShut = () => { state.exp = null; render(); };
+      const xs = document.getElementById('expShut');   if(xs) xs.onclick = expShut;
+      const xc = document.getElementById('expCancel'); if(xc) xc.onclick = expShut;
+      const xf = document.getElementById('expFrom');
+      if(xf) xf.onchange = () => { state.exp.from = xf.value; render(); };
+      const xt = document.getElementById('expTo');
+      if(xt) xt.onchange = () => { state.exp.to = xt.value; render(); };
+      const xcl = document.getElementById('expClear');
+      if(xcl) xcl.onclick = () => { state.exp.from = ''; state.exp.to = ''; render(); };
+      const xa = document.getElementById('expAll');
+      if(xa) xa.onchange = () => {
+        state.exp.off = xa.checked ? {} :
+          exportRows().reduce((m, r) => (m[r.id] = true, m), {});
+        render();
+      };
+      document.querySelectorAll('[data-exprow]').forEach(cb => cb.onchange = () => {
+        const off = state.exp.off || (state.exp.off = {});
+        if(cb.checked) delete off[cb.dataset.exprow]; else off[cb.dataset.exprow] = true;
+        render();
+      });
+      const xg = document.getElementById('expGo');
+      if(xg) xg.onclick = () => { exportPayments(); state.exp = null; render(); };`,
+  'and the panel is wired');
+
+/* ========================================================= People, items 9 and 10
+ *
+ * #9 — 'By default, the company for which employee works login should be
+ * shown and everyone at the end, before organization. Organization should
+ * have a different colour.'
+ *
+ * So the three companies come first, Everyone after them, and Organisation
+ * last and looking like the different kind of thing it is — the others are
+ * filters on one list, that one is a different view altogether. The tab that
+ * opens is the viewer's own company, because the question People answers most
+ * often is 'who is in today' and the answer that matters is your own floor.
+ */
+app = swap(app,
+`  const TABSP = [['all','Everyone'],['corplex','CorpLex'],['poa','POA'],['lex','Lex Estates'],['org','Organisation']];
+  const ptab = TABSP.some(t=>t[0]===state.peopleTab) ? state.peopleTab : 'all';
+  const bar = \`<div class="seg segbig" id="peopleSeg">\${TABSP.map(([v,l])=>
+    \`<button data-pt="\${v}" aria-pressed="\${ptab===v}" type="button">\${esc(l)}</button>\`).join('')}</div>\`;`,
+`  const TABSP = [['corplex','CorpLex'],['poa','POA'],['lex','Lex Estates'],
+                 ['all','Everyone'],['org','Organisation']];
+  // no tab chosen yet means the viewer's own company, if they have one here
+  const myCo = companyOf(state.user).key;
+  const ptab = TABSP.some(t=>t[0]===state.peopleTab) ? state.peopleTab
+             : (TABSP.some(t=>t[0]===myCo) ? myCo : 'all');
+  const bar = \`<div class="seg segbig" id="peopleSeg">\${TABSP.map(([v,l])=>
+    \`<button data-pt="\${v}" aria-pressed="\${ptab===v}" type="button"\${
+      v==='org'?' class="orgtab"':''}>\${esc(l)}</button>\`).join('')}</div>\`;`,
+  'the companies first, Everyone after them, Organisation last');
+
+// and nothing is chosen until somebody chooses it
+app = swap(app,
+`peopleTab: 'all',`,
+`peopleTab: '',`,
+  'People opens on your own company');
+
+/* #10 — 'What is the reason for having not assigned in the tree?'
+ *
+ * It is the bucket for anyone with no department recorded, and the name did
+ * not say so. Now it does, which is the whole answer: give those people a
+ * department and the box goes away by itself. */
+app = swap(app,
+`    roll.forEach(n => { const d = orgDeptOf(n) || 'Not assigned'; (byDept[d]=byDept[d]||[]).push(n); });`,
+`    roll.forEach(n => { const d = orgDeptOf(n) || 'No department set'; (byDept[d]=byDept[d]||[]).push(n); });`,
+  'the tree says what the box is, rather than that something is missing');
+
+app = swap(app,
+`Click anyone to open their page &mdash; their card shows who they report to.</p>\`;`,
+`Click anyone to open their page &mdash; their card shows who they report to.
+  <b>No department set</b> is not a department: it is everyone who has not been given one yet, and it disappears
+  as they are.</p>\`;`,
+  'and the caption says it too');
+
+// the search panel takes the name of the tab it is searching, not always 'Everyone'
+app = swap(app,
+`    <header><h3>Everyone</h3>
+      <span class="hint">\${shown} of \${roll.filter(inTab).length} \${shown===1?'person':'people'}</span></header>`,
+`    <header><h3>\${ptab === 'all' ? 'Everyone' : esc((DATA.companies[ptab]||{}).name || 'Everyone')}</h3>
+      <span class="hint">\${shown} of \${roll.filter(inTab).length} \${shown===1?'person':'people'}</span></header>`,
+  'the panel is named after the tab');
+
+/* ================================================ Leave & WFH, items 11, 12, 27
+ *
+ * #11 — 'Completely split Work from Home and Leave request tabs.'
+ *
+ * They were one form with a toggle at the top and one list holding both, so
+ * every screen carried the other thing's rules: a balance and an expiry date
+ * over a request for one day at home, and a work-from-home button on a page
+ * about annual leave. Three tabs now — Leave, Work from home, Leave policy —
+ * and each one only knows about itself.
+ *
+ * #27 — 'The leave policy has to be shown on the third tab as leave policy
+ * for all employees.' The rules were only in the accounts console, which is
+ * exactly where the people they apply to cannot see them.
+ */
+app = swap(app,
+`function reqFormBody(u, B, f, modes){`,
+`function leaveTabs(){
+  const T = [['leave','Leave'], ['wfh','Work from home'], ['policy','Leave policy']];
+  const cur = T.some(x => x[0] === state.leaveTab) ? state.leaveTab : 'leave';
+  return {cur, bar: \`<div class="seg segbig" id="leaveSeg">\${T.map(([v, l]) =>
+    \`<button data-lv="\${v}" aria-pressed="\${cur === v}" type="button">\${esc(l)}</button>\`).join('')}</div>\`};
+}
+
+/* The work-from-home tab. Two columns: apply on the left, what you have asked
+ * for before on the right. Nothing about annual leave appears here at all —
+ * a day at home does not come off a balance and never did. */
+function vWfhTab(u, B, f, mine, inbox){
+  const wfh = mine.filter(r => r.type === 'WFH');
+  const wait = inbox.filter(r => r.type === 'WFH');
+  const stPill = s => s === 'Approved' ? '<span class="pill good"><span class="dt"></span>Approved</span>'
+    : s === 'Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
+  return \`
+  \${wait.length ? \`<section class="panel">
+    <header><h3>Waiting on you</h3><span class="pill warn"><span class="dt"></span>\${wait.length}</span>
+      <span class="hint">days at home, waiting on your decision</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Who</th><th>Dates</th><th class="r">Days</th><th>Reason</th><th></th></tr></thead>
+      <tbody>\${wait.map(r => \`<tr>
+        <td class="nw">\${nm(r.who)}</td>
+        <td class="n nw">\${esc(dayText(r))}</td>
+        <td class="n r">\${r.days}</td>
+        <td style="color:var(--ink2)">\${esc(r.reason)}</td>
+        <td class="r nw"><button class="btn" data-approve-req="\${esc(r.id)}" type="button" style="padding:3px 11px;font-size:12.5px">Approve</button>
+          <button class="btn ghost" data-decline-req="\${esc(r.id)}" type="button" style="padding:3px 11px;font-size:12.5px;margin-left:6px">Decline</button></td></tr>\`).join('')}
+      </tbody></table></div>
+  </section>\` : ''}
+
+  <div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>Apply for work from home</h3>
+        <span class="hint">goes to \${nm2(mgrName(u) || 'your manager')}</span></header>
+      <div class="pad">\${reqFormBody(u, B, f, false)}</div>
+    </section>
+
+    <section class="panel">
+      <header><h3>List of previous work from home</h3>
+        <span style="margin-left:auto;color:var(--ink3);font-size:12.5px">\${wfh.length}</span></header>
+      <div class="tw"><table>
+        <thead><tr><th>Reference</th><th>Dates</th><th class="r">Days</th><th>Reason</th><th>Status</th></tr></thead>
+        <tbody>\${wfh.length ? wfh.map(r => \`<tr>
+          <td class="n nw">\${esc(r.id)}</td>
+          <td class="n nw">\${esc(dayLabel(r.from))}\${r.from !== r.to ? ' &ndash; ' + esc(dayLabel(r.to)) : ''}</td>
+          <td class="n r">\${r.days}</td>
+          <td style="color:var(--ink2)">\${esc(r.reason)}</td>
+          <td>\${stPill(r.status)}</td></tr>\`).join('')
+          : '<tr><td colspan="5" style="color:var(--ink3)">You have not asked to work from home yet.</td></tr>'}
+        </tbody></table></div>
+      <p class="cap">Days at home do not come off any balance. They are shown on the team board so people know where you are.</p>
+    </section>
+  </div>\`;
+}
+
+/* The policy itself, on the page the people it applies to are already on.
+ * Read from the same list of types the request form offers, so the two can
+ * never drift: a kind of leave that is not on this table cannot be asked
+ * for, and one that is, is. */
+function vLeavePolicyTab(u){
+  const P = (HR().leavePolicy || {});
+  const pay = t => t.pay === 'full' ? 'Full pay'
+    : t.pay === 'none' ? 'Unpaid'
+    : t.pay === 'scale' ? 'Full, then half, then unpaid' : '—';
+  return \`
+  <section class="panel">
+    <header><h3>Leave policy</h3>
+      <span class="pill mute">\${P.annualDays} working days a year &middot; \${P.accrualPerMonth} a month</span>
+      <span class="hint">the same rules for everyone</span></header>
+    <div class="tw"><table class="cotab">
+      \${colsOf([20, 17, 12, 17, 34])}
+      <thead><tr><th>Leave</th><th>Pay</th><th class="r">Days</th><th>Comes off your annual balance</th><th>Notes</th></tr></thead>
+      <tbody>\${LEAVEONLY().map(t => \`<tr>
+        <td><b>\${esc(t.label)}</b></td>
+        <td>\${esc(pay(t))}</td>
+        <td class="n r">\${t.max ? t.max : t.pool ? P.annualDays : t.half ? '\\u00bd' : '—'}</td>
+        <td>\${t.pool ? '<span class="pill warn"><span class="dt"></span>Yes</span>'
+                     : '<span class="pill mute">No</span>'}</td>
+        <td style="color:var(--ink2)"\${full(t.note || '')}>\${esc(t.note || '—')}</td></tr>\`).join('')}
+      </tbody></table></div>
+    <p class="cap">\${esc(P.note || '')} Days are counted in <b>working days</b>, so a weekend or a public holiday
+      inside your dates does not come off the balance. Only <b>annual</b> and <b>Umrah</b> leave draw on the annual
+      balance; everything else is separate and does not touch it.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>How it works</h3></header>
+    <div class="pad"><dl class="kv wide">
+      <dt>Who decides</dt><dd>Your manager, \${nm2(mgrName(u) || '—')}. Accounts is copied so payroll stays right.</dd>
+      <dt>Who is told</dt><dd>Your manager decides it and you are emailed the answer. The team is told once it is approved and again on the first morning &mdash; the dates only, never the reason.</dd>
+      <dt>Carry forward</dt><dd>Days you earn in one leave year can be used until the end of the next one, and the oldest days are used first. Anything still unused from last year lapses on your joining anniversary.</dd>
+      <dt>Unpaid leave</dt><dd>Reduces your working days for the month, which shows as LOP days on your payslip.</dd>
+      <dt>Cancelling</dt><dd>Ask your manager &mdash; an approved request can be withdrawn up to the day before it starts.</dd>
+      <dt>Public holidays</dt><dd>\${(HR().holidays || []).length} in \${String(HDATE()).slice(0, 4)}, the same for all three companies. They do not come off any balance.</dd>
+    </dl></div>
+  </section>\`;
+}
+
+function reqFormBody(u, B, f, modes){`,
+  'the leave page grows two more tabs');
+
+app = swap(app,
+`    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
+
+  return \`
+  <div class="strip">`,
+`    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
+
+  /* The tab decides what this page is, and the form follows the tab rather
+   * than a toggle inside it. Leave is what is left once the other two have
+   * taken their own screens, so anything about a day at home leaves here. */
+  const LV = leaveTabs();
+  if(LV.cur === 'wfh'){
+    if(f.type !== 'WFH') f.type = 'WFH';
+    return LV.bar + vWfhTab(u, B, f, mine, inbox);
+  }
+  if(LV.cur === 'policy') return LV.bar + vLeavePolicyTab(u);
+  if(f.type === 'WFH') f.type = 'Annual';
+  mine  = mine.filter(r => r.type !== 'WFH');
+  inbox = inbox.filter(r => r.type !== 'WFH');
+
+  /* The two lines Avin wanted under the three columns rather than inside one
+   * of them: what expires and when, and what a working day means. */
+  const leaveNotes = noLeave(u) ? '' : \`
+\${B.expiring>0?\`<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>\${B.expiring} day\${B.expiring===1?'':'s'} expire on \${esc(dayLabel(B.expiresOn))} \${B.expiresOn.slice(0,4)}.</b> Days earned in one leave year can be used until the end of the next one, and the oldest days go first &mdash; so anything still unused from last year is lost at your anniversary.</p>\`:''}
+        <p class="note" style="margin-top:16px">\${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.\${B.yearEnd?\` Your leave year runs to \${esc(dayLabel(B.yearEnd))} \${B.yearEnd.slice(0,4)}.\`:''}</p>\`;
+
+  return LV.bar + \`
+  <div class="strip">`,
+  'the leave page picks a tab');
+
+app = swap(app,
+`  const mine = R.filter(r=>r.who===u).slice().sort((a,b)=>b.from.localeCompare(a.from));
+  const inbox = R.filter(r=>r.mgr===u && r.status==='Pending');`,
+`  let mine = R.filter(r=>r.who===u).slice().sort((a,b)=>b.from.localeCompare(a.from));
+  let inbox = R.filter(r=>r.mgr===u && r.status==='Pending');`,
+  'both lists are narrowed by the tab');
+
+app = swap(app,
+`  <div class="grid g2">
+    <section class="panel">
+      <header><h3>New request</h3><span class="hint">goes to \${nm2(mgrName(u) || 'your manager')}</span></header>`,
+`  <div class="grid g3 gtop">
+    <section class="panel">
+      <header><h3>New leave request</h3><span class="hint">goes to \${nm2(mgrName(u) || 'your manager')}</span></header>`,
+  'three columns, and the form says which kind of request it is');
+
+app = swap(app,
+`      <header><h3>Your annual leave</h3>`,
+`      <header><h3>Your leave</h3>`,
+  'Your leave, because sick and birthday are on it too');
+
+app = swap(app,
+`        \${B.expiring>0?\`<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>\${B.expiring} day\${B.expiring===1?'':'s'} expire on \${esc(dayLabel(B.expiresOn))} \${B.expiresOn.slice(0,4)}.</b> Days earned in one leave year can be used until the end of the next one, and the oldest days go first &mdash; so anything still unused from last year is lost at your anniversary.</p>\`:''}
+        <p class="note" style="margin-top:16px">\${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.\${B.yearEnd?\` Your leave year runs to \${esc(dayLabel(B.yearEnd))} \${B.yearEnd.slice(0,4)}.\`:''}</p>\`}
+      </div>
+    </section>
+  </div>
+
+`,
+`        \`}
+      </div>
+    </section>
+
+`,
+  'the notes come out of the panel');
+
+app = swap(app,
+`    </dl></div>
+  </section>
+
+  <section class="panel">
+    <header><h3>Your requests</h3>`,
+`    </dl></div>
+    </section>
+  </div>
+
+  \${leaveNotes}
+
+  <section class="panel">
+    <header><h3>Your requests</h3>`,
+  'How it works becomes the third column, and the notes sit under all three');
+
+app = swap(app,
+`  document.querySelectorAll('#peopleSeg button').forEach(b=>b.onclick=()=>{ state.peopleTab=b.dataset.pt; state.who=null; render(); });`,
+`  document.querySelectorAll('#peopleSeg button').forEach(b=>b.onclick=()=>{ state.peopleTab=b.dataset.pt; state.who=null; render(); });
+  document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });`,
+  'the leave tabs are clickable');
+
+app = swap(app,
+`peopleTab: '',`,
+`peopleTab: '', leaveTab: 'leave',`,
+  'and the page opens on Leave');
+
+/* The tab is the choice now, so the choice inside the form goes: a Leave tab
+ * that still offers 'Work from home' as a button is not a split. */
+app = swap(app,
+`      <div class="pad">
+        \${reqFormBody(u, B, f, true)}
+      </div>`,
+`      <div class="pad">
+        \${reqFormBody(u, B, f, false)}
+      </div>`,
+  'no work-from-home button on the leave form');
+
+/* and the day-from-home count moves to the tab that is about days from home */
+app = swap(app,
+`    <div class="stat"><span class="k">Days from home</span><span class="v">\${mine.filter(r=>r.type==='WFH'&&r.status==='Approved').reduce((s,r)=>s+r.days,0)}</span>
+      <span class="n">approved so far this year</span></div>`,
+`    <div class="stat"><span class="k">Taken since 31 Aug</span><span class="v">\${B.taken||0}<span class="cur" style="margin-left:6px">days</span></span>
+      <span class="n">annual leave, this leave year</span></div>`,
+  'the leave strip counts leave');
+
+app = swap(app,
+`function vWfhTab(u, B, f, mine, inbox){
+  const wfh = mine.filter(r => r.type === 'WFH');
+  const wait = inbox.filter(r => r.type === 'WFH');`,
+`function vWfhTab(u, B, f, mine, inbox){
+  const wfh = mine.filter(r => r.type === 'WFH');
+  const wait = inbox.filter(r => r.type === 'WFH');
+  const done = wfh.filter(r => r.status === 'Approved');
+  const strip = \`<div class="strip">
+    <div class="stat"><span class="k">Days from home</span><span class="v">\${done.reduce((s, r) => s + r.days, 0)}</span>
+      <span class="n">approved so far this year</span></div>
+    <div class="stat"><span class="k">Waiting on a decision</span><span class="v">\${
+      wfh.filter(r => r.status === 'Pending').length}</span>
+      <span class="n">with \${nm2(mgrName(u) || 'your manager')}</span></div>
+    <div class="stat"><span class="k">Comes off your balance</span><span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Nothing</span>
+      <span class="n">a day at home is not leave</span></div>
+  </div>\`;`,
+  'the work-from-home tab gets its own three figures');
+
+app = swap(app,
+`  return \`
+  \${wait.length ? \`<section class="panel">
+    <header><h3>Waiting on you</h3><span class="pill warn"><span class="dt"></span>\${wait.length}</span>
+      <span class="hint">days at home, waiting on your decision</span></header>`,
+`  return strip + \`
+  \${wait.length ? \`<section class="panel">
+    <header><h3>Waiting on you</h3><span class="pill warn"><span class="dt"></span>\${wait.length}</span>
+      <span class="hint">days at home, waiting on your decision</span></header>`,
+  'and shows them above it');
+
+/* ======================================================= leave policy, item 26
+ *
+ * 'Birthday leave, Hajj, Umrah, Maternity, Paternity are all missing.
+ * Education UAE leave policy and if any other are missing.'
+ *
+ * They were not missing from the portal — every one of them can already be
+ * requested and every one has its own rules — they were missing from the
+ * console screen called Leave policy, which showed only annual and sick. So
+ * that screen now lists all of them.
+ *
+ * One genuinely was missing: study leave. Federal Decree-Law 33 of 2021,
+ * article 32(2) — ten working days a year to sit examinations, for somebody
+ * with two years of service at an institution in the UAE. The law does not
+ * say whether it is paid; this treats it as paid, which is the usual practice
+ * here, and it is one word to change if CorpLex does otherwise.
+ *
+ * Sabbatical leave for national service is the other one in the law and is
+ * deliberately not here: it applies to Emirati nationals doing military
+ * service, which is not a case this payroll has.
+ */
+app = swap(app,
+`  {id:'Hajj',         label:'Hajj leave',       pay:'none', max:30,`,
+`  {id:'Study',        label:'Study leave',      pay:'full', max:10, minYears:2,
+   note:'10 working days a year to sit examinations, for anyone with two years of service who is enrolled at an educational institution in the UAE. Does not touch your annual balance.'},
+  {id:'Hajj',         label:'Hajj leave',       pay:'none', max:30,`,
+  'study leave, which the law gives and the portal did not');
+
+/* Two years of service, measured from the joining date the rest of the portal
+ * already works from. Somebody in their first two years is shown the reason
+ * rather than an option that would be refused. */
+app = swap(app,
+`  if(!t.need) return {ok:true};`,
+`  if(t.minYears){
+    const y = yearsWith(u);
+    if(!y) return {ok:false, why:'your joining date is not on file yet'};
+    if(y.years < t.minYears)
+      return {ok:false, why:\`after \${t.minYears} years of service\`};
+  }
+  if(!t.need) return {ok:true};`,
+  'and the two years of service it needs');
+
+/* The console screen shows the whole set rather than two of them. The table
+ * is read from the same list the request form offers, so a kind of leave
+ * cannot appear in one and not the other. */
+app = swap(app,
+`      <p class="cap">A year of sickness runs down the ladder in that order once probation is over.
+        The portal shows each person what is left of each rung on their own leave page.</p>
+    </div>
+  </section>\`;`,
+`      <p class="cap">A year of sickness runs down the ladder in that order once probation is over.
+        The portal shows each person what is left of each rung on their own leave page.</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <header><h3>Every other kind of leave</h3>
+      <span class="hint" style="margin-left:auto">what staff can ask for, and what each one costs</span></header>
+    <div class="tw"><table class="cotab">
+      \${colsOf([18, 16, 9, 14, 43])}
+      <thead><tr><th>Leave</th><th>Pay</th><th class="r">Days</th><th>Off the annual balance</th><th>Rule</th></tr></thead>
+      <tbody>\${LEAVEONLY().filter(t => !['Annual','Sick'].includes(t.id)).map(t => \`<tr>
+        <td><b>\${esc(t.label)}</b></td>
+        <td>\${esc(t.pay === 'full' ? 'Full pay' : t.pay === 'none' ? 'Unpaid'
+              : t.pay === 'scale' ? 'Full, then half, then unpaid' : '—')}</td>
+        <td class="n r">\${t.max ? t.max : t.half ? '\\u00bd' : t.pool ? LF().annual : '—'}</td>
+        <td>\${t.pool ? '<span class="pill warn"><span class="dt"></span>Yes</span>'
+                    : '<span class="pill mute">No</span>'}</td>
+        <td style="color:var(--ink2)"\${full(t.note || '')}>\${esc(t.note || '—')}</td></tr>\`).join('')}
+      </tbody></table></div>
+    <p class="cap">These follow UAE law rather than a setting, which is why there are no boxes to type in:
+      the entitlements are statutory minimums and changing one is a policy decision, not a number.
+      Staff see the same table on the <b>Leave policy</b> tab of their own Leave &amp; WFH page.
+      <b>Study leave</b> is new &mdash; ten working days a year to sit examinations, after two years of service,
+      at an institution in the UAE (Federal Decree-Law 33 of 2021, article 32(2)). The law does not say whether
+      it is paid; this treats it as paid.</p>
+  </section>\`;`,
+  'the console shows every kind of leave, not two of them');
+
+/* ==================================================== My air ticket, item 14
+ *
+ * 'Currently there are 2+1. Make all 3 in a row: Where you stand | Your
+ * tickets so far | How the scheme works.'
+ *
+ * Where you stand was a full-width panel with its own two columns inside it,
+ * and the other two sat underneath in a pair — so the page read as two rows
+ * where it holds three things of equal weight. One row of three, and the
+ * inner split goes with it: at a third of the page the sentence sits above
+ * the figures rather than beside them.
+ */
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Where you stand</h3>\${isDue&&air?'<span class="pill good"><span class="dt"></span>Paid this month</span>':(me.lastPaid==='31 Aug 2026'?'<span class="pill good"><span class="dt"></span>Paid in August</span>':'')}</header>
+    <div class="pad" style="display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,440px);gap:28px;align-items:start">
+      <p style="font-size:15.5px;color:var(--ink);margin:0">\${esc(statusLine)}</p>
+      <dl class="kv">
+        <dt>Employee ID</dt><dd>\${esc(me.id)}</dd>
+        <dt>Home country</dt><dd style="font-family:inherit">\${esc(me.country)}</dd>
+        <dt>Date joined</dt><dd>\${esc(me.doj)}</dd>
+        <dt>Last ticket taken</dt><dd>\${esc(me.lastPaid)||'—'}</dd>
+        <dt>Unclaimed value</dt><dd>\${me.backlog?money(me.backlog,2):'—'}</dd>
+      </dl>
+    </div>
+  </section>
+
+  <div class="grid g2">
+    <section class="panel">`,
+`  <div class="grid g3 gtop">
+    <section class="panel">
+      <header><h3>Where you stand</h3>\${isDue&&air?'<span class="pill good"><span class="dt"></span>Paid this month</span>':(me.lastPaid==='31 Aug 2026'?'<span class="pill good"><span class="dt"></span>Paid in August</span>':'')}</header>
+      <div class="pad">
+        <p style="font-size:15px;color:var(--ink);margin:0 0 16px">\${esc(statusLine)}</p>
+        <dl class="kv">
+          <dt>Employee ID</dt><dd>\${esc(me.id)}</dd>
+          <dt>Home country</dt><dd style="font-family:inherit">\${esc(me.country)}</dd>
+          <dt>Date joined</dt><dd>\${esc(me.doj)}</dd>
+          <dt>Last ticket taken</dt><dd>\${esc(me.lastPaid)||'—'}</dd>
+          <dt>Unclaimed value</dt><dd>\${me.backlog?money(me.backlog,2):'—'}</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section class="panel">`,
+  'the air ticket page is one row of three');
+
+/* ========================================= Advances and letters, items 15 to 17
+ *
+ * #15 — 'I placed an advance request. I dont know if it works. There is no
+ * option to withdraw the request.'
+ *
+ * The database has allowed you to take back your own pending request since
+ * 0013_own_updates — cancel_own_loan and cancel_own_letter permit exactly
+ * that move and no other. The screen never offered it. So a request of your
+ * own that nobody has answered yet carries a Withdraw, and a cancelled one
+ * says so rather than sitting there looking like it is still waiting.
+ *
+ * Letters get the same button. It is the same gap, the same policy, and one
+ * line of markup.
+ */
+app = swap(app,
+`  const stPill = s => s==='Approved' ? '<span class="pill good"><span class="dt"></span>Approved</span>'
+    : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
+  const allActive = L.filter`,
+`  const stPill = s => s==='Approved' ? '<span class="pill good"><span class="dt"></span>Approved</span>'
+    : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : s==='Cancelled' ? '<span class="pill mute">Withdrawn</span>'
+    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';
+  const allActive = L.filter`,
+  'a withdrawn advance says so');
+
+app = swap(app,
+`        <td style="color:var(--ink2)">\${esc(x.why)}</td><td>\${stPill(x.status)}</td></tr>\`).join('')
+        :\`<tr><td colspan="\${adm?9:8}" style="color:var(--ink3)">Nothing yet.</td></tr>\`}`,
+`        <td style="color:var(--ink2)">\${esc(x.why)}</td>
+        <td>\${stPill(x.status)}\${(x.status==='Pending' && (x.who===u || x.who===myLoanName(u)))
+          ? \` <button class="btn ghost sm" data-lnpull="\${esc(x.id)}" type="button"
+                style="padding:2px 9px;font-size:11.5px;margin-left:6px">Withdraw</button>\` : ''}</td></tr>\`).join('')
+        :\`<tr><td colspan="\${adm?9:8}" style="color:var(--ink3)">Nothing yet.</td></tr>\`}`,
+  'and a pending one can be taken back');
+
+app = swap(app,
+`  const stPill = s => s==='Issued' ? '<span class="pill good"><span class="dt"></span>Issued</span>'
+    : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';`,
+`  const stPill = s => s==='Issued' ? '<span class="pill good"><span class="dt"></span>Issued</span>'
+    : s==='Declined' ? '<span class="pill bad"><span class="dt"></span>Declined</span>'
+    : s==='Cancelled' ? '<span class="pill mute">Withdrawn</span>'
+    : '<span class="pill warn"><span class="dt"></span>Waiting</span>';`,
+  'a withdrawn letter request says so too');
+
+/* #16 — 'All letters should have this option to enter to whom the letter is
+ * addressed.' It was there for the types flagged as needing one, which meant
+ * a salary certificate could be addressed to a bank and an experience letter
+ * could not be addressed to anybody. Every type now offers it; it is required
+ * only where it was required before, and left blank it prints the usual
+ * To whom it may concern. */
+app = swap(app,
+`        \${t.needsAddressee?\`<div class="field"><label for="ltTo">Addressed to</label><input id="ltTo" placeholder="Bank, embassy or authority" value="\${esc(f.to)}"></div>\`:''}`,
+`        <div class="field"><label for="ltTo">Addressed to\${t.needsAddressee?'':' <i style="font-style:normal;color:var(--ink3);font-weight:400">— optional</i>'}</label>
+          <input id="ltTo" placeholder="\${t.needsAddressee?'Bank, embassy or authority':'Leave it blank for &ldquo;To whom it may concern&rdquo;'}" value="\${esc(f.to)}"></div>`,
+  'every letter can be addressed to somebody');
+
+/* #17 — the fourth line of How it works, in his words. */
+app = swap(app,
+`        <dt>Getting it</dt><dd>Open it here and print or save as PDF. Ask accounts if you need it stamped.</dd>`,
+`        <dt>Getting it</dt><dd>Accounts create the letter, sign it and send it to you &mdash; it also stays here to open, print or save as a PDF. Stamping is separate and is usually Admin&rsquo;s job, so ask them if you need a stamp.</dd>`,
+  'How it works, line four, as Avin wrote it');
+
+// the two Withdraw buttons, wired
+app = swap(app,
+`  document.querySelectorAll('[data-ln-ok]').forEach(b=>b.onclick=()=>{`,
+`  document.querySelectorAll('[data-lnpull]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.cancelLoan(b.dataset.lnpull);
+    render();
+  });
+  document.querySelectorAll('[data-ltpull]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.cancelLetter(b.dataset.ltpull);
+    render();
+  });
+  document.querySelectorAll('[data-ln-ok]').forEach(b=>b.onclick=()=>{`,
+  'the Withdraw buttons are wired');
+
+app = swap(app,
+`        <td class="r">\${x.status==='Issued'?\`<button class="btn ghost" data-lt-view="\${esc(x.id)}" type="button" style="padding:3px 10px;font-size:12.5px">\${state.ltOpen===x.id?'Hide':'View'}</button>\`:''}</td></tr>\`).join('')`,
+`        <td class="r">\${x.status==='Issued'
+            ? \`<button class="btn ghost" data-lt-view="\${esc(x.id)}" type="button" style="padding:3px 10px;font-size:12.5px">\${state.ltOpen===x.id?'Hide':'View'}</button>\`
+            : (x.status==='Pending' && x.who===u)
+            ? \`<button class="btn ghost" data-ltpull="\${esc(x.id)}" type="button" style="padding:3px 10px;font-size:12.5px">Withdraw</button>\`
+            : ''}</td></tr>\`).join('')`,
+  'a letter request can be taken back too');
+
+/* ======================================================= My attendance, 18 to 20
+ *
+ * #18 — 'Every time i check in and check out the clock restarts. The clock
+ * should always continue. To be marked present, 9 hours per day is mandatory.'
+ *
+ * The clock counted from the open segment's check-in, so going out to a
+ * client and back put it to zero — which is wrong twice over, because the
+ * whole point of segments is that the day survives being interrupted. It now
+ * counts the day: everything already closed, plus the segment running.
+ *
+ * The nine hours is shown, not enforced. It sits under the clock as what is
+ * left of the day and marks a short one on the record — but it does not touch
+ * the days-calculated figure the payroll comparison reads, because that is a
+ * number with money on it and changing what 'present' means is Avin's
+ * decision to take deliberately rather than mine to slip in.
+ */
+app = swap(app,
+`function ciClock(open){
+  return \`<b class="ciclock" data-since="\${esc(open.in)}"><span class="cidot"></span><span class="citime">0:00:00</span></b>\`;
+}`,
+`const FULLDAY = () => (HR().hours && HR().hours.fullDay) || 9 * 60;
+
+/* The clock shows the day, not the segment. The base is everything already
+ * closed today; the ticker adds it to the time since the open check-in. */
+function ciClock(open, before){
+  return \`<b class="ciclock" data-since="\${esc(open.in)}" data-base="\${Math.max(0, Math.round(before || 0))}"><span class="cidot"></span><span class="citime">0:00:00</span></b>\`;
+}`,
+  'the clock counts the day, not the last check-in');
+
+app = swap(app,
+`    let s = Math.floor((now - start) / 1000);
+    if(s < 0) s = 0;                                  // checked in after midnight`,
+`    let s = Math.floor((now - start) / 1000) + (+el.dataset.base || 0) * 60;
+    if(s < 0) s = 0;                                  // checked in after midnight`,
+  'and the ticker adds what was already recorded');
+
+app = swap(app,
+`          \${open ? ciClock(open) : '<b>—</b>'}
+          <span class="cin">\${open?esc(open.loc)+' · since '+esc(open.in):'press a button below to start the day'}</span>`,
+`          \${open ? ciClock(open, closedMins) : '<b>—</b>'}
+          <span class="cin">\${open
+            ? esc(open.loc) + ' · since ' + esc(open.in)
+              + (closedMins ? ' · ' + hhmm(closedMins) + ' earlier today' : '')
+            : (doneToday ? hhmm(doneToday) + ' recorded today · ' + leftLine
+               : 'press a button below to start the day')}</span>
+          <span class="cin" style="margin-top:2px">\${open ? leftLine : ''}</span>`,
+  'and says how much of the nine hours is left');
+
+app = swap(app,
+`  const segRow = g => \`<tr><td class="n">\${esc(g.in)}</td>`,
+`  /* Everything closed today, and the day's target. A day is nine hours; the
+   * clock shows the whole of it and the line under it says what is left. */
+  const closedMins = (a && a.segs ? a.segs : []).filter(g => g.out)
+    .reduce((s, g) => s + (mins(g.out) - mins(g.in)), 0);
+  const doneToday = segMins(a, true);
+  const shortBy = Math.max(0, FULLDAY() - doneToday);
+  const leftLine = shortBy
+    ? hhmm(shortBy) + ' left of the ' + hhmm(FULLDAY()) + ' day'
+    : 'the full ' + hhmm(FULLDAY()) + ' is in';
+
+  const segRow = g => \`<tr><td class="n">\${esc(g.in)}</td>`,
+  'the day, and what is left of it');
+
+/* #19 — 'Which Day — just use a date picker, currently it looks very odd.'
+ *
+ * It was a dropdown of every day you had missed, each one spelling out what
+ * was wrong with it, which is a lot of reading to pick a date. A date box
+ * instead, bounded by the days you can actually fix, and the reason that day
+ * needs fixing moves underneath it — where it is one line rather than forty. */
+app = swap(app,
+`        <label><span>Which day</span>
+          <select id="rgDay">
+            <option value="">Choose a day\\u2026</option>
+            \${pickable.map(m => \`<option value="\${m.d}"\${f.d===m.d?' selected':''}>\${esc(dayName(m.d))} \${esc(dayLabel(m.d))} \\u2014 \${esc(m.what)}</option>\`).join('')}
+          </select></label>`,
+`        <label><span>Which day</span>
+          <input id="rgDay" type="date" value="\${esc(f.d)}"
+            min="\${esc(pickable[pickable.length-1].d)}" max="\${esc(pickable[0].d)}">
+          <span class="pfhint">\${(() => {
+            const hit = missing.find(m => m.d === f.d);
+            if(!f.d) return \`\${missing.length} day\${missing.length===1?'':'s'} to fix &mdash; \${
+              esc(dayName(missing[0].d))} \${esc(dayLabel(missing[0].d))}\${
+              missing.length>1 ? ' is the most recent' : ''}\`;
+            return hit
+              ? \`\${esc(dayName(f.d))} \${esc(dayLabel(f.d))} &mdash; \${esc(hit.what)}\`
+              : '<b style="color:var(--bad)">Nothing is missing on that day.</b> Pick one of the '
+                + missing.length + ' that are.';
+          })()}</span></label>`,
+  'a date box, with the reason underneath it');
+
+// and a day that is not one of the missing ones cannot be sent
+app = swap(app,
+`  const ok = f.d && f.reason.trim().length > 3 && (f.in || f.out) && !none;`,
+`  const ok = f.d && missing.some(m => m.d === f.d)
+    && f.reason.trim().length > 3 && (f.in || f.out) && !none;`,
+  'and only a day that is actually missing');
+
+/* #20 — 'Check in and out & Fix a day you missed can be next to each other.'
+ *
+ * They are the same job an hour apart: one records today, the other repairs
+ * a day that went unrecorded. Side by side, with the day's segments moving
+ * under the pair so the two forms stay level. */
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Check in and out</h3>`,
+`  <div class="grid g2 gtop attpair">
+  <section class="panel">
+    <header><h3>Check in and out</h3>`,
+  'the two attendance forms open a row of their own');
+
+app = swap(app,
+`    \${a && a.segs.length ? \`<div class="tw"><table>
+      <thead><tr><th>In</th><th>Out</th><th>Where</th><th class="r">Hours</th><th>Note</th></tr></thead>
+      <tbody>\${a.segs.map(segRow).join('')}
+        <tr class="tot"><td>Today</td><td></td><td>\${a.segs.length} segment\${a.segs.length===1?'':'s'}</td>
+          <td class="n r">\${hhmm(segMins(a))}</td><td></td></tr>
+      </tbody></table></div>\`:''}
+  </section>
+
+  \${regularPanel(u)}`,
+`    \${a && a.segs.length ? \`<div class="tw"><table>
+      <thead><tr><th>In</th><th>Out</th><th>Where</th><th class="r">Hours</th><th>Note</th></tr></thead>
+      <tbody>\${a.segs.map(segRow).join('')}
+        <tr class="tot"><td>Today</td><td></td><td>\${a.segs.length} segment\${a.segs.length===1?'':'s'}</td>
+          <td class="n r">\${hhmm(segMins(a))}</td><td></td></tr>
+      </tbody></table></div>\`:''}
+  </section>
+
+  \${regularPanel(u) || '<div></div>'}
+  </div>`,
+  'and close it together');
+
+/* ========================================================= Calculator, item 21
+ *
+ * 'Rename card fee calculator to Calculator - then make two tabs Card
+ * processing fee and Mattia's commission. Mattias commission will explain
+ * later.'
+ *
+ * The rename and the two tabs. The second one is empty on purpose and says
+ * so: I do not know what Mattia's commission is or how it is worked out, and
+ * a screen that guesses at a calculation is worse than a screen that asks.
+ * It lists exactly what I need to build it, so the answer can be one message
+ * rather than a conversation.
+ */
+app = swap(app,
+`  {id:'tools',       group:'other', label:'Card fee calculator', title:'Card fee calculator'},`,
+`  {id:'tools',       group:'other', label:'Calculator', title:'Calculator'},`,
+  'Calculator, not Card fee calculator');
+
+app = swap(app,
+`function vTools(){
+  const k = activeCo().key;
+  if(k === 'poa') return vToolsPOA();`,
+`function calcTabs(){
+  const T = [['card', 'Card processing fee'], ['mattia', "Mattia's commission"]];
+  const cur = T.some(x => x[0] === state.calcTab) ? state.calcTab : 'card';
+  return {cur, bar: \`<div class="seg segbig" id="calcSeg">\${T.map(([v, l]) =>
+    \`<button data-ct="\${v}" aria-pressed="\${cur === v}" type="button">\${esc(l)}</button>\`).join('')}</div>\`};
+}
+
+/* Mattia's commission, from the sheet Avin sent.
+ *
+ * One figure goes in: our price for the job, before VAT. Everything else
+ * follows from it —
+ *
+ *   Our price   the invoice, plus 5% VAT
+ *   To client   our price marked up, plus 5% VAT on that
+ *   Mattia      the difference between the two, and no VAT on it
+ *
+ * The mark-up on his sheet is 25% of our price, which makes Mattia's share a
+ * fifth of what the client pays. It is a box rather than a constant, the same
+ * as the two rates, because the next job may not be twenty-five.
+ *
+ * The USD and EUR blocks are the dirham figures divided by the rate, figure
+ * by figure, which is what the sheet does. Dividing each one separately and
+ * dividing the total give the same answer to the fil, so the columns still
+ * add up after the conversion — worth saying, because that is the usual way
+ * a converted table stops tying out.
+ */
+function vMattia(){
+  return \`
+  <section class="panel">
+    <header><h3>Mattia&rsquo;s commission</h3>
+      <span class="hint">type our price before VAT &mdash; everything else follows</span></header>
+    <div class="pad" style="display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+        <div class="field mcyellow" style="margin:0;min-width:230px">
+          <label for="mcInv">Our price in AED, before VAT</label>
+          <input id="mcInv" class="num" type="number" value="10000" step="0.01">
+        </div>
+        <div class="field" style="margin:0;max-width:150px">
+          <label for="mcUp">Mark-up to the client</label>
+          <input id="mcUp" class="num" type="number" value="25" step="0.5">
+        </div>
+        <div class="field" style="margin:0;max-width:130px">
+          <label for="mcUsd">USD rate</label>
+          <input id="mcUsd" class="num" type="number" value="3.65" step="0.0001">
+        </div>
+        <div class="field" style="margin:0;max-width:130px">
+          <label for="mcEur">EUR rate</label>
+          <input id="mcEur" class="num" type="number" value="4.15" step="0.0001">
+        </div>
+      </div>
+      <div id="mcOut"></div>
+    </div>
+    <p class="cap">VAT is the UAE standard rate of 5% and applies to our price and to the client&rsquo;s,
+      not to Mattia&rsquo;s share &mdash; that is the margin between the two invoices, not a supply of its own.
+      The rates are the ones on the sheet and can be typed over for a job priced at a different one.</p>
+  </section>\`;
+}
+
+const MCVAT = 0.05;
+
+function calcMattia(){
+  const num = (id, fallback) => {
+    const el = document.getElementById(id);
+    const v = el ? parseFloat(el.value) : NaN;
+    return isFinite(v) ? v : fallback;
+  };
+  const inv = Math.max(0, num('mcInv', 0));
+  const up  = Math.max(0, num('mcUp', 25)) / 100;
+  const rate = {AED: 1, USD: Math.max(0.0001, num('mcUsd', 3.65)),
+                        EUR: Math.max(0.0001, num('mcEur', 4.15))};
+
+  const ours   = inv;
+  const client = inv * (1 + up);
+  const mattia = client - ours;
+
+  const block = (cur) => {
+    const r = rate[cur], at = a => a / r;
+    const line = (label, amount, vatable) => {
+      const a = at(amount), v = vatable ? a * MCVAT : 0;
+      return \`<tr\${label === 'Mattia' ? ' class="tot"' : ''}>
+        <td>\${label}</td>
+        <td class="n r">\${money(a, 2)}</td>
+        <td class="n r">\${vatable ? money(v, 2) : ''}</td>
+        <td class="n r netcol">\${money(a + v, 2)}</td></tr>\`;
+    };
+    return \`
+    <section class="mcblock">
+      <div class="mchead">\${cur}\${cur === 'AED' ? '' :
+        \` <span>at \${money(r, 4).replace(/0+$/, '').replace(/\\.$/, '')} to the dirham</span>\`}</div>
+      <table style="table-layout:fixed;width:100%">
+        \${colsOf([31, 23, 20, 26])}
+        <thead><tr><th>\${cur}</th><th class="r">Invoice</th><th class="r">VAT</th><th class="r">Total</th></tr></thead>
+        <tbody>
+          \${line('Our price', ours, true)}
+          \${line('To client', client, true)}
+          \${line('Mattia', mattia, false)}
+        </tbody>
+      </table>
+    </section>\`;
+  };
+
+  const out = document.getElementById('mcOut');
+  if(!out) return;
+  out.innerHTML = \`
+    <p class="mcsay">The client is invoiced <b>AED \${money(client, 2)}</b> before VAT &mdash;
+      our price plus \${money(up * 100, 2).replace(/\\.00$/, '')}% &mdash; and
+      <b>Mattia takes AED \${money(mattia, 2)}</b>, which is
+      \${client ? money(mattia / client * 100, 1) : '0'}% of what the client pays.</p>
+    <div class="mcgrid">\${['AED', 'USD', 'EUR'].map(block).join('')}</div>\`;
+}
+
+function vTools(){
+  const CT = calcTabs();
+  const k = activeCo().key;
+  if(CT.cur === 'mattia') return CT.bar + vMattia();
+  if(k === 'poa') return CT.bar + vToolsPOA();`,
+  'two tabs, one of them honest about being empty');
+
+app = swap(app,
+`  if(k !== 'corplex') return \`
+  <section class="panel">
+    <div class="pad" style="padding:52px 24px;text-align:center;color:var(--ink3)">
+      <p style="margin:0 0 6px;color:var(--ink2);font-size:15px">No card fee arrangement is set up for \${esc(activeCo().name)}.</p>`,
+`  if(k !== 'corplex') return CT.bar + \`
+  <section class="panel">
+    <div class="pad" style="padding:52px 24px;text-align:center;color:var(--ink3)">
+      <p style="margin:0 0 6px;color:var(--ink2);font-size:15px">No card fee arrangement is set up for \${esc(activeCo().name)}.</p>`,
+  'and the tabs stay on a company with no rates');
+
+app = swap(app,
+`  return \`
+  <section class="panel">
+    <header><h3>Card processing fee</h3><span class="hint">what to charge so the invoice is settled in full</span></header>`,
+`  return CT.bar + \`
+  <section class="panel">
+    <header><h3>Card processing fee</h3><span class="hint">what to charge so the invoice is settled in full</span></header>`,
+  'and above the CorpLex calculator');
+
+app = swap(app,
+`  document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });`,
+`  document.querySelectorAll('#leaveSeg button').forEach(b=>b.onclick=()=>{ state.leaveTab=b.dataset.lv; render(); });
+  document.querySelectorAll('#calcSeg button').forEach(b=>b.onclick=()=>{ state.calcTab=b.dataset.ct; render(); });`,
+  'the calculator tabs are clickable');
+
+app = swap(app,
+`peopleTab: '', leaveTab: 'leave',`,
+`peopleTab: '', leaveTab: 'leave', calcTab: 'card',`,
+  'and it opens on the card fee');
+
+/* ============================================ the console, items 24, 30 and 31
+ *
+ * #24 — 'Shifts and reporting lines: there is no separate approval for this.
+ * Once shift is fixed, thats it — it can be changed, but approval not needed
+ * — the column of approved can be removed.'
+ *
+ * The column is not a shift approval. It is who that person reports to, and
+ * every leave and work-from-home request is routed by it: delete the column
+ * and the requests have nowhere to go. So the heading goes rather than the
+ * column — it read as an approval because it was called one.
+ *
+ * If the reporting line itself is meant to go, that is a different and much
+ * larger change and I have asked rather than guessed.
+ */
+// (the heading itself is changed where the shifts table is built, above)
+
+app = swap(app,
+`      <p class="cap">Three shifts: \${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus \${HR().hours.grace} minutes. I have assumed consultants report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the approvals follow it.</p>`,
+`      <p class="cap">Three shifts: \${SHIFTS().map(s=>esc(s.label)+' '+esc(s.start)+'–'+esc(s.end)).join(', ')}. Late arrival is measured against the person's own shift start plus \${HR().hours.grace} minutes.
+        <b>A shift needs no approval</b> &mdash; set it and it applies. The second column is the reporting line, which is a
+        different thing: it is who receives that person's leave and work-from-home requests. I have assumed consultants
+        report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the requests follow it.</p>`,
+  'and the caption says which is which');
+
+/* #31 — 'Referral Partners: these are for Corplex only.' They come off the
+ * CorpLex Company Master and no other workbook has them, so on any other
+ * company the panel was showing CorpLex's rates under POA's logo. */
+app = swap(app,
+`      <header><h3>Referral partners</h3><span class="hint">Company Master</span></header>`,
+`      <header><h3>Referral partners</h3>
+        <span class="pill mute">CorpLex only</span>
+        <span class="hint" style="margin-left:auto">Company Master</span></header>`,
+  'referral partners say whose they are');
+
+app = swap(app,
+`      <p class="cap">Clients not listed here attract no partner commission.</p>`,
+`      <p class="cap">Clients not listed here attract no partner commission. These rates are CorpLex&rsquo;s
+        and come from its Company Master; POA and Lex Estates have no referral arrangement in the portal.</p>`,
+  'and the caption says it too');
+
+/* #30, the second half — 'see that the page is having scrolling unneccesarily
+ * as the page has way down.' Both panels had a fixed 340px window with their
+ * own scrollbar inside a page that already scrolls, so a list of thirty-one
+ * people was read four at a time through a letterbox while the page below it
+ * ran on. The panels are as tall as what is in them now. */
+app = swap(app,
+`      <div class="tw" style="max-height:340px;overflow-y:auto"><table>
+        <thead><tr><th>Name</th><th>Role</th><th>Commission</th><th class="r">\${state.period==="FY"?"2026":state.period} net sales</th></tr></thead>`,
+`      <div class="tw"><table class="cotab">
+        \${colsOf([34, 22, 22, 22])}
+        <thead><tr><th>Name</th><th>Role</th><th>Commission</th><th class="r">\${state.period==="FY"?"2026":state.period} net sales</th></tr></thead>`,
+  'the staff accounts list is not read through a letterbox');
+
+app = swap(app,
+`      <div class="tw" style="max-height:340px;overflow-y:auto"><table>
+        <thead><tr><th>Client</th><th class="r">Partner rate</th></tr></thead>`,
+`      <div class="tw"><table>
+        <thead><tr><th>Client</th><th class="r">Partner rate</th></tr></thead>`,
+  'nor the partner list');
+
+/* #30, the first half — 'This section is for purely sales staff whose sales
+ * are shown in this App.'
+ *
+ * It listed everybody on the payroll, so an accountant and a marketing
+ * specialist sat in a table of sales figures showing zero, which reads as a
+ * consultant who sold nothing rather than somebody who does not sell.
+ *
+ * The portal already knows who counts: salesCoOf() answers it, from the
+ * person's department being one that earns revenue for that company, with a
+ * named override list for the handful who are exceptions. The screen now asks
+ * that question instead of listing the payroll.
+ *
+ * Adding and removing people by hand is the other half and is not here yet:
+ * the override list lives in settings and the portal has no way to write a
+ * setting at all — no RPC, no policy, nothing in boot.js. That is a migration
+ * with an accounts-only guard rather than a screen change, and settings drive
+ * commission and every leave balance, so it is worth doing carefully. Told
+ * Avin what it needs.
+ */
+app = swap(app,
+`  const staff = USERS.map(u=>u.name).concat(FORMER)
+    .filter(n => !state.salesCo || companyOf(n).key === state.salesCo);`,
+`  const staff = USERS.map(u=>u.name).concat(FORMER)
+    .filter(n => !!salesCoOf(n))                       // sells for somebody, or is not on this page
+    .filter(n => !state.salesCo || salesCoOf(n) === state.salesCo);`,
+  'the staff accounts list is the people who sell');
+
+/* The note that says why somebody is on the staff list goes under the staff
+ * list, not under the partners below it. */
+app = swap(app,
+`      </table></div>
+    </section>
+
+    <section class="panel">
+      <header><h3>Referral partners</h3>`,
+`      </table></div>
+      <p class="cap">Somebody appears here when their department is one that earns revenue for their
+        company &mdash; \${Object.entries(HR().revDept||{}).map(([k,v])=>
+          esc((DATA.companies[k]||{}).name || k) + ': ' + v.map(esc).join(', ')).join(' &middot; ')}
+        &mdash; or when they are named as an exception. Support departments do not appear, because a
+        marketing specialist showing zero net sales reads as a consultant who sold nothing.</p>
+    </section>
+
+    <section class="panel">
+      <header><h3>Referral partners</h3>`,
+  'and says why somebody is on it')
+
+/* ================================================== public holidays, item 25
+ *
+ * 'Public holidays 2026 — how do i change them?'
+ *
+ * You could not. The screen listed them and nothing else, which I should have
+ * said rather than left you looking for the control. Accounts has been
+ * allowed to write this table since 0002_security; only the screen was
+ * missing.
+ *
+ * The Islamic dates move each year and are announced by the government, which
+ * is the whole reason this needs editing at all — so a moving date says so,
+ * and the two kinds are told apart on the row rather than in a caption.
+ */
+app = swap(app,
+`    <header><h3>Public holidays 2026</h3><span class="hint">the moving dates need confirming</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Date</th><th>Day</th><th>Holiday</th><th>Status</th></tr></thead>
+      <tbody>\${(HR().holidays||[]).map(h=>\`<tr\${h.d<HDATE()?' style="color:var(--ink3)"':''}>
+        <td class="n nw">\${esc(dayLabel(h.d))} \${h.d.slice(0,4)}</td><td class="nw">\${esc(dayName(h.d))}</td>
+        <td>\${esc(h.n)}</td>
+        <td>\${h.fixed?'<span class="pill good"><span class="dt"></span>Fixed date</span>':'<span class="pill warn"><span class="dt"></span>Confirm — moves with the moon</span>'}</td></tr>\`).join('')}
+      </tbody></table></div>
+    <p class="cap">The Islamic holidays shift each year and are announced by the government, so please check these against the official 2026 calendar before anyone relies on them.</p>`,
+`    <header><h3>Public holidays \${String(HDATE()).slice(0,4)}</h3>
+      <span class="pill mute">\${(HR().holidays||[]).length} days</span>
+      <span class="hint" style="margin-left:auto">\${canUpload(state.user)
+        ? 'change a date and it saves' : 'accounts keeps these'}</span></header>
+    <div class="tw"><table class="cotab">
+      \${colsOf([16, 11, 34, 21, 12])}
+      <thead><tr><th>Date</th><th>Day</th><th>Holiday</th><th>Kind</th><th></th></tr></thead>
+      <tbody>\${(HR().holidays||[]).map(h=>\`<tr\${h.d<HDATE()?' style="color:var(--ink3)"':''}>
+        <td>\${canUpload(state.user)
+          ? \`<input class="ff" type="date" data-holdate="\${esc(h.d)}" value="\${esc(h.d)}">\`
+          : esc(dayLabel(h.d)) + ' ' + h.d.slice(0,4)}</td>
+        <td class="nw">\${esc(dayName(h.d))}</td>
+        <td>\${canUpload(state.user)
+          ? \`<input class="ff" data-holname="\${esc(h.d)}" value="\${esc(h.n)}">\`
+          : esc(h.n)}</td>
+        <td>\${canUpload(state.user)
+          ? \`<select class="ff" data-holfixed="\${esc(h.d)}">
+              <option value="1"\${h.fixed?' selected':''}>Fixed date</option>
+              <option value="0"\${h.fixed?'':' selected'}>Moves with the moon</option>
+            </select>\`
+          : (h.fixed?'<span class="pill good"><span class="dt"></span>Fixed date</span>'
+                    :'<span class="pill warn"><span class="dt"></span>Moves with the moon</span>')}</td>
+        <td class="r">\${canUpload(state.user)
+          ? \`<button class="btn ghost sm" data-holdrop="\${esc(h.d)}" type="button">Remove</button>\` : ''}</td></tr>\`).join('')}
+      </tbody></table></div>
+    \${canUpload(state.user) ? \`<div class="pad" style="padding-top:14px">
+      <div class="grid g3" style="gap:12px;align-items:end">
+        <div class="field" style="margin:0"><label for="holNewD">Add a holiday</label>
+          <input id="holNewD" type="date" value="\${esc(state.holNew && state.holNew.d || '')}"></div>
+        <div class="field" style="margin:0"><label for="holNewN">What it is called</label>
+          <input id="holNewN" value="\${esc(state.holNew && state.holNew.n || '')}" placeholder="Eid Al Fitr"></div>
+        <div class="drow" style="margin:0">
+          <button class="btn" id="holAdd" type="button"\${(state.holNew && state.holNew.d && state.holNew.n)?'':' disabled'}>Add</button>
+        </div>
+      </div>
+    </div>\` : ''}
+    <p class="cap">The Islamic holidays shift each year and are announced by the government, which is why they
+      are marked as moving &mdash; check those against the official calendar before anyone relies on them.
+      A holiday is the same for all three companies, it does not come off anybody&rsquo;s leave balance, and a
+      day of leave that falls on one is not counted against it. Moving a date deletes the old one and writes
+      the new, because that is what moving it is.</p>`,
+  'the holidays can be changed');
+
+app = swap(app,
+`  document.querySelectorAll('#calcSeg button').forEach(b=>b.onclick=()=>{ state.calcTab=b.dataset.ct; render(); });`,
+`  document.querySelectorAll('#calcSeg button').forEach(b=>b.onclick=()=>{ state.calcTab=b.dataset.ct; render(); });
+  document.querySelectorAll('[data-holdate]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holdate;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value) return;
+    await window.__db.editHoliday(was, {on_date: el.value, name: h.n, fixed: h.fixed});
+    render();
+  });
+  document.querySelectorAll('[data-holname]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holname;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value.trim()) return;
+    await window.__db.editHoliday(was, {on_date: was, name: el.value.trim(), fixed: h.fixed});
+    render();
+  });
+  document.querySelectorAll('[data-holfixed]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holfixed;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h) return;
+    await window.__db.editHoliday(was, {on_date: was, name: h.n, fixed: el.value === '1'});
+    render();
+  });
+  document.querySelectorAll('[data-holdrop]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.removeHoliday(b.dataset.holdrop);
+    render();
+  });
+  {
+    const d = document.getElementById('holNewD'), n = document.getElementById('holNewN'),
+          go = document.getElementById('holAdd');
+    const keep = () => { state.holNew = {d: d ? d.value : '', n: n ? n.value : ''}; render(); };
+    if(d) d.onchange = keep;
+    if(n) n.oninput = () => { state.holNew = {d: d ? d.value : '', n: n.value};
+      if(go) go.disabled = !(state.holNew.d && state.holNew.n.trim()); };
+    if(go) go.onclick = async () => {
+      go.disabled = true;
+      /* Fixed is the safe default to write: a fixed date that turns out to
+       * move is corrected once; a moving one left unconfirmed is a day
+       * somebody plans around and then does not get. */
+      await window.__db.addHoliday({on_date: state.holNew.d, name: state.holNew.n.trim(), fixed: true});
+      state.holNew = null; render();
+    };
+  }`,
+  'and the holiday controls are wired');
+
+/* ============================================ what Avin sent back on the sheet
+ *
+ * #12 — 'There is more gap between two lines.' The two notes under the three
+ * columns each carried a 16px top margin of their own on top of the grid's
+ * own gap, so they sat further apart than the paragraphs they are. One gap
+ * between them, set once.
+ */
+app = swap(app,
+`  const leaveNotes = noLeave(u) ? '' : \`
+\${B.expiring>0?\`<p class="note" style="margin-top:16px;border-left-color:var(--warn)">`,
+`  const leaveNotes = noLeave(u) ? '' : \`<div class="lvnotes">
+\${B.expiring>0?\`<p class="note" style="border-left-color:var(--warn)">`,
+  'the two notes are one block');
+
+app = swap(app,
+`        <p class="note" style="margin-top:16px">\${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.\${B.yearEnd?\` Your leave year runs to \${esc(dayLabel(B.yearEnd))} \${B.yearEnd.slice(0,4)}.\`:''}</p>\`;`,
+`        <p class="note">\${esc(B.policy.note)} Days are counted in <b>working days</b>, so a weekend or a public holiday inside your dates does not come off the balance.\${B.yearEnd?\` Your leave year runs to \${esc(dayLabel(B.yearEnd))} \${B.yearEnd.slice(0,4)}.\`:''}</p></div>\`;`,
+  'and it closes');
+
+/* #17 — 'This sounds rude, use simple words.' It did. Short sentences, plain
+ * verbs, and nothing that reads as being told what is and is not somebody
+ * else's job. */
+app = swap(app,
+`        <dt>Getting it</dt><dd>Accounts create the letter, sign it and send it to you &mdash; it also stays here to open, print or save as a PDF. Stamping is separate and is usually Admin&rsquo;s job, so ask them if you need a stamp.</dd>`,
+`        <dt>Getting it</dt><dd>Accounts write it, sign it and send it to you. It stays here too, so you can open it, print it or save it as a PDF any time. If you need it stamped, ask Admin.</dd>`,
+  'said simply');
+
+/* #10 — 'Is no department needed with zero members?' No. It was there because
+ * the tree built a box for every key it found, including the one it made up
+ * for people with nothing recorded. An empty one is now simply not drawn. */
+app = swap(app,
+`    const order = Object.keys(byDept).sort((a,b)=>{`,
+`    const order = Object.keys(byDept).filter(d => byDept[d].length).sort((a,b)=>{`,
+  'a department with nobody in it is not a department');
+
+/* #24, second half — 'All those are marked nobody, report to Miraziz.'
+ *
+ * That is data, not markup: employees.manager_id is null for most of the live
+ * staff, so the column reads Nobody and a request from those people has
+ * nowhere to go. 0037_reporting_lines fills the blanks with the owner.
+ *
+ * The screen's job is to stop it happening again quietly. A missing reporting
+ * line is now marked on the row rather than sitting there as a plausible
+ * option called Nobody — the same lesson as the leave kinds: a silent default
+ * is how a thing goes wrong for months.
+ */
+app = swap(app,
+`          <td><select class="ff" data-mgr="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            <option value="">Nobody</option>`,
+`          <td>\${mgrName(n) ? '' : '<span class="pill warn" style="margin-right:6px"><span class="dt"></span>nobody yet</span>'}
+            <select class="ff" data-mgr="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            <option value="">Nobody &mdash; requests have nowhere to go</option>`,
+  'a missing reporting line is marked, not offered quietly');
+
+/* #10, second question — 'What is the reason for some in orange and some in
+ * grey?' It was answered in the caption under the whole tree, which is a long
+ * way from the coloured thing being asked about. It goes at the top, where
+ * the question is asked. */
+app = swap(app,
+`function vOrg(){
+  const owner = (USERS.find(u=>u.role==='owner')||{}).name;`,
+`function vOrg(){
+  const owner = (USERS.find(u=>u.role==='owner')||{}).name;
+  /* The colours, said where they are being looked at rather than in a caption
+   * under the whole page. Orange earns; grey supports. */
+  const legend = \`<div class="orglgd">
+    <span><i class="rev"></i>earns revenue &mdash; appears in that company&rsquo;s performance pages</span>
+    <span><i></i>support &mdash; does not sell, and never shows a sales figure</span>
+  </div>\`;`,
+  'the org tree explains its own colours');
+
+app = swap(app,
+`    return \`
+    <section class="panel">
+      <header><h3>\${esc(c.name)}</h3>
+        <span class="hint">\${roll.length} \${roll.length===1?'person':'people'} &middot; \${order.length} department\${order.length===1?'':'s'}</span></header>`,
+`    return \`
+    <section class="panel">
+      <header><h3>\${esc(c.name)}</h3>
+        <span class="hint">\${roll.length} \${roll.length===1?'person':'people'} &middot; \${order.length} department\${order.length===1?'':'s'}</span>
+        \${legend}</header>`,
+  'and carries it in every company header');
+
+// Mattia's calculator recomputes on every keystroke, like the card one beside it
+app = swap(app,
+`    if(document.getElementById('pfOrd')){
+      const el = document.getElementById('pfOrd');`,
+`    if(document.getElementById('mcInv')){
+      ['mcInv','mcUp','mcUsd','mcEur'].forEach(id=>{const el=document.getElementById(id); if(!el) return;
+        el.addEventListener('input',calcMattia); el.addEventListener('change',calcMattia);});
+      calcMattia();
+    }
+    if(document.getElementById('pfOrd')){
+      const el = document.getElementById('pfOrd');`,
+  "Mattia's calculator is wired");
+
+/* ======================== nothing changes until you say so: Edit and Save ===
+ * Avin, having watched the reporting lines save as he chose them:
+ *
+ *   'I am finding this risky. You have given this option of easy edit in the
+ *    console. I would recommend you to create an edit and save option on
+ *    every table that is editable. Keeping open edit is risky, a mistake can
+ *    cause huge mistakes. Imagine leave balance increased by a wrong key
+ *    press.'
+ *
+ * He is right, and he is right about the worst case in particular: the
+ * carried-forward box on the leave balances table is a number input sitting
+ * in a row of thirty, one arrow key away from a person's entitlement being
+ * wrong for a year, and until now nothing stood between the key and the
+ * database. Worse, that particular box never wrote anything at all — it moved
+ * the screen and the next reload put it back — so the one table he named was
+ * both dangerous in design and broken in fact.
+ *
+ * The rule now, for every editable table in the console: it is read-only
+ * until you press Edit; what you type is a draft that exists only on screen;
+ * Save shows you every change in words, old value beside new, and writes
+ * nothing until you agree to that list; Cancel throws the draft away.
+ *
+ * One mechanism for all of them, rather than one per screen, so the safeguard
+ * cannot be present on one table and quietly missing from the next. The
+ * payment reconciliation ticks stay instant — Avin asked for those to respond
+ * at once, they are ticks rather than amounts, and a wrong one is visible on
+ * the row and untickable.
+ */
+/* The opening balance is a figure AS AT a date. For everybody that date is the
+ * policy's own, and the calculation has always taken it from there. For anybody
+ * whose record was started again it is the day the fresh record began: their
+ * leave starts at nothing that day, so the days they took in the spell before
+ * it must not be counted against the new one. The person's own date wins where
+ * it is later, which today is nobody — every opening row carries the policy
+ * date — so this changes no balance now and holds when one is restarted. */
+/* The balance is worked out from the opening date; both places that read it now
+ * ask for the person's own. */
+app = swap(app,
+`      pendDays:0, monthsIn:0, credits:[], openAt:OPENAT(), next:'',`,
+`      pendDays:0, monthsIn:0, credits:[], openAt:OPENAT(u), next:'',`,
+'the no-joining-date balance opens on the right day');
+
+app = swap(app,
+`  const open = OPENAT(), rate = P.accrualPerMonth;`,
+`  const open = OPENAT(u), rate = P.accrualPerMonth;`,
+'and so does the real one');
+
+app = swap(app,
+`const OPENAT = () => (HR().leavePolicy || {}).openingAt || '2026-08-31';`,
+`const OPENAT = u => { const d = (HR().leavePolicy || {}).openingAt || '2026-08-31';
+  const own = ((HR().balances || {})[u] || {}).openAt || '';
+  return own && own > d ? own : d; };
+
+/* ---------- one way to change anything in the console ----------
+ *
+ * A table declares itself here: how to read a cell's value now, what to call
+ * that cell in the list of changes, how to print a value so a person can
+ * check it, and how to write the whole draft at once. Everything else — the
+ * Edit button, the draft, the count, the confirmation, the undo — is shared,
+ * which is the point: a safeguard that has to be remembered per screen is a
+ * safeguard that will be forgotten on one.
+ *
+ * A draft key is whatever the table wants; where a row has more than one
+ * editable cell the key carries which, as 's|Rana Amine' or 'Rana|passport'.
+ */
+const EDTABLES = {
+  carry: {
+    title: 'Carried-forward leave',
+    now:  k => { const b = (HR().balances||{})[k] || {}; return b.carriedSet ? String(b.carried) : ''; },
+    name: k => NM(k) + ' \\u2014 carried forward',
+    fmt:  v => String(v).trim() === '' ? 'not recorded'
+             : (Math.round((+v || 0) * 100) / 100) + (Math.abs(+v) === 1 ? ' day' : ' days'),
+    /* Blank means "nothing recorded" and is not the same as nought, so the
+       two are only equal when both are blank; otherwise compare the numbers,
+       so 12 and 12.0 are one figure rather than a change. */
+    same: (a, b) => (String(a).trim() === '') === (String(b).trim() === '')
+            && (String(a).trim() === '' || (+a || 0) === (+b || 0)),
+    save: d => window.__db.setCarried(d, OPENAT())
+  },
+  shifts: {
+    title: 'Shifts and reporting lines',
+    now:  k => k[0] === 's' ? (shiftOf(k.slice(2)) || {}).id || '' : (mgrName(k.slice(2)) || ''),
+    name: k => NM(k.slice(2)) + (k[0] === 's' ? ' \\u2014 shift' : ' \\u2014 reports to'),
+    fmt:  (v, k) => k && k[0] === 'm'
+            ? (v ? NM(v) : 'nobody')
+            : (() => { const s = SHIFTS().find(x => x.id === v);
+                       return s ? s.label + ' \\u00b7 ' + s.start + '\\u2013' + s.end : 'none'; })(),
+    save: d => window.__db.saveShiftLines(d)
+  },
+  hols: {
+    title: 'Public holidays',
+    now:  k => { const h = (HR().holidays||[]).find(x => x.d === k.slice(2)) || {};
+                 return k[0] === 'd' ? (h.d || '') : k[0] === 'n' ? (h.n || '')
+                      : k[0] === 'k' ? (h.fixed ? '1' : '0') : ''; },
+    name: k => { const h = (HR().holidays||[]).find(x => x.d === k.slice(2)) || {};
+                 const who = h.n || k.slice(2);
+                 return who + (k[0] === 'd' ? ' \\u2014 date' : k[0] === 'n' ? ' \\u2014 name'
+                             : k[0] === 'k' ? ' \\u2014 fixed or moving' : ''); },
+    fmt:  (v, k) => k && k[0] === 'x' ? 'removed from the calendar'
+            : k && k[0] === 'k' ? (v === '1' ? 'a fixed date' : 'moves with the moon')
+            : k && k[0] === 'd' ? (v ? dayLabel(v) + ' ' + String(v).slice(0,4) : '\\u2014')
+            : String(v || '\\u2014'),
+    save: d => window.__db.saveHolidays(d, HR().holidays || [])
+  },
+  docdates: {
+    title: 'Document expiry dates',
+    now:  k => { const i = k.lastIndexOf('|');
+                 return (((HR().docs||{})[k.slice(0,i)] || {})[k.slice(i+1)]) || ''; },
+    name: k => { const i = k.lastIndexOf('|'), t = DOCTYPES().find(x => x.k === k.slice(i+1));
+                 return NM(k.slice(0,i)) + ' \\u2014 ' + ((t && t.label) || k.slice(i+1)); },
+    fmt:  v => v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file',
+    save: d => window.__db.saveDocDates(d)
+  },
+  payline: {
+    title: 'Payroll figures',
+    /* A key is '<line id>|<database field>'. The column list already pairs the
+       field with the name the screen uses for it and the words on the heading,
+       so the confirmation reads 'Rana Amine \\u2014 Advance' rather than
+       'a1b2c3|advance'. */
+    now:  k => { const i = k.lastIndexOf('|'), id = k.slice(0,i), f = k.slice(i+1);
+                 const c = PAYCOLS.find(x => x.f === f) || {k:f};
+                 for(const run of (DATA.payroll.runs||[]))
+                   for(const r of run.rows) if(r.lineId === id) return String(+r[c.k] || 0);
+                 return '0'; },
+    name: k => { const i = k.lastIndexOf('|'), id = k.slice(0,i), f = k.slice(i+1);
+                 const c = PAYCOLS.find(x => x.f === f) || {label:f};
+                 let who = id;
+                 for(const run of (DATA.payroll.runs||[]))
+                   for(const r of run.rows) if(r.lineId === id) who = NM(r.portalName || r.name);
+                 return who + ' \\u2014 ' + (c.label || f); },
+    fmt:  (v, k) => (k && k.slice(k.lastIndexOf('|') + 1) === 'days')
+            ? (+v || 0) + ((+v || 0) === 1 ? ' day' : ' days')
+            : money(+v || 0, 2),
+    // an empty box and a nought are the same figure
+    same: (a, b) => (+a || 0) === (+b || 0),
+    save: d => window.__db.savePayLines(d)
+  }
+};
+
+const EDITING = id => !!(state.edit && state.edit.table === id);
+const EDANY   = () => !!state.edit;
+const edNow   = (id, k) => { const t = EDTABLES[id]; return t ? t.now(k) : ''; };
+function edVal(id, k){
+  if(!EDITING(id)) return edNow(id, k);
+  return (k in state.edit.draft) ? state.edit.draft[k] : edNow(id, k);
+}
+/* A cell is only a change if it differs from what is there, and "differs" is
+   not always string equality. An empty money box and a nought are the same
+   figure: the box shows blank where the value is zero, so comparing the two
+   as text made every untouched cell on the payroll a change — three hundred
+   and sixty-eight of them, all reading 0.00 to 0.00. A table that says you
+   are about to change nothing, three hundred times, teaches you to press Yes
+   without reading, which is the exact habit this whole mechanism exists to
+   prevent. */
+function edSame(id, a, b){
+  const t = EDTABLES[id];
+  return t && t.same ? t.same(a, b) : String(a) === String(b);
+}
+function edSet(id, k, v){
+  if(!EDITING(id)) return;
+  if(edSame(id, v, edNow(id, k))) delete state.edit.draft[k];
+  else state.edit.draft[k] = v;
+}
+function edList(id){
+  if(!EDITING(id)) return [];
+  const t = EDTABLES[id];
+  return Object.keys(state.edit.draft).sort().map(k => ({
+    key: k, what: t.name(k),
+    was: t.fmt(edNow(id, k), k), now: t.fmt(state.edit.draft[k], k)}));
+}
+const edPhrase = n => n ? n + (n === 1 ? ' change not saved yet' : ' changes not saved yet')
+                        : 'nothing changed yet';
+/* The buttons that turn a table from something you read into something you
+   are changing. Only one table at a time, so an unsaved draft on one screen
+   cannot be forgotten while a second is being edited on another. */
+function edBar(id){
+  if(!EDTABLES[id]) return '';
+  if(!EDITING(id)) return \`<button class="btn ghost edbtn" data-edon="\${esc(id)}" type="button"\${
+    EDANY() ? ' disabled title="Finish the other table first"' : ''}>Edit</button>\`;
+  const n = edList(id).length;
+  return \`<span class="edmsg\${n ? ' on' : ''}">\${edPhrase(n)}</span>
+    <button class="btn edbtn" data-edsave="\${esc(id)}" type="button"\${n ? '' : ' disabled'}>Save\${n ? ' ' + n : ''}</button>
+    <button class="btn ghost edbtn" data-edoff="1" type="button">Cancel</button>\`;
+}
+/* What you are about to do, in words, before it happens. This is the whole
+   point of the exercise: a wrong key press is caught here, where the old
+   value is printed beside the new one, and not a month later in a balance
+   nobody can explain. */
+function edConfirm(id){
+  if(!EDITING(id) || !state.edit.confirm) return '';
+  const rows = edList(id);
+  return \`<div class="edconf">
+    <h4>About to change \${rows.length} \${rows.length === 1 ? 'thing' : 'things'}</h4>
+    <div class="tw"><table class="edtab">
+      <thead><tr><th>What</th><th>From</th><th>To</th></tr></thead>
+      <tbody>\${rows.map(r => \`<tr><td>\${esc(r.what)}</td>
+        <td class="edwas">\${esc(r.was)}</td><td class="ednow">\${esc(r.now)}</td></tr>\`).join('')}</tbody>
+    </table></div>
+    <div class="edconfb">
+      <button class="btn" id="edGo" type="button"\${state.edit.busy ? ' disabled' : ''}>\${
+        state.edit.busy ? 'Saving\\u2026' : 'Yes, save ' + (rows.length === 1 ? 'it' : 'them')}</button>
+      <button class="btn ghost" id="edBack" type="button"\${state.edit.busy ? ' disabled' : ''}>Back</button>
+      <span>Nothing has been written yet. <b>Back</b> returns you to the table with your changes still on it.</span>
+    </div>
+  </div>\`;
+}
+function edSaved(id){
+  const s = state.edSaved;
+  if(!s || s.table !== id) return '';
+  return \`<div class="edok"><b>Saved.</b> \${s.n} \${s.n === 1 ? 'change' : 'changes'} written.</div>\`;
+}
+/* A cell, in whichever of the two states the table is in. */
+function edCell(id, key, control, show){
+  return EDITING(id) ? control(edVal(id, key)) : show(edNow(id, key));
+}
+const edAttr = (id, key) => \` data-edt="\${esc(id)}" data-edk="\${esc(key)}"\`;`,
+  'one way to change anything in the console');
+
+app = swap(app,
+  `  deptView: null, company: null, attMonth: null,`,
+  `  deptView: null, company: null, attMonth: null, edit: null, edSaved: null,
+  exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',`,
+  'somewhere to hold a draft');
+
+// the handlers, shared by every table that declares itself editable
+app = swap(app,
+`  const exw=document.getElementById('exWho');`,
+`  document.querySelectorAll('[data-edon]').forEach(b=>b.onclick=()=>{
+    state.edit = {table:b.dataset.edon, draft:{}, confirm:false, busy:false};
+    state.edSaved = null; render(); });
+  document.querySelectorAll('[data-edoff]').forEach(b=>b.onclick=()=>{
+    state.edit = null; render(); });
+  document.querySelectorAll('[data-edsave]').forEach(b=>b.onclick=()=>{
+    if(!EDITING(b.dataset.edsave) || !edList(b.dataset.edsave).length) return;
+    state.edit.confirm = true; render(); });
+  {
+    const back=document.getElementById('edBack');
+    if(back) back.onclick=()=>{ state.edit.confirm=false; render(); };
+    const go=document.getElementById('edGo');
+    if(go) go.onclick=async ()=>{
+      const id = state.edit.table, draft = Object.assign({}, state.edit.draft);
+      const n = Object.keys(draft).length;
+      state.edit.busy = true; render();
+      const ok = await EDTABLES[id].save(draft);
+      if(ok){ state.edit = null; state.edSaved = {table:id, n}; }
+      else if(state.edit){ state.edit.busy = false; state.edit.confirm = false; }
+      render();
+    };
+  }
+  /* Typing does not redraw the table: on thirty rows that loses the cursor
+     and the scroll. The draft is updated, the cell is marked, and the count
+     in the header is corrected in place. */
+  const edCount = id => {
+    const n = edList(id).length;
+    document.querySelectorAll('.edmsg').forEach(s=>{
+      s.textContent = edPhrase(n); s.classList.toggle('on', !!n); });
+    /* Scoped to the table being edited, not to every Save on the page: only
+       one table is ever open, but a bare [data-edsave] here reads as a second
+       handler on the same attribute, and the next person to look would have to
+       work out which of the two wins. */
+    document.querySelectorAll(\`[data-edsave="\${id}"]\`).forEach(b=>{
+      b.disabled = !n; b.textContent = 'Save' + (n ? ' ' + n : ''); });
+  };
+  document.querySelectorAll('[data-edk]').forEach(el=>{
+    const id = el.dataset.edt, key = el.dataset.edk;
+    const upd = ()=>{
+      edSet(id, key, el.type === 'checkbox' ? (el.checked ? '1' : '0') : el.value);
+      el.classList.toggle('edchanged', key in ((state.edit||{}).draft||{}));
+      const row = el.closest('tr'); if(row) row.classList.toggle('edrow', key in ((state.edit||{}).draft||{}));
+      edCount(id);
+    };
+    el.oninput = upd; el.onchange = upd;
+    /* Paint what the draft already holds, but do not run the updater: binding
+       is not typing, and treating it as typing is what put every untouched
+       cell into the change list. */
+    const on = key in ((state.edit||{}).draft||{});
+    el.classList.toggle('edchanged', on);
+    const row0 = el.closest('tr'); if(row0) row0.classList.toggle('edrow', on);
+  });
+  document.querySelectorAll('[data-edrm]').forEach(b=>b.onclick=()=>{
+    const id = b.dataset.edt, key = b.dataset.edrm;
+    if(!EDITING(id)) return;
+    if(key in state.edit.draft) delete state.edit.draft[key];
+    else state.edit.draft[key] = 'x';
+    render(); });
+  const exw=document.getElementById('exWho');`,
+  'the edit, the draft and the confirmation are wired');
+
+// and what it looks like
+shell = swap(shell,
+`.slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}`,
+`.slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}
+/* editing a table: a draft on screen, and nothing written until it is agreed */
+.edbtn{padding:5px 12px;font-size:12.5px}
+.panel header .edbtn:first-of-type{margin-left:auto}
+.edmsg{font-size:12.5px;color:var(--ink3);margin-left:auto}
+.edmsg.on{color:var(--warn);font-weight:600}
+.ff.edchanged,input.edchanged,select.edchanged{border-color:var(--warn);box-shadow:0 0 0 2px var(--warnSoft, rgba(168,114,12,.14))}
+tr.edrow td{background:var(--warnSoft, rgba(168,114,12,.07))}
+.edconf{margin:0 18px 16px;border:1px solid var(--warn);border-radius:8px;overflow:hidden;background:var(--card)}
+.edconf h4{margin:0;padding:13px 16px 12px;font-size:14.5px;background:var(--warnSoft, rgba(168,114,12,.10));
+  border-bottom:1px solid var(--line)}
+.edtab{width:100%;border-collapse:collapse;font-size:13px}
+.edtab th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);
+  padding:9px 16px 7px;border-bottom:1px solid var(--line)}
+.edtab td{padding:9px 16px;border-bottom:1px solid var(--line)}
+.edtab tr:last-child td{border-bottom:0}
+.edtab .edwas{color:var(--ink3);text-decoration:line-through}
+.edtab .ednow{font-weight:700}
+.edconfb{display:flex;align-items:center;gap:10px;padding:13px 16px;border-top:1px solid var(--line);flex-wrap:wrap}
+.edconfb span{font-size:12.5px;color:var(--ink2)}
+.edok{margin:0 18px 14px;padding:10px 14px;border-radius:8px;font-size:13px;
+  background:var(--goodSoft, rgba(52,168,83,.10));border-left:3px solid var(--good)}
+.edread{color:var(--ink)}
+.edread.none{color:var(--ink3)}
+@media screen and (max-width:900px){.edconf,.edok{margin-left:0;margin-right:0}}`,
+  'the editing stylesheet');
+
+/* ================================ moving somebody into sales, or out, #30 ===
+ * Avin: 'Not really completed. Tomorrow if someone changes to sales, i cant
+ * see their report.'
+ *
+ * True, and the staff list was never the thing to edit. Who appears in the
+ * sales tables is worked out from the person's department against the list of
+ * departments that earn revenue for their company — and the same department
+ * draws the organisation chart and the People page. So an "add to sales"
+ * button would have made a second, private idea of where somebody works, and
+ * the two would have drifted the first time anybody actually moved.
+ *
+ * One control, therefore, on the department itself. Move a consultant into
+ * Corporate & Legal and their report appears; move them to Marketing and it
+ * stops. The panel says which it will be before you press anything, because
+ * the rule is not obvious and guessing at it is how the wrong person ends up
+ * in a commission run.
+ */
+app = swap(app,
+  `  deptView: null, company: null,`,
+  `  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '',`,
+  'somewhere to hold the move');
+
+app = swap(app,
+`      <p class="cap">Somebody appears here when their department is one that earns revenue for their
+        company &mdash; \${Object.entries(HR().revDept||{}).map(([k,v])=>`,
+`      <p class="cap">Somebody appears here when their department is one that earns revenue for their
+        company \\u2014 use the panel below to move somebody in or out \\u2014 \${Object.entries(HR().revDept||{}).map(([k,v])=>`,
+  'the staff list points at the control');
+
+app = swap(app,
+`    <section class="panel">
+      <header><h3>Referral partners</h3>
+        <span class="pill mute">CorpLex only</span>`,
+`    <section class="panel">
+      <header><h3>Move somebody between departments</h3>
+        <span class="hint" style="margin-left:auto">this is what puts them in or out of sales</span></header>
+      \${(() => {
+        const roll = USERS.map(x => x.name).slice().sort();
+        const who  = state.mvWho;
+        /* Every department anybody is actually in, so the list is the
+           organisation as it stands rather than one I wrote down once. */
+        const all  = [...new Set(roll.map(orgDeptOf).filter(Boolean)
+                       .concat(Object.values(HR().revDept || {}).flat()))].sort();
+        const now  = who ? orgDeptOf(who) : '';
+        const want = state.mvDept === null ? now : state.mvDept;
+        const co   = who ? (((HR().orgCo || {})[who]) || companyOf(who).key) : '';
+        const earns = d => REVDEPT(co).includes(d);
+        const same = String(want).trim() === String(now).trim();
+        return \`<div class="pad">
+          <div class="jform">
+            <label><span>Who</span><select id="mvWho">
+              <option value="">Choose somebody</option>
+              \${roll.map(n => \`<option value="\${esc(n)}"\${who === n ? ' selected' : ''}>\${esc(NM(n))}\${
+                orgDeptOf(n) ? ' \\u2014 ' + esc(orgDeptOf(n)) : ' \\u2014 no department'}</option>\`).join('')}
+            </select></label>
+            <label><span>Department</span>
+              <input id="mvDept" list="mvDepts" value="\${esc(want)}" placeholder="\${who ? 'type a new one, or pick' : 'choose somebody first'}"\${who ? '' : ' disabled'}>
+              <datalist id="mvDepts">\${all.map(d => \`<option value="\${esc(d)}">\`).join('')}</datalist></label>
+            <label><span>&nbsp;</span>
+              <button class="btn" id="mvSave" type="button"\${(!who || same || state.mvBusy) ? ' disabled' : ''}>\${
+                state.mvBusy ? 'Saving\\u2026' : 'Move them'}</button></label>
+          </div>
+          \${!who ? \`<p class="cap" style="padding:0;margin-top:14px">Pick somebody to see where they sit now and what moving them would do.</p>\`
+          : \`<p class="note" style="margin-top:16px\${earns(String(want).trim()) === earns(now) ? '' : ';border-left-color:var(--warn)'}">
+              <b>\${nm(who)}</b> is in <b>\${esc(now || 'no department')}</b> at \${esc((DATA.companies[co] || {}).name || co)},
+              which \${earns(now) ? '<b>does</b>' : 'does <b>not</b>'} earn commission there.
+              \${same ? 'Change the department to move them.'
+                : \`Moving them to <b>\${esc(String(want).trim() || 'no department')}</b> would \${
+                    earns(String(want).trim())
+                      ? '<b>put them into</b> the sales tables, the leaderboard and the commission run'
+                      : '<b>take them out of</b> the sales tables, the leaderboard and the commission run'}.
+                   It also moves them on the organisation chart and on People.\`}</p>\`}
+        </div>\`;
+      })()}
+      \${(() => { const x = state.mvDone; return x ? \`<p class="cap"><b>\${esc(x)}</b> has been moved.</p>\` : ''; })()}
+    </section>
+  </div>
+
+  <div class="grid g2">
+    <section class="panel">
+      <header><h3>Referral partners</h3>
+        <span class="pill mute">CorpLex only</span>`,
+  'a control that moves somebody between departments');
+
+app = swap(app,
+  `  salesstaff: ['admin',   ['Staff accounts']],`,
+  `  salesstaff: ['admin',   ['Staff accounts', 'Move somebody between departments']],`,
+  'and it lives on the staff accounts page');
+
+app = swap(app,
+`  const exw=document.getElementById('exWho');`,
+`  const mvw=document.getElementById('mvWho'); if(mvw) mvw.onchange=()=>{
+    state.mvWho=mvw.value; state.mvDept=null; state.mvDone=''; render(); };
+  const mvd=document.getElementById('mvDept'); if(mvd) mvd.oninput=()=>{
+    state.mvDept=mvd.value; const at=mvd.selectionStart; render();
+    const e2=document.getElementById('mvDept'); if(e2){ e2.focus(); e2.setSelectionRange(at,at); } };
+  const mvs=document.getElementById('mvSave'); if(mvs) mvs.onclick=async ()=>{
+    const who=state.mvWho, to=String(state.mvDept===null?orgDeptOf(who):state.mvDept).trim();
+    if(!who) return;
+    state.mvBusy=true; render();
+    const ok=await window.__db.setDepartment(who, to);
+    state.mvBusy=false;
+    if(ok){ state.mvDept=null; state.mvDone=NM(who); }
+    render();
+  };
+  const exw=document.getElementById('exWho');`,
+  'and the move is written down');
+
+/* ============================ one company's rules are not another's, 29+31 ===
+ * Avin, on the commission rules: 'Needs to wait — But i see corplex rules in
+ * POA and Lex.' And on the referral partners: 'Seen on POA and Lex console.'
+ *
+ * Both panels drew CorpLex's figures whatever company was selected at the top
+ * of the console. The referral panel even carried a pill saying "CorpLex
+ * only" and a note saying POA and Lex have no arrangement — while sitting on
+ * POA's console showing CorpLex's clients and rates. A label that contradicts
+ * the table under it is worse than no label.
+ *
+ * The database has always known: sales_bands and sales_company are keyed by
+ * company, and only CorpLex has rows. So the test is not "is this CorpLex"
+ * but "does the company I am looking at sell anything through the portal" —
+ * which means POA and Lex stop showing somebody else's rules today, and start
+ * showing their own the moment their figures are loaded, with no code change.
+ */
+app = swap(app,
+`const coInView = u => (canAdmin(u) && state.company) ? state.company : companyOf(u).key;`,
+`const coInView = u => (canAdmin(u) && state.company) ? state.company : companyOf(u).key;
+/* Does the company being looked at sell through the portal? Only one with its
+   own sales figures does. The others have no bands, no referral rates and no
+   consultants, and showing them CorpLex's would be presenting one company's
+   commercial arrangements as another's. */
+const salesHere = () => !!(DATA.companies[coInView(state.user)] || {}).sales;
+const coNameInView = () => (DATA.companies[coInView(state.user)] || {}).name || 'This company';
+const noSalesHere = what => \`<div class="pad"><p class="note" style="margin:0">
+  <b>\${esc(coNameInView())} has no \${esc(what)} in the portal.</b>
+  \${esc((DATA.companies.corplex || {}).name || 'CorpLex')}'s are deliberately not shown here, because
+  they are not \${esc(coNameInView())}'s. Change the company at the top of the screen to see them, or
+  send me \${esc(coNameInView())}'s and this page fills in.</p></div>\`;`,
+  'a company that sells, and one that does not');
+
+app = swap(app,
+`      <header><h3>Commission rules</h3><span class="hint">edit once, everyone recalculates</span></header>
+      <div class="tw"><table>`,
+`      <header><h3>Commission rules</h3>
+        <span class="pill mute">\${esc(coNameInView())}</span>
+        <span class="hint" style="margin-left:auto">edit once, everyone recalculates</span></header>
+      \${!salesHere() ? noSalesHere('commission rules') : \`
+      <div class="tw"><table>`,
+  'the commission rules belong to a company');
+
+app = swap(app,
+`nothing from Corporate &amp; Legal.</p>
+    </section>`,
+`nothing from Corporate &amp; Legal.</p>\`}
+    </section>`,
+  'and stop where that company stops');
+
+app = swap(app,
+`      <header><h3>Referral partners</h3>
+        <span class="pill mute">CorpLex only</span>
+        <span class="hint" style="margin-left:auto">Company Master</span></header>
+      <div class="tw"><table>`,
+`      <header><h3>Referral partners</h3>
+        <span class="pill mute">\${esc(coNameInView())}</span>
+        <span class="hint" style="margin-left:auto">Company Master</span></header>
+      \${!salesHere() ? noSalesHere('referral partners') : \`
+      <div class="tw"><table>`,
+  'the referral partners belong to a company too');
+
+app = swap(app,
+`POA and Lex Estates have no referral arrangement in the portal.</p>
+    </section>`,
+`POA and Lex Estates have no referral arrangement in the portal.</p>\`}
+    </section>`,
+  'and stop where that company stops as well');
+
+/* ================================================== Exceptions, removed ====
+ * #23. Avin: 'I think its not required. Its a confused concept.'
+ *
+ * He is right, and it was mine. It put two unlike things under one word — a
+ * day somebody did not come in and did not book leave, and a day somebody
+ * checked in and forgot to check out — counted them together, and made the
+ * total a red number at the top of the screen. This month it read 499, which
+ * is not a list anybody was ever going to work through; it was a number that
+ * made the page look alarming and told nobody what to do.
+ *
+ * The absences it counted are already in the attendance table, in the
+ * Unexplained column, per person and per month, where they can actually be
+ * acted on. What goes with this is the missed check-out, which had no other
+ * home — worth saying out loud rather than letting it disappear quietly.
+ *
+ * The loop that built it ran over every person for every day of the month on
+ * every render of this screen, so the page gets quicker as well as quieter.
+ */
+app = swap(app,
+`  const exc = [];
+  list.forEach(n=>monthDays(ym).filter(d=>d<=HDATE()).forEach(ds=>{
+    const s = dayStatus(n, ds);
+    if(s.k==='Absent') exc.push({n, ds, why:'No check-in and no approved leave'});
+    const a = attOf(n, ds);
+    if(a && a.segs.some(g=>!g.out) && ds<HDATE()) exc.push({n, ds, why:'Checked in but never checked out'});
+  }));
+`,
+  '',
+  'nothing counts exceptions any more');
+
+app = swap(app,
+`    <div class="stat"><span class="k">Exceptions this month</span><span class="v" style="color:var(--\${exc.length?'bad':'good'})">\${exc.length}</span>
+      <span class="n">missing check-outs and unexplained days</span></div>
+`,
+  '',
+  'and the strip does not lead with the number');
+
+app = swap(app,
+`  <div class="grid g2">
+    <section class="panel">
+      <header><h3>Exceptions</h3><span class="hint">worth a word with the person</span></header>
+      \${byCompany(exc.slice(0, 24), {
+        who: x => x.n,
+        cols: colsOf([26, 16, 58]),
+        head: \`<thead><tr><th>Employee</th><th>Date</th><th>What happened</th></tr></thead>\`,
+        row: x => \`<tr><td>\${nm(x.n)}</td>
+          <td class="n nw">\${esc(dayLabel(x.ds))}</td>
+          <td style="color:var(--ink2)"\${full(x.why)}>\${esc(x.why)}</td></tr>\`,
+        empty: 'Nothing out of place this month.'
+      })}
+      \${exc.length>24?\`<p class="cap">and \${exc.length-24} more</p>\`:''}
+    </section>
+
+    <section class="panel">`,
+`  <div class="grid g2">
+    <section class="panel">`,
+  'the exceptions panel is gone');
+
+app = swap(app,
+  `  hradmin:    ['hradmin', ['attendance', 'Exceptions'], true],`,
+  `  hradmin:    ['hradmin', ['attendance'], true],`,
+  'and the attendance page no longer looks for it');
+
+/* ================================ the shift and the reporting line, saved ====
+ * #24. Avin ran 0037_reporting_lines.sql and told me the name still would not
+ * show. It could not have: both dropdowns on this screen wrote into the
+ * in-memory copy of the data and nothing else, so the page redrew as though
+ * the choice had taken and the next reload put it back. The header said
+ * 'confirm these' over two controls that confirmed nothing.
+ *
+ * The permission has been there since 0002_security — admin_employees, for
+ * all, guarded by is_admin(). What was missing was a writer, which is now in
+ * boot.js as setShift and setManager, with a check that nobody is made to
+ * report to themselves or into a loop.
+ *
+ * The screen agrees with you at once and puts the choice back if the database
+ * refuses, the same way the payment reconciliation ticks do.
+ */
+app = swap(app,
+`  document.querySelectorAll('[data-shift]').forEach(s=>s.onchange=()=>{
+    HR().assign[s.dataset.shift]=s.value; render(); });
+  document.querySelectorAll('[data-mgr]').forEach(s=>s.onchange=()=>{
+    HR().managers[s.dataset.mgr]=s.value;
+    HR().requests.forEach(r=>{ if(r.who===s.dataset.mgr && r.status==='Pending') r.mgr=s.value; });
+    render(); });`,
+`  document.querySelectorAll('[data-shift]').forEach(s=>s.onchange=async ()=>{
+    const who = s.dataset.shift, was = HR().assign[who];
+    HR().assign[who] = s.value; render();
+    const ok = await window.__db.setShift(who, s.value);
+    if(!ok){ HR().assign[who] = was; render(); }
+  });
+  document.querySelectorAll('[data-mgr]').forEach(s=>s.onchange=async ()=>{
+    const who = s.dataset.mgr, was = HR().managers[who];
+    const wasReq = HR().requests.filter(r=>r.who===who && r.status==='Pending').map(r=>[r, r.mgr]);
+    HR().managers[who] = s.value;
+    // a request already waiting goes to whoever the line now points at
+    wasReq.forEach(([r]) => { r.mgr = s.value; });
+    render();
+    const ok = await window.__db.setManager(who, s.value);
+    if(!ok){ HR().managers[who] = was; wasReq.forEach(([r, m]) => { r.mgr = m; }); render(); }
+  });`,
+  'the shift and the reporting line are written down');
+
+/* And the reason Miraziz never appeared.
+ *
+ * The rows on this screen are the people whose attendance is tracked, which
+ * is right — it is a shift table. But the manager dropdown was built from the
+ * same list, and the six people who are off the attendance list (the owner,
+ * the two partners, and three others) were therefore not offerable as
+ * anybody's manager. Miraziz is the top of the tree and the one person
+ * everything ought to point at, and his name was not in the list at all: the
+ * select fell through to its first option and read "Nobody".
+ *
+ * So 0037 had filled the lines correctly and the screen could not show them.
+ * Being off the attendance list says nothing about whether somebody can
+ * receive a leave request, so the options come from the whole roster.
+ */
+app = swap(app,
+`            <option value="">Nobody &mdash; requests have nowhere to go</option>
+            \${list.filter(m=>m!==n).map(m=>\`<option value="\${esc(m)}"\${mgrName(n)===m?' selected':''}>\${esc(m)}</option>\`).join('')}`,
+`            <option value="">Nobody &mdash; requests have nowhere to go</option>
+            \${USERS.map(x=>x.name).filter(m=>m!==n).map(m=>\`<option value="\${esc(m)}"\${mgrName(n)===m?' selected':''}>\${esc(m)}</option>\`).join('')}`,
+  'anybody on the roster can be a manager, tracked for attendance or not');
+
+app = swap(app,
+  `      <header><h3>Shifts and reporting lines</h3><span class="hint">confirm these</span></header>`,
+  `      <header><h3>Shifts and reporting lines</h3><span class="hint" style="margin-left:auto">both columns save as you change them</span></header>`,
+  'the header stops asking for a confirmation it never took');
+
+// and the screen stops claiming somebody assumed them
+app = swap(app,
+`        <b>A shift needs no approval</b> &mdash; set it and it applies. The second column is the reporting line, which is a
+        different thing: it is who receives that person's leave and work-from-home requests. I have assumed consultants
+        report to Rana, accounting to you, and you and Rana to Miraziz &mdash; change any line and the requests follow it.</p>`,
+`        <b>Both columns save the moment you change them</b> \\u2014 there is no button, and nothing here needs approving.
+        The second column is the reporting line: it is who receives that person's leave and work-from-home requests, and
+        anything already waiting moves with it. Nobody can be set to report to themselves, or into a circle.\${
+        (() => { /* Somebody with no line above them and people below is the top of the
+                    tree and is meant to be blank; anybody else with a blank line has
+                    requests going nowhere. */
+          const none = list.filter(n => !mgrName(n) && reportsTo(n).length === 0);
+          return none.length ? \` <b style="color:var(--warn)">\${none.length} \${none.length === 1 ? 'person has' : 'people have'} nobody to send requests to</b> \\u2014 \${esc(none.map(n => NM(n)).join(', '))}.\` : ''; })()}</p>`,
+  'the shifts caption says the truth about saving');
+
+/* ============================================== the other leave balances ====
+ * #28 on Avin's sheet, and he sent the shape he wants: the staff down the
+ * side, every kind of leave across the top, the paid ones grouped apart from
+ * the unpaid ones, and in each cell what the person has left.
+ *
+ * Three of his answers are the whole design:
+ *
+ *   'Its #1' — the numbers are what is LEFT, not what has been taken.
+ *
+ *   'unpaid leave is not against entitlement, we cant keep a fixed number of
+ *   days - so its showing negative'. So unpaid leave has an entitlement of
+ *   nothing and its balance is the days taken, in red, below zero.
+ *
+ *   'Paternity is for male married employees and maternity for female married
+ *   employees only'. The portal already asks both on the profile and already
+ *   refuses the request; here the same rule draws a dash rather than a
+ *   number, because a zero would say the person has run out when in fact the
+ *   policy was never written for them.
+ *
+ * Where his old system and this one differ, this one shows the entitlement
+ * that is still available rather than nothing-until-granted: bereavement
+ * reads 5 and not 0, maternity 60 for a married woman and not 0, Hajj 30 for
+ * everybody who has not taken it rather than only for the one person it had
+ * been granted to. That is what 'what is left' means, and it is the number
+ * somebody approving a request needs.
+ */
+
+// what is left of every kind of leave that is not the annual pot
+app = swap(app,
+`const rType = id => REQTYPES.find(x=>x.id===id) || {id, label:id, pay:'full'};`,
+`const rType = id => REQTYPES.find(x=>x.id===id) || {id, label:id, pay:'full'};
+
+/* The other kinds of leave, as a balance.
+ *
+ * Annual leave has leaveBal, sick leave has sickBal and the birthday half-day
+ * has bdayBal, because each of those is a running account with its own rules.
+ * The rest are simply an entitlement less what has been taken, and what
+ * varies is who the entitlement is written for and what it is counted over —
+ * a leave year for most, the whole of somebody's service for Hajj.
+ *
+ * A dash is never the same as a zero. Zero means the person has used it all;
+ * a dash means the policy does not reach them, and the reason is on the
+ * hover so that nobody has to guess which.
+ */
+const PERSERVICE = ['Hajj'];
+function otherBal(u, id){
+  const t = rType(id);
+  const dash = why => ({txt:'\\u2014', n:null, off:true, why});
+  if(noLeave(u) || isPartner(u)) return dash('Not on the leave scheme');
+  if(t.pool) return dash('Comes off the annual leave balance, so it has no separate one');
+
+  if(t.need){
+    const p = PROF(u) || {};
+    if(!p.gender || !p.marital)
+      return dash('Gender and marital status are not on this profile yet, so the portal cannot tell whether this applies');
+    if((t.need.gender && p.gender !== t.need.gender) || (t.need.marital && p.marital !== t.need.marital))
+      return dash('For ' + (t.need.gender === 'Female' ? 'married female' : 'married male') + ' employees only');
+  }
+  if(t.minYears){
+    const y = yearsWith(u);
+    if(!y) return dash('Joining date not on file, so service cannot be counted');
+    if(y.years < t.minYears) return dash('After ' + t.minYears + ' years of service \\u2014 ' + NM(u) + ' has ' + y.years);
+  }
+
+  if(id === 'Sick'){
+    const S = sickBal(u);
+    if(!S.has) return dash('Not on the leave scheme');
+    if(S.probation) return {txt:'0', n:0, probation:true,
+      why:'Still inside probation, and nothing is paid until it is served. ' + S.FULL
+        + ' full-pay days open up after ' + ((HR().leavePolicy||{}).probationMonths || 6) + ' months.'};
+    return {txt:String(S.full), n:S.full,
+      why:S.full + ' of ' + S.FULL + ' full-pay days left this leave year' + (S.taken ? ' \\u2014 ' + S.taken + ' taken' : '')
+        + '. After those, ' + S.HALF + ' days at half pay and ' + S.UNPAID + ' unpaid.'};
+  }
+
+  const B = leaveBal(u);
+  const perService = PERSERVICE.includes(id);
+  const since = perService ? '' : (B.yearStart || '');
+  const taken = HR().requests.filter(r => r.who === u && r.status === 'Approved'
+      && r.type === id && (!since || r.to >= since)).reduce((a, r) => a + r.days, 0);
+  const cap = id === 'Birthday' ? ((HR().leavePolicy||{}).birthdayDays || 0.5) : (t.max || 0);
+  const left = Math.round((cap - taken) * 100) / 100;
+  const over = cap === 0;
+  return {txt:String(left), n:left, taken, cap, over,
+    why: over
+      ? (taken ? taken + ' unpaid day' + (taken===1?'':'s') + ' taken. There is no entitlement to draw on, so it shows below zero.'
+               : 'No entitlement \\u2014 unpaid leave is agreed case by case and counted after the fact.')
+      : cap + ' day' + (cap===1?'':'s') + (perService ? ' once during service' : ' a leave year')
+        + (taken ? ', ' + taken + ' taken' : ', none taken')
+        + (perService || !B.yearEnd ? '' : '. Resets ' + dayLabel(B.yearEnd) + ' ' + B.yearEnd.slice(0,4) + '.')};
+}
+/* The columns. Work from home is not leave; annual leave has its own table
+ * above; and anything else that spends the annual balance — Umrah — has no
+ * balance of its own, so a column for it could only ever hold a dash. A
+ * column that can never carry a number is not information, so it is said in
+ * the caption instead of drawn twenty-five times. */
+const OTHERKINDS = () => REQTYPES.filter(t => !t.wfh && !t.pool);`,
+  'what is left of every other kind of leave');
+
+// the table itself, beneath the annual one and split the same way
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Public holidays \${String(HDATE()).slice(0,4)}</h3>
+      <span class="pill mute">\${(HR().holidays||[]).length} days</span>`,
+`  <section class="panel">
+    <header><h3>Other leave balances</h3>
+      <span class="pill mute">\${OTHERKINDS().length} kinds</span>
+      <span class="hint">what each person has left, not what they have taken</span></header>
+    \${(() => {
+      /* The columns are ordered by the group they sit under, not by the order
+         the kinds happen to be declared in — otherwise the two heading rows
+         disagree and unpaid leave ends up printed under "Paid". */
+      const ALL = OTHERKINDS();
+      const paid = ALL.filter(t => t.pay !== 'none');
+      const free = ALL.filter(t => t.pay === 'none');
+      const KINDS = paid.concat(free);
+      /* The name needs about a fifth; the rest is shared out between the
+         figures so that no column is wider than the number it holds. */
+      const each = KINDS.length ? Math.min(12, (100 - 22) / KINDS.length) : 0;
+      const cols = [100 - each * KINDS.length].concat(KINDS.map(() => each));
+      const roll = list.filter(n => !isPartner(n));
+      const short = roll.filter(n => { const p = PROF(n) || {}; return !p.gender || !p.marital; });
+      const cell = (n, t) => { const b = otherBal(n, t.id);
+        return \`<td class="n r\${b.off ? ' obdash' : ''}"\${full(b.why)}\${
+          b.n !== null && b.n < 0 ? ' style="color:var(--bad)"' : ''} data-always="1">\${esc(b.txt)}</td>\`; };
+      return byCompany(roll, {
+        who: n => n,
+        cols: colsOf(cols),
+        cls: 'obtab',
+        note: rs => \`\${rs.length} \${rs.length === 1 ? 'person' : 'people'}\`,
+        head: \`<thead>
+          <tr class="obgrp"><th></th>
+            <th class="r" colspan="\${paid.length}">Paid</th>
+            <th class="r" colspan="\${free.length}">Not paid</th></tr>
+          <tr><th>Employee</th>\${KINDS.map(t =>
+            \`<th class="r"\${full(t.note || '')}>\${esc(t.label.replace(/ leave$/i, ''))}</th>\`).join('')}</tr>
+        </thead>\`,
+        row: n => \`<tr><td\${full(NM(n) === n ? '' : n)}>\${nm(n)}</td>\${KINDS.map(t => cell(n, t)).join('')}</tr>\`,
+        empty: 'Nobody is on the leave scheme yet.'
+      }) + \`<p class="cap">Every figure is what is <b>still available</b>, so a zero means it has been used up.
+        Unpaid leave has no entitlement to draw on \\u2014 Avin: <i>we cant keep a fixed number of days</i> \\u2014 so
+        its balance is the days already taken, shown <b style="color:var(--bad)">below zero</b>.
+        A <b>dash is not a zero</b>: it means the policy was never written for that person, and the reason is on the
+        hover \\u2014 maternity is for married female employees, paternity for married male employees, and study
+        leave needs two years of service. <b>Umrah has no column</b> because it comes off the annual balance above
+        rather than having one of its own.\${
+        short.length ? \` <b>\${short.length} \${short.length === 1 ? 'profile has' : 'profiles have'} no gender or marital status on file</b>
+          \\u2014 \${esc(short.map(n => NM(n)).join(', '))} \\u2014 so the portal cannot yet say whether maternity or paternity
+          leave applies to \${short.length === 1 ? 'them' : 'any of them'}.\` : ''} Sick leave follows the law:
+        the full-pay days are counted here, and the half-pay and unpaid days that follow them are on the hover.</p>\`;
+    })()}
+  </section>
+
+  <section class="panel">
+    <header><h3>Public holidays \${String(HDATE()).slice(0,4)}</h3>
+      <span class="pill mute">\${(HR().holidays||[]).length} days</span>`,
+  'the other leave balances, a company at a time');
+
+/* And it gets a page of its own rather than being appended to a long one.
+ *
+ * It was put under the annual table first, and Avin could not find it: the
+ * annual table is three company blocks and twenty-seven rows, so the new one
+ * began below the fold of the fold. He reported the build as broken, which is
+ * the correct thing to conclude when a thing you were told about is not where
+ * you are looking.
+ *
+ * The console already cuts long screens into pages for exactly this reason.
+ * This is one more leaf, named in the bar, and neither table is now buried
+ * under the other. */
+app = swap(app,
+  `  leavebal:   ['hradmin', ['Annual leave balances'], true],`,
+  `  leavebal:   ['hradmin', ['Annual leave balances'], true],
+  leaveother: ['hradmin', ['Other leave balances'], true],`,
+  'the other balances get a page of their own');
+
+app = swap(app,
+  `  {id:'leavebal',   group:'con', sec:'people', label:'Leave balances', title:'Annual leave balances', gate:canAdmin, con:true},`,
+  `  {id:'leavebal',   group:'con', sec:'people', label:'Annual leave',   title:'Annual leave balances', gate:canAdmin, con:true},
+  {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},`,
+  'and a tab that names them');
+
+// the narrow numeric columns want their own weight
+shell = swap(shell,
+`.slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}`,
+`.slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}
+/* the leave matrix: eleven columns, so the headings turn and the dashes recede */
+.obtab thead .obgrp th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);
+  text-align:center;padding-bottom:4px;border-bottom:1px solid var(--line)}
+.obtab thead .obgrp th:nth-child(2){border-right:1px solid var(--line)}
+.obtab th.r,.obtab td.r{text-align:right}
+.obtab td.obdash{color:var(--ink3)}
+.obtab tbody td{font-variant-numeric:tabular-nums}`,
+  'the leave matrix stylesheet');
+
+/* ================================================= the final settlement ====
+ * #22 on Avin's sheet: 'Final settlement should be printed like a payslip.'
+ * He then sent the document he means — the one Julia was given: the entity's
+ * letterhead, a title bar, a pay summary, earnings and deductions side by
+ * side, the amount in words, three signatories, and a declaration the person
+ * signs on the way out.
+ *
+ * It is a payslip in shape and not one in substance, so it carries what a
+ * payslip has no reason to: the last working day, the settlement date, the
+ * service the gratuity was worked out over, and a receipt.
+ *
+ * Two things he decided rather than I did:
+ *
+ *   The last month's pay is always in it. 'Always include it' — the
+ *   settlement is the whole of what somebody is owed, and the leaver comes
+ *   off the monthly run rather than being paid twice.
+ *
+ *   The gratuity is the portal's rule and NOT the figure on the document he
+ *   sent. That one was settled on the basic written in an old contract
+ *   rather than the basic actually being paid, after an argument about a pay
+ *   cut, and he does not want it repeated. So the number here is 21 days of
+ *   the current basic for each of the first five years and 30 days a year
+ *   after that, which is what the law says and what the rest of the portal
+ *   already uses for the gratuity provision.
+ */
+
+/* Every short date in the portal, and September.
+ *
+ * dayLabel asked the browser for a short month name and got "Sept" back —
+ * four letters where every other month gives three, and where the portal's
+ * own run labels say "Sep 2026". On the settlement it read "15 Sept 2026"
+ * beside "September 2026", which is two spellings of one month on one sheet.
+ * The month names are ours, so they are written down rather than asked for. */
+app = swap(app,
+`const dayLabel = ds => { const d=new Date(ds+'T00:00:00');
+  return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'}); };`,
+`const dayLabel = ds => { const d=new Date(ds+'T00:00:00');
+  return String(d.getDate()).padStart(2,'0') + ' ' + MONTHNAME[d.getMonth()]; };`,
+  'short dates spell every month with three letters');
+
+// the month the person leaves in, and what it pays
+app = swap(app,
+`  const r2 = v => Math.round(v*100)/100;
+  return {row:r, doj:r.doj, start, lwd, days, years, salary, basic, dayBasic:r2(dayBasic),
+    grat:r2(grat), leaveDays, leaveCash:r2(leaveCash), ticket:r2(ticket), adv:r2(adv),
+    net: r2(grat + leaveCash + ticket - adv), capped: years>=1 && (grat >= salary*24 - 0.5)};`,
+`  const r2 = v => Math.round(v*100)/100;
+  /* Payroll runs on a thirty-day month, so somebody who leaves on the 31st
+     has worked a whole month and never thirty-one thirtieths of one. */
+  const period = MONFULL[+lwd.slice(5,7)-1] + ' ' + lwd.slice(0,4);
+  const worked = Math.min(30, +lwd.slice(8,10));
+  /* LOP is loss of pay — unpaid leave — and not the part of the month that
+     comes after somebody has left. The run's day count is thirty less any
+     unpaid leave, so what it falls short by is the unpaid leave; the days
+     after the last working day are simply not employment, and calling them
+     lost pay would say on a signed document that the person was docked. */
+  const runDays = (r.days === undefined || r.days === null) ? 30 : r.days;
+  const lop = period === DATA.payroll.month ? Math.max(0, Math.min(worked, 30 - runDays)) : 0;
+  const paidDays = Math.max(0, worked - lop);
+  const mBasic = r2(basic * paidDays / 30);
+  const mAllow = r2((salary - basic) * paidDays / 30);
+  const monthPay = r2(mBasic + mAllow);
+  return {row:r, doj:r.doj, start, lwd, days, years, salary, basic, dayBasic:r2(dayBasic),
+    grat:r2(grat), leaveDays, leaveCash:r2(leaveCash), ticket:r2(ticket), adv:r2(adv),
+    period,
+    paidDays, lop, mBasic, mAllow, monthPay,
+    settleDate: state.exitSettle || lwd,
+    net: r2(monthPay + grat + leaveCash + ticket - adv),
+    capped: years>=1 && (grat >= salary*24 - 0.5)};`,
+  'the settlement carries the last month');
+
+app = swap(app,
+  `  lnForm: null, lnSent: false, exitWho: '', exitLwd: '',`,
+  `  lnForm: null, lnSent: false, exitWho: '', exitLwd: '', exitSettle: '',`,
+  'a settlement date to remember');
+
+// the document itself, built beside the payslip it is modelled on
+app = swap(app,
+`      <p class="slwords"><span>Amount In Words :</span> UAE Dirham \${esc(inWords(s.net))}</p>
+      <p class="slfoot">-- This is a system-generated document. --</p>
+    </div>
+  </article>\`;
+}`,
+`      <p class="slwords"><span>Amount In Words :</span> UAE Dirham \${esc(inWords(s.net))}</p>
+      <p class="slfoot">-- This is a system-generated document. --</p>
+    </div>
+  </article>\`;
+}
+
+/* The final settlement. Same paper, same letterhead, a different document. */
+function settleOf(c){
+  const r = c.row;
+  const vco = visaCoOf(r.name);
+  const ent = (DATA.entities||{})[vco.code] || {legal:vco.name, addr:[], ready:false};
+  const mp = (DATA.master.people||{})[r.id] || {};
+  const earn = [['Basic', c.mBasic], ['Other Allowance', c.mAllow]];
+  if(c.leaveCash) earn.push(['Leave Encashment', c.leaveCash,
+    c.leaveDays + (c.leaveDays === 1 ? ' day' : ' days') + ' of annual leave at daily basic']);
+  if(c.grat) earn.push(['Gratuity', c.grat, 'Days of service: ' + c.days]);
+  if(c.ticket) earn.push(['Air Ticket', c.ticket, 'unclaimed entitlement']);
+  const ded = [];
+  if(c.adv) ded.push(['Advance', c.adv, 'still outstanding on the last working day']);
+  const r2 = v => Math.round(v*100)/100;
+  const gross = r2(earn.reduce((s,x)=>s+x[1],0));
+  const dedT  = r2(ded.reduce((s,x)=>s+x[1],0));
+  return {c, r, ent, earn, ded, gross, dedT, net: r2(gross - dedT),
+    mol: mp.mol||'', acct4: mp.acct4||'',
+    logo: (LOGOS[vco.key] || LOGOS.corplex).slip};
+}
+function settleHTML(s){
+  const c = s.c, r = s.r;
+  const kv = (k, v) => \`<div class="sk">\${esc(k)}</div><div class="sc">:</div><div class="sv">\${v}</div>\`;
+  const dd = iso => iso ? dayLabel(iso) + ' ' + iso.slice(0,4) : '\\u2014';
+  const side = (title, lines, totLabel, totVal, empty) => \`<div class="slside">
+      <div class="slsh"><span>\${esc(title)}</span><span class="r">Amount</span></div>
+      <div class="slrows">\${lines.length
+        ? lines.map(([l,v,sub])=>\`<div class="slrow"><span>\${esc(l)}\${sub?\`<i>\${esc(sub)}</i>\`:''}</span><b>\${money(v,2)}</b></div>\`).join('')
+        : \`<div class="slrow none"><span>\${esc(empty)}</span><b></b></div>\`}</div>
+      <div class="slst"><span>\${esc(totLabel)}</span><b>AED \${money(totVal,2)}</b></div>
+    </div>\`;
+  return \`<article class="slip settle">
+    <header class="slhead">
+      <img src="\${s.logo}" alt="\${esc(s.ent.legal)}">
+      <div class="slco"><h4>\${esc(s.ent.legal)}</h4>\${s.ent.addr.map(l=>\`<span>\${esc(l)}</span>\`).join('')}
+        \${s.ent.ready?'':'<span class="slwarn">Letterhead details still to be confirmed</span>'}</div>
+    </header>
+    <div class="stbar">Full and final settlement</div>
+    <div class="slbody">
+      <div class="sttitle">Pay summary</div>
+      <div class="stkv">
+        \${kv('Employee Name', esc(legalOf(r.name)))}
+        \${kv('Employee ID', esc(r.id))}
+        \${kv('Designation', esc(r.title||'\\u2014'))}
+        \${kv('MOL ID', s.mol?esc(s.mol):'<i class="slmiss">from employee master</i>')}
+        \${kv('Date of Joining', esc(r.doj)||'\\u2014')}
+        \${kv('Account No', s.acct4?('&bull;&bull;&bull;&bull;&nbsp;&bull;&bull;&bull;&bull;&nbsp;'+esc(s.acct4)):'<i class="slmiss">from employee master</i>')}
+        \${kv('Pay Period', esc(c.period))}
+        \${kv('Paid Days', String(c.paidDays))}
+        \${kv('Last Working Date', esc(dd(c.lwd)))}
+        \${kv('LOP Days', String(c.lop))}
+        \${kv('Final Settlement Date', esc(dd(c.settleDate)))}
+        <div class="sk"></div><div class="sc"></div><div class="sv"></div>
+      </div>
+      <div class="sltables">
+        \${side('Earnings', s.earn, 'Gross Earnings', s.gross, '')}
+        \${side('Deductions', s.ded, 'Total Deductions', s.dedT, 'None')}
+      </div>
+      <div class="stnet">
+        <div class="stnh"><span>Net pay</span><b>Amount</b></div>
+        <div class="stnr"><span>Gross Earnings</span><b>AED \${money(s.gross,2)}</b></div>
+        <div class="stnr"><span>Total Deductions</span><b>(-) AED \${money(s.dedT,2)}</b></div>
+        <div class="stnt"><span>Total Net Payable</span><b>AED \${money(s.net,2)}</b></div>
+      </div>
+      <div class="stwords">
+        <p>Total Net Payable <b>AED \${money(s.net,2)}</b>
+          <span>(UAE Dirham \${esc(inWords(s.net))})</span></p>
+        <i>**Total Net Payable = (Gross Earnings &minus; Total Deductions)</i>
+      </div>
+      <div class="stnote"><span>Note:</span><i></i></div>
+      <div class="stsign"><span>Prepared By:</span><span>Checked By:</span><span>Authorised By:</span></div>
+      <div class="stdecl">
+        <h5>Declaration by the receiver</h5>
+        <p>I, the undersigned, hereby state that I have received the above-mentioned amount as my
+          full and final settlement following the end of my employment with the Company. I confirm
+          that I have accepted this settlement of my own free will and choice and that I have no
+          grievances, disputes, demands, or claims against the Company in respect of my legal dues,
+          back wages, reinstatement, re-employment, or any other employment-related matter.</p>
+        <div class="stemp"><span>Employee&rsquo;s Signature:</span><i></i></div>
+      </div>
+      <p class="slfoot">-- This is a system-generated document. --</p>
+    </div>
+  </article>\`;
+}`,
+  'the settlement document');
+
+/* The screen has to agree with the paper, so the last month is on it too, and
+ * the settlement date is asked for rather than assumed. */
+// and the button that opens it
+app = swap(app,
+`  const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; render(); };`,
+`  const exl=document.getElementById('exLwd'); if(exl) exl.onchange=()=>{ state.exitLwd=exl.value; state.exitSettle=''; render(); };
+  const exs=document.getElementById('exSettle'); if(exs) exs.onchange=()=>{ state.exitSettle=exs.value; render(); };
+  /* The free lines. Typing does not redraw — that would take the cursor with
+     it on every keystroke — so the draft is updated in place and the totals
+     catch up when the field is left. */
+  const exAdd=document.getElementById('exAdd'); if(exAdd) exAdd.onclick=()=>{
+    state.exitLines = (state.exitLines||[]).concat([{label:'', amount:'', deduct:false}]); render(); };
+  document.querySelectorAll('[data-exlbl]').forEach(el=>{
+    el.oninput = ()=>{ state.exitLines[+el.dataset.exlbl].label = el.value; };
+    el.onchange = ()=>{ state.exitLines[+el.dataset.exlbl].label = el.value; render(); }; });
+  document.querySelectorAll('[data-examt]').forEach(el=>{
+    el.oninput = ()=>{ state.exitLines[+el.dataset.examt].amount = el.value; };
+    el.onchange = ()=>{ state.exitLines[+el.dataset.examt].amount = el.value; render(); }; });
+  document.querySelectorAll('[data-exsign]').forEach(b=>b.onclick=()=>{
+    state.exitLines[+b.dataset.exsign].deduct = b.dataset.v === 'less'; render(); });
+  document.querySelectorAll('[data-exdrop]').forEach(b=>b.onclick=()=>{
+    state.exitLines.splice(+b.dataset.exdrop, 1); render(); });
+
+  const exSave=document.getElementById('exSave'); if(exSave) exSave.onclick=async ()=>{
+    const who = state.exitWho, lwd = state.exitLwd;
+    if(!who || !lwd) return;
+    state.exBusy = true; render();
+    const id = await window.__db.saveExit({
+      id: state.exitId, who, lastDay: lwd, settled: state.exitSettle || lwd,
+      lines: (state.exitLines||[]).filter(x => String(x.label).trim() || +x.amount)
+              .map(x => ({label: String(x.label).trim(), amount: +x.amount || 0, deduct: !!x.deduct}))});
+    state.exBusy = false;
+    if(id){ state.exitId = null; state.exitLines = []; state.exitWho = ''; state.exitLwd = ''; state.exitSettle = ''; }
+    render(); };
+  const exCancel=document.getElementById('exCancel'); if(exCancel) exCancel.onclick=()=>{
+    state.exitId=null; state.exitLines=[]; state.exitWho=''; state.exitLwd=''; state.exitSettle=''; render(); };
+
+  document.querySelectorAll('[data-exedit]').forEach(b=>b.onclick=()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exedit); if(!x) return;
+    state.exitId = x.id; state.exitWho = x.who; state.exitLwd = x.lastDay;
+    state.exitSettle = x.settled || x.lastDay;
+    state.exitLines = (x.lines||[]).map(l=>({label:l.label, amount:l.amount, deduct:l.deduct}));
+    state.exitOpen = null; render(); });
+  document.querySelectorAll('[data-exopen]').forEach(b=>b.onclick=()=>{
+    state.exitOpen = b.dataset.exopen; state.exAsk = null; state.exWhy = ''; render(); });
+  document.querySelectorAll('[data-exgoto]').forEach(b=>b.onclick=()=>{
+    state.mode='console'; state.tab='exits';
+    state.exitOpen = b.dataset.exgoto; state.exAsk = null; state.exWhy = ''; render(); });
+  const exBack=document.getElementById('exBack'); if(exBack) exBack.onclick=()=>{
+    state.exitOpen = null; render(); };
+
+  /* Initiating is the one button on this screen that changes somebody's
+     employment, so it says what it is about to do before it does it. */
+  document.querySelectorAll('[data-exgo]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exgo); if(!x) return;
+    const c = exitOf(x).c;
+    const mon = MONTHNAME[+x.lastDay.slice(5,7)-1] + ' ' + x.lastDay.slice(0,4);
+    if(!confirm('Initiate ' + NM(x.who) + "'s exit?\\n\\n"
+      + 'AED ' + money(c.net,2) + ' is written down and cannot be changed after this.\\n'
+      + NM(x.who) + ' comes off the ' + mon + ' payroll and off the staff list.\\n'
+      + 'It then goes to ' + NM(x.mgr || 'their manager') + ' to approve.\\n\\n'
+      + 'Undo puts all of it back.')) return;
+    b.disabled = true;
+    await window.__db.initiateExit(x.id, c);
+    render(); });
+
+  document.querySelectorAll('[data-exok]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; await window.__db.approveExit(b.dataset.exok); render(); });
+  document.querySelectorAll('[data-exno]').forEach(b=>b.onclick=()=>{
+    state.exAsk = b.dataset.exno; state.exWhy = ''; render(); });
+  { const w = document.getElementById('exWhy');
+    if(w){ w.oninput = ()=>{ state.exWhy = w.value;
+      const g = document.getElementById('exWhyGo'); if(g) g.disabled = !w.value.trim(); }; } }
+  const exWhyNo=document.getElementById('exWhyNo'); if(exWhyNo) exWhyNo.onclick=()=>{
+    state.exAsk=null; state.exWhy=''; render(); };
+  const exWhyGo=document.getElementById('exWhyGo'); if(exWhyGo) exWhyGo.onclick=async ()=>{
+    exWhyGo.disabled = true;
+    const ok = await window.__db.sendExitBack(state.exAsk, state.exWhy.trim());
+    if(ok){ state.exAsk=null; state.exWhy=''; state.exitOpen=null; }
+    render(); };
+  /* Discarding a draft, or withdrawing a settlement because the person is
+     staying after all. Both are the same call: the row goes to 'withdrawn',
+     which takes it off the Exits list, puts the person back on the staff list
+     and back on the month's payroll, and leaves them free to have a new
+     settlement drafted later. Nothing is deleted \\u2014 a withdrawn settlement
+     is still in the table if anybody ever asks what happened. */
+  document.querySelectorAll('[data-exkill]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exkill); if(!x) return;
+    const draft = x.status === 'draft';
+    if(!confirm(draft
+      ? 'Discard the draft settlement for ' + NM(x.who) + '?\\n\\n'
+        + 'Nothing was sent to anybody, so nothing is undone. The draft is cleared\\n'
+        + 'and you can work another one out any time.'
+      : 'Withdraw ' + NM(x.who) + "'s final settlement?\\n\\n"
+        + 'Use this when they are staying after all. ' + NM(x.who) + ' goes back on the\\n'
+        + 'staff list and back on the payroll, the approvals are cancelled, and the\\n'
+        + 'settlement comes off the list. It is not the way to correct one \\u2014 for that\\n'
+        + 'use Undo, which puts it back to a draft you can change.')) return;
+    b.disabled = true;
+    const ok = await window.__db.withdrawExit(x.id);
+    if(ok) state.exitOpen = null;
+    render(); });
+  document.querySelectorAll('[data-exundo]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exundo); if(!x) return;
+    if(!confirm('Undo ' + NM(x.who) + "'s exit?\\n\\n"
+      + 'The figures are unfrozen, ' + NM(x.who) + ' goes back on the payroll and back on the\\n'
+      + 'staff list, and the settlement returns to a draft you can change.')) return;
+    b.disabled = true;
+    const ok = await window.__db.sendExitBack(x.id, 'undone by accounts');
+    if(ok) state.exitOpen = null;
+    render(); });
+  document.querySelectorAll('[data-expay]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; await window.__db.decideExit(b.dataset.expay, b.dataset.mode); render(); });
+  document.querySelectorAll('[data-exdone]').forEach(b=>b.onclick=async ()=>{
+    b.disabled = true; await window.__db.exitPaid(b.dataset.exdone); render(); });
+  document.querySelectorAll('[data-exsee]').forEach(b=>b.onclick=()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exsee); if(!x) return;
+    const c = exitOf(x).c, s = settleOf(c);
+    showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' · full and final settlement'); });
+  const exd=document.getElementById('exDoc'); if(exd) exd.onclick=()=>{
+    const c = exitCalc(state.exitWho, state.exitLwd, {lines: state.exitLines}); if(!c) return;
+    const s = settleOf(c);
+    showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' \\u00b7 full and final settlement');
+  };`,
+  'the settlement opens in the document window');
+
+// and the paper it is printed on
+shell = swap(shell,
+`.slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}`,
+`.slfoot{text-align:center;margin:26px 0 0;padding-top:16px;border-top:1px solid #e8e8e8;font-size:11.5px;color:#8a8a8a}
+/* the settlement box on a month: beside the run, never inside it */
+.exbox{margin:16px 18px 18px;border:1px solid var(--warn);border-radius:10px;overflow:hidden;background:var(--panel)}
+.exbox.done{border-color:var(--line)}
+.exboxh{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--warnBg);
+  font-size:13px;font-weight:700;color:var(--warn);flex-wrap:wrap}
+.exbox.done .exboxh{background:var(--goodBg);color:var(--good)}
+.exboxh span{margin-left:auto;font-weight:400;color:var(--ink2);font-size:12.5px}
+.exbox .cap{border-top:1px solid var(--line2)}
+/* the free lines on a settlement, and the small segmented add/deduct */
+.exline{display:grid;grid-template-columns:minmax(0,1fr) 130px auto;gap:9px;margin-bottom:9px;align-items:center}
+.exline .ff{width:100%}
+.exline .ff.n{text-align:right;font-variant-numeric:tabular-nums}
+.seg.sm button{padding:5px 11px;font-size:12px}
+.exdrop{border:0;background:none;color:var(--ink3);font-size:16px;line-height:1;padding:0 4px;margin-left:6px;
+  cursor:pointer;vertical-align:-1px}
+.exdrop:hover{color:var(--bad)}
+@media (max-width:700px){.exline{grid-template-columns:1fr;gap:7px}}
+/* the settlement: the payslip's paper, a leaver's document */
+.settle .slhead{border-bottom:0;padding-bottom:13px}
+.stbar{text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+  color:#1b1b1b;padding:10px 12px;border-top:1px solid #e3e3e3;border-bottom:1px solid #e3e3e3;background:#f7f7f7}
+.sttitle{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;color:#1b1b1b;margin:18px 0 12px}
+.stkv{display:grid;grid-template-columns:auto 12px minmax(0,1fr) auto 12px minmax(0,1fr);
+  row-gap:9px;column-gap:0;align-items:baseline;font-size:12.5px;padding-bottom:18px;border-bottom:1px dashed #cfcfcf}
+.stkv>.sk{color:#5a5a5a;padding-right:10px}
+.stkv>.sk:nth-child(6n+4){padding-left:34px}
+.stkv>.sc{color:#8a8a8a}
+.stkv>.sv{font-weight:600;color:#1b1b1b;font-variant-numeric:tabular-nums;padding-left:8px}
+.settle .sltables{margin-top:18px}
+.settle .slrow{align-items:flex-start}
+.settle .slrow i{display:block;font-style:normal;font-size:11px;color:#8a8a8a;margin-top:2px;line-height:1.35}
+.stnet{margin-top:16px;border:1px solid #e3e3e3;border-radius:5px;overflow:hidden}
+.stnh{display:flex;justify-content:space-between;gap:12px;padding:11px 16px;background:#f5f5f5;
+  font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;color:#1b1b1b}
+.stnr,.stnt{display:flex;justify-content:space-between;gap:12px;padding:10px 16px;font-size:12.5px;color:#1b1b1b}
+.stnr{border-top:1px solid #eee}
+.stnr b{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.stnt{border-top:1px solid #e3e3e3;background:#E9F6EE;font-weight:700}
+.stnt b{font-variant-numeric:tabular-nums;white-space:nowrap}
+.stwords{text-align:center;margin:16px 0 0;padding:13px 12px;border:1px solid #e3e3e3;border-radius:5px}
+.stwords p{margin:0;font-size:14.5px;color:#1b1b1b;text-wrap:balance}
+.stwords p b{font-weight:700;font-variant-numeric:tabular-nums}
+.stwords p span{color:#3d3d3d}
+.stwords i{display:block;font-style:normal;font-size:11px;color:#8a8a8a;margin-top:4px}
+.stnote{display:flex;gap:10px;align-items:baseline;margin-top:18px;font-size:12.5px;color:#1b1b1b}
+.stnote i{flex:1;border-bottom:1px dotted #c8c8c8;height:13px}
+.stsign{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:22px;
+  padding-top:14px;border-top:1px solid #e8e8e8;font-size:12.5px;color:#1b1b1b}
+.stdecl{margin-top:26px}
+.stdecl h5{margin:0 0 7px;font-size:13.5px;font-weight:700;color:#1b1b1b}
+.stdecl p{margin:0;font-size:12px;line-height:1.55;color:#3d3d3d}
+.stemp{display:flex;justify-content:flex-end;align-items:baseline;gap:10px;margin-top:30px;font-size:12.5px}
+.stemp i{width:180px;border-bottom:1px solid #b9b9b9;height:13px}
+@media screen and (max-width:900px){.stkv{grid-template-columns:auto 12px minmax(0,1fr)}
+  .stkv>.sk:nth-child(6n+4){padding-left:0}
+  .stsign{grid-template-columns:1fr;gap:14px}}`,
+  'the settlement stylesheet');
+
+/* ------------------ and now the five tables that were writing as you typed --
+ *
+ * Each one loses its live handler and gains the same three states: read,
+ * draft, confirm. They are done last, after the machinery above exists, so
+ * every anchor here is the markup as it stands at the end of the build rather
+ * than as it was written in the prototype.
+ */
+
+// ---- 1. carried-forward leave, the box Avin named
+app = swap(app,
+`    <header><h3>Annual leave balances</h3>
+      <span class="pill mute">\${HR().leavePolicy.annualDays} working days &middot; \${HR().leavePolicy.accrualPerMonth} a month</span>
+      <span class="hint">set what each person carried forward</span></header>`,
+`    <header><h3>Annual leave balances</h3>
+      <span class="pill mute">\${HR().leavePolicy.annualDays} working days &middot; \${HR().leavePolicy.accrualPerMonth} a month</span>
+      <span class="hint">\${EDITING('carry') ? 'change what each person carried forward' : 'what each person carried forward'}</span>
+      \${edBar('carry')}</header>
+    \${edSaved('carry')}\${edConfirm('carry')}`,
+  'the leave balances table is edited on purpose');
+
+app = swap(app,
+`        <td class="r"><input class="ff cfin" type="number" step="0.01"
+          data-carry="\${esc(n)}" value="\${B.carriedSet?B.carried:''}" placeholder="—"></td>`,
+`        <td class="n r">\${edCell('carry', n,
+          v => \`<input class="ff cfin" type="number" step="0.01"\${edAttr('carry', n)} value="\${esc(String(v))}" placeholder="\\u2014">\`,
+          v => String(v) === '' ? '<span class="edread none">\\u2014</span>' : '<span class="edread">' + money(+v, 2) + '</span>')}</td>`,
+  'and the carried-forward box is a figure until you say otherwise');
+
+// the old live handler goes: it never wrote to the database anyway
+app = swap(app,
+`  document.querySelectorAll('[data-carry]').forEach(el=>el.onchange=()=>{
+    const b = HR().balances[el.dataset.carry] || (HR().balances[el.dataset.carry]={carried:0,carriedSet:false,doj:''});
+    if(el.value===''){ b.carried=0; b.carriedSet=false; }
+    else { b.carried = Math.round((+el.value || 0) * 100) / 100; b.carriedSet = true; }
+    render(); });
+`,
+  '',
+  'the carried-forward box no longer edits a copy nobody saves');
+
+// ---- 2. the shift and the reporting line
+app = swap(app,
+  `      <header><h3>Shifts and reporting lines</h3><span class="hint" style="margin-left:auto">both columns save as you change them</span></header>`,
+  `      <header><h3>Shifts and reporting lines</h3>
+        <span class="hint">\${EDITING('shifts') ? 'change a shift or a reporting line' : 'who receives whose requests'}</span>
+        \${edBar('shifts')}</header>
+      \${edSaved('shifts')}\${edConfirm('shifts')}`,
+  'the shifts table is edited on purpose too');
+
+app = swap(app,
+`        row: n => \`<tr><td class="nw">\${esc(n)}</td>
+          <td><select class="ff" data-shift="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            \${SHIFTS().map(s=>\`<option value="\${esc(s.id)}"\${shiftOf(n).id===s.id?' selected':''}>\${esc(s.label)} &middot; \${esc(s.start)}&ndash;\${esc(s.end)}</option>\`).join('')}
+          </select></td>
+          <td>\${mgrName(n) ? '' : '<span class="pill warn" style="margin-right:6px"><span class="dt"></span>nobody yet</span>'}
+            <select class="ff" data-mgr="\${esc(n)}" style="padding:3px 8px;font-size:12.5px">
+            <option value="">Nobody &mdash; requests have nowhere to go</option>
+            \${USERS.map(x=>x.name).filter(m=>m!==n).map(m=>\`<option value="\${esc(m)}"\${mgrName(n)===m?' selected':''}>\${esc(m)}</option>\`).join('')}
+          </select></td></tr>\`,`,
+`        row: n => \`<tr><td class="nw">\${nm(n)}</td>
+          <td>\${edCell('shifts', 's|' + n,
+            v => \`<select class="ff"\${edAttr('shifts', 's|' + n)} style="padding:3px 8px;font-size:12.5px">
+              \${SHIFTS().map(s=>\`<option value="\${esc(s.id)}"\${v===s.id?' selected':''}>\${esc(s.label)} &middot; \${esc(s.start)}&ndash;\${esc(s.end)}</option>\`).join('')}
+            </select>\`,
+            v => { const s = SHIFTS().find(x=>x.id===v);
+                   return s ? \`<span class="edread">\${esc(s.label)} &middot; \${esc(s.start)}&ndash;\${esc(s.end)}</span>\`
+                            : '<span class="edread none">none set</span>'; })}</td>
+          <td>\${edCell('shifts', 'm|' + n,
+            v => \`<select class="ff"\${edAttr('shifts', 'm|' + n)} style="padding:3px 8px;font-size:12.5px">
+              <option value="">Nobody &mdash; requests have nowhere to go</option>
+              \${USERS.map(x=>x.name).filter(m=>m!==n).map(m=>\`<option value="\${esc(m)}"\${v===m?' selected':''}>\${esc(NM(m))}</option>\`).join('')}
+            </select>\`,
+            v => v ? \`<span class="edread">\${nm(v)}</span>\`
+                   : '<span class="pill warn"><span class="dt"></span>nobody yet</span>')}</td></tr>\`,`,
+  'and both of its columns are read until you press Edit');
+
+app = swap(app,
+`  document.querySelectorAll('[data-shift]').forEach(s=>s.onchange=async ()=>{
+    const who = s.dataset.shift, was = HR().assign[who];
+    HR().assign[who] = s.value; render();
+    const ok = await window.__db.setShift(who, s.value);
+    if(!ok){ HR().assign[who] = was; render(); }
+  });
+  document.querySelectorAll('[data-mgr]').forEach(s=>s.onchange=async ()=>{
+    const who = s.dataset.mgr, was = HR().managers[who];
+    const wasReq = HR().requests.filter(r=>r.who===who && r.status==='Pending').map(r=>[r, r.mgr]);
+    HR().managers[who] = s.value;
+    // a request already waiting goes to whoever the line now points at
+    wasReq.forEach(([r]) => { r.mgr = s.value; });
+    render();
+    const ok = await window.__db.setManager(who, s.value);
+    if(!ok){ HR().managers[who] = was; wasReq.forEach(([r, m]) => { r.mgr = m; }); render(); }
+  });
+`,
+  '',
+  'and neither saves on the way past any more');
+
+// ---- 3. public holidays
+app = swap(app,
+`      <span class="hint" style="margin-left:auto">\${canUpload(state.user)
+        ? 'change a date and it saves' : 'accounts keeps these'}</span></header>`,
+`      <span class="hint">\${canUpload(state.user)
+        ? 'the dates that move need confirming each year' : 'accounts keeps these'}</span>
+      \${canUpload(state.user) ? edBar('hols') : ''}</header>
+    \${edSaved('hols')}\${edConfirm('hols')}`,
+  'the holidays table is edited on purpose');
+
+app = swap(app,
+`      <tbody>\${(HR().holidays||[]).map(h=>\`<tr\${h.d<HDATE()?' style="color:var(--ink3)"':''}>
+        <td>\${canUpload(state.user)
+          ? \`<input class="ff" type="date" data-holdate="\${esc(h.d)}" value="\${esc(h.d)}">\`
+          : esc(dayLabel(h.d)) + ' ' + h.d.slice(0,4)}</td>
+        <td class="nw">\${esc(dayName(h.d))}</td>
+        <td>\${canUpload(state.user)
+          ? \`<input class="ff" data-holname="\${esc(h.d)}" value="\${esc(h.n)}">\`
+          : esc(h.n)}</td>
+        <td>\${canUpload(state.user)
+          ? \`<select class="ff" data-holfixed="\${esc(h.d)}">
+              <option value="1"\${h.fixed?' selected':''}>Fixed date</option>
+              <option value="0"\${h.fixed?'':' selected'}>Moves with the moon</option>
+            </select>\`
+          : (h.fixed?'<span class="pill good"><span class="dt"></span>Fixed date</span>'
+                    :'<span class="pill warn"><span class="dt"></span>Moves with the moon</span>')}</td>
+        <td class="r">\${canUpload(state.user)
+          ? \`<button class="btn ghost sm" data-holdrop="\${esc(h.d)}" type="button">Remove</button>\` : ''}</td></tr>\`).join('')}`,
+`      <tbody>\${(HR().holidays||[]).map(h=>{
+        const gone = EDITING('hols') && state.edit.draft['x|' + h.d] === 'x';
+        return \`<tr\${gone ? ' class="edgone"' : (h.d<HDATE()?' style="color:var(--ink3)"':'')}>
+        <td>\${edCell('hols', 'd|' + h.d,
+          v => \`<input class="ff" type="date"\${edAttr('hols', 'd|' + h.d)} value="\${esc(v)}">\`,
+          v => '<span class="edread">' + esc(dayLabel(v || h.d)) + ' ' + String(v || h.d).slice(0,4) + '</span>')}</td>
+        <td class="nw">\${esc(dayName(h.d))}</td>
+        <td>\${edCell('hols', 'n|' + h.d,
+          v => \`<input class="ff"\${edAttr('hols', 'n|' + h.d)} value="\${esc(v)}">\`,
+          v => '<span class="edread">' + esc(v) + '</span>')}</td>
+        <td>\${edCell('hols', 'k|' + h.d,
+          v => \`<select class="ff"\${edAttr('hols', 'k|' + h.d)}>
+              <option value="1"\${v==='1'?' selected':''}>Fixed date</option>
+              <option value="0"\${v==='1'?'':' selected'}>Moves with the moon</option>
+            </select>\`,
+          v => v==='1' ? '<span class="pill good"><span class="dt"></span>Fixed date</span>'
+                       : '<span class="pill warn"><span class="dt"></span>Moves with the moon</span>')}</td>
+        <td class="r">\${EDITING('hols')
+          ? \`<button class="btn ghost sm" data-edt="hols" data-edrm="x|\${esc(h.d)}" type="button">\${
+              gone ? 'Keep it' : 'Remove'}</button>\`
+          : ''}</td></tr>\`;}).join('')}`,
+  'a holiday is changed or dropped in a draft, not on the spot');
+
+app = swap(app,
+`  document.querySelectorAll('[data-holdate]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holdate;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value) return;
+    await window.__db.editHoliday(was, {on_date: el.value, name: h.n, fixed: h.fixed});
+    render();
+  });
+  document.querySelectorAll('[data-holname]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holname;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h || !el.value.trim()) return;
+    await window.__db.editHoliday(was, {on_date: was, name: el.value.trim(), fixed: h.fixed});
+    render();
+  });
+  document.querySelectorAll('[data-holfixed]').forEach(el=>el.onchange=async()=>{
+    const was = el.dataset.holfixed;
+    const h = (HR().holidays||[]).find(x=>x.d===was); if(!h) return;
+    await window.__db.editHoliday(was, {on_date: was, name: h.n, fixed: el.value === '1'});
+    render();
+  });
+  document.querySelectorAll('[data-holdrop]').forEach(b=>b.onclick=async()=>{
+    b.disabled = true;
+    await window.__db.removeHoliday(b.dataset.holdrop);
+    render();
+  });
+`,
+  '',
+  'and the three live holiday handlers go');
+
+// ---- 4. document expiry dates
+app = swap(app,
+`    return \`<td class="r"><input class="ff dt" type="date" data-dexp="\${esc(n)}" data-k="\${esc(k)}" value="\${esc(v)}"\${col?\` style="border-color:\${col};color:\${col}"\`:''}></td>\`;`,
+`    return \`<td class="r">\${edCell('docdates', n + '|' + k,
+      x => \`<input class="ff dt" type="date"\${edAttr('docdates', n + '|' + k)} value="\${esc(x)}"\${col?\` style="border-color:\${col};color:\${col}"\`:''}>\`,
+      x => x ? \`<span class="edread"\${col?\` style="color:\${col}"\`:''}>\${esc(dayLabel(x))} \${esc(String(x).slice(0,4))}</span>\`
+             : '<span class="edread none">\\u2014</span>')}</td>\`;`,
+  'an expiry date is a draft until it is saved');
+
+app = swap(app,
+`    <header><h3>Fill in document dates</h3>
+      <span class="pill \${left?'warn':'good'}"><span class="dt"></span>\${left} still blank</span>
+      <input id="docQ" placeholder="Find a name" value="\${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+    </header>`,
+`    <header><h3>Fill in document dates</h3>
+      <span class="pill \${left?'warn':'good'}"><span class="dt"></span>\${left} still blank</span>
+      <input id="docQ" placeholder="Find a name" value="\${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+      \${edBar('docdates')}
+    </header>
+    \${edSaved('docdates')}\${edConfirm('docdates')}`,
+  'the document dates table is edited on purpose');
+
+app = swap(app,
+`  document.querySelectorAll('[data-dexp]').forEach(el=>el.onchange=()=>{`,
+`  document.querySelectorAll('[data-dexp-gone]').forEach(el=>el.onchange=()=>{`,
+  'and the live expiry handler is left with nothing to bind to');
+
+// ---- 5. the payroll figures, the table with the most money on it
+app = swap(app,
+`    return \`<td class="n r payc\${c.rule?' rule':''}"><input class="payin\${v?' has':''}" type="number" step="0.01" min="0"
+      value="\${v||''}" placeholder="\\u2014"
+      data-line="\${esc(r.lineId)}" data-field="\${c.f}" data-k="\${c.k}"
+      aria-label="\${esc(c.label)} for \${esc(r.portalName)}">\${`,
+`    return \`<td class="n r payc\${c.rule?' rule':''}">\${edCell('payline', r.lineId + '|' + c.f,
+      x => \`<input class="payin\${(+x)?' has':''}" type="number" step="0.01" min="0"
+        value="\${(+x)||''}" placeholder="\\u2014"\${edAttr('payline', r.lineId + '|' + c.f)}
+        aria-label="\${esc(c.label)} for \${esc(r.portalName)}">\`,
+      x => (+x) ? '<span class="edread">' + money(+x, 2) + '</span>' : '<span class="edread none">\\u2014</span>')}\${`,
+  'a payroll figure is a draft until it is saved');
+
+app = swap(app,
+`      el.onfocus = () => el.select();
+      el.onkeydown = ev => { if(ev.key === 'Enter') el.blur(); };
+      el.onchange = async () => {
+        const was = el.defaultValue;
+        el.disabled = true;
+        const said = await window.__db.setLine(el.dataset.line, el.dataset.field, el.value || 0);
+        el.disabled = false;
+        if(!said){ el.value = was; return; }
+        const run = (DATA.payroll.runs||[]).find(r=>r.rows.some(x=>x.lineId===el.dataset.line));
+        const row = run && run.rows.find(x=>x.lineId===el.dataset.line);
+        if(row){ row[el.dataset.k] = +el.value || 0;
+                 row.gross = +said.gross; row.ded = +said.deductions; row.net = +said.net; }
+        const y = window.scrollY; render(); window.scrollTo({top:y, behavior:'instant'});
+      };`,
+`      el.onfocus = () => el.select();
+      el.onkeydown = ev => { if(ev.key === 'Enter') el.blur(); };`,
+  'and no longer writes itself into the payroll as you tab past it');
+
+app = swap(app,
+`    <header><h3>\${esc(run.label)}</h3>
+      <span class="pill warn"><span class="dt"></span>Draft</span>
+      \${runSeg()}
+      \${prep?\`<button class="btn ghost" id="payGen" type="button" style="margin-left:auto;padding:5px 13px;font-size:12.5px">Refresh from the records</button>\`:''}
+    </header>`,
+`    <header><h3>\${esc(run.label)}</h3>
+      <span class="pill warn"><span class="dt"></span>Draft</span>
+      \${runSeg()}
+      \${prep?\`<button class="btn ghost" id="payGen" type="button" style="margin-left:auto;padding:5px 13px;font-size:12.5px"\${
+        EDANY()?' disabled':''}>Refresh from the records</button>\`:''}
+      \${prep ? edBar('payline') : ''}
+    </header>
+    \${edSaved('payline')}\${edConfirm('payline')}`,
+  'the payroll figures are edited on purpose');
+
+app = swap(app,
+`        Each figure saves as you leave the box.</p>`,
+`        \${EDITING('payline')
+          ? 'You are editing. Nothing you type here reaches the payroll until you press Save and agree to the list of changes.'
+          : 'Press <b>Edit</b> to change a figure. Nothing is written until you have seen the list of what will change and agreed to it.'}</p>`,
+  'and the page says so rather than promising the opposite');
+
+
+/* ============================== the exit, from a calculation to a payment ===
+ * Task 1. Avin's specification, in his order:
+ *
+ *   add the deductions and the additions the portal cannot know, and SAVE it
+ *   as a draft, on a table below, because things change before the day
+ *   two buttons on the draft: Edit, and Initiate exit process
+ *   Initiate finalises the amounts and moves it to the month of the last
+ *   working day, whether or not that month's payroll is open
+ *   it shows in a separate box on that month, not among the staff, so the
+ *   pending payment is impossible to miss
+ *   the reporting manager and Miraziz approve; then Avin decides whether it
+ *   goes with the salaries or on its own
+ *   it belongs to the month rather than to the payroll
+ *   the person goes inactive and off the payroll, and every record they have
+ *   is kept
+ *
+ * 0038_exit_settlement.sql holds the stages, the freeze and the road back, and
+ * refuses to let a month close while a settlement on it is unpaid. Everything
+ * here draws that and asks for it; none of it decides anything.
+ */
+
+// the free lines, and a settlement total that includes them
+app = swap(app,
+`  const r2 = v => Math.round(v*100)/100;
+  /* Payroll runs on a thirty-day month, so somebody who leaves on the 31st
+     has worked a whole month and never thirty-one thirtieths of one. */`,
+`  const r2 = v => Math.round(v*100)/100;
+  /* The things the portal cannot know: a bonus, a quarter's commission, a
+     laptop that did not come back. Free lines rather than a list I invent. */
+  const extra = (o && o.lines) || [];
+  const addOn = r2(extra.filter(x => !x.deduct).reduce((s, x) => s + (+x.amount || 0), 0));
+  const takeOff = r2(extra.filter(x => x.deduct).reduce((s, x) => s + (+x.amount || 0), 0));
+  /* Payroll runs on a thirty-day month, so somebody who leaves on the 31st
+     has worked a whole month and never thirty-one thirtieths of one. */`,
+  'the settlement carries what you add to it');
+
+app = swap(app,
+  `function exitCalc(name, lwd){`,
+  `function exitCalc(name, lwd, o){`,
+  'and exitCalc is told about them');
+
+app = swap(app,
+`    period,
+    paidDays, lop, mBasic, mAllow, monthPay,
+    settleDate: state.exitSettle || lwd,
+    net: r2(monthPay + grat + leaveCash + ticket - adv),`,
+`    period,
+    paidDays, lop, mBasic, mAllow, monthPay,
+    extra, addOn, takeOff,
+    settleDate: (o && o.settled) || state.exitSettle || lwd,
+    net: r2(monthPay + grat + leaveCash + ticket + addOn - takeOff - adv),`,
+  'and the total is the whole of what is owed');
+
+/* A frozen settlement is read from what was written down, not worked out
+   again. That is the entire point of freezing it: after Initiate a salary
+   revision or another month of accrual must not be able to move a figure
+   somebody has signed a declaration for. */
+app = swap(app,
+`function settleOf(c){
+  const r = c.row;`,
+`function exitOf(x){
+  /* One settlement, at whatever stage it has reached. A draft is worked out
+     live; anything past a draft is read back exactly as it was frozen. */
+  if(!x) return null;
+  const live = exitCalc(x.who, x.lastDay, {lines: x.lines, settled: x.settled});
+  return Object.assign({}, x, {c: x.frozen ? Object.assign({}, live, x.frozen) : live});
+}
+const EXITS = () => (HR().exits || []).filter(x => x.status !== 'withdrawn');
+const exitFor = who => EXITS().find(x => x.who === who && x.status !== 'paid') || null;
+const EXSTAGE = {draft:0, initiated:1, mgr_ok:2, owner_ok:3, decided:4, paid:5};
+const EXLABEL = {draft:'Draft', initiated:'With the manager', mgr_ok:'With Miraziz',
+                 owner_ok:'Waiting on you', decided:'To pay', paid:'Paid'};
+const exitPill = s => s === 'paid'
+  ? '<span class="pill good"><span class="dt"></span>Paid</span>'
+  : s === 'draft' ? '<span class="pill mute">Draft</span>'
+  : \`<span class="pill warn"><span class="dt"></span>\${esc(EXLABEL[s] || s)}</span>\`;
+
+function settleOf(c){
+  const r = c.row;`,
+  'a settlement is read frozen or worked out live');
+
+// the earnings and deductions on the document carry the lines too
+app = swap(app,
+`  if(c.ticket) earn.push(['Air Ticket', c.ticket, 'unclaimed entitlement']);
+  const ded = [];
+  if(c.adv) ded.push(['Advance', c.adv, 'still outstanding on the last working day']);`,
+`  if(c.ticket) earn.push(['Air Ticket', c.ticket, 'unclaimed entitlement']);
+  (c.extra || []).filter(x => !x.deduct && +x.amount)
+    .forEach(x => earn.push([x.label || 'Other addition', +x.amount]));
+  const ded = [];
+  if(c.adv) ded.push(['Advance', c.adv, 'still outstanding on the last working day']);
+  (c.extra || []).filter(x => x.deduct && +x.amount)
+    .forEach(x => ded.push([x.label || 'Other deduction', +x.amount]));`,
+  'and so does the settlement document');
+
+/* ------------------------------------------------------- the screen itself */
+app = cutout(app,
+`function vExits(){`,
+`/* ---------- employee profile ---------- */`,
+`function vExits(){
+  const open = state.exitOpen ? EXITS().find(x => x.id === state.exitOpen) : null;
+  if(open) return vExitOne(exitOf(open));
+
+  const sel = state.exitWho, lwd = state.exitLwd || '';
+  const staff = DATA.payroll.rows.filter(r=>!r.dummy).map(r=>r.name).sort();
+  const lines = state.exitLines || [];
+  const c = (sel && lwd) ? exitCalc(sel, lwd, {lines}) : null;
+  const list = EXITS().slice().sort((a,b)=>
+    (EXSTAGE[a.status]||0)-(EXSTAGE[b.status]||0) || a.lastDay.localeCompare(b.lastDay));
+  const line = (l,v,neg) => \`<tr><td>\${l}</td><td class="n r"\${neg?' style="color:var(--bad)"':''}>\${neg?'(':''}\${money(Math.abs(v),2)}\${neg?')':''}</td></tr>\`;
+  const already = sel ? exitFor(sel) : null;
+
+  return \`
+  <section class="panel">
+    <header><h3>\${state.exitId ? 'Change this settlement' : 'Work out a settlement'}</h3>
+      <span class="hint">nothing is written down until you save it</span></header>
+    <div class="pad">
+      <div class="grid g3" style="gap:14px">
+        <div class="field" style="margin:0"><label for="exWho">Employee</label>
+          <select id="exWho"\${state.exitId?' disabled':''}><option value="">Choose someone</option>
+            \${staff.map(n=>\`<option value="\${esc(n)}"\${sel===n?' selected':''}>\${esc(NM(n))}</option>\`).join('')}</select></div>
+        <div class="field" style="margin:0"><label for="exLwd">Last working day</label>
+          <input id="exLwd" type="date" value="\${esc(lwd)}"></div>
+        <div class="field" style="margin:0"><label for="exSettle">Settlement date</label>
+          <input id="exSettle" type="date" value="\${esc(state.exitSettle || lwd)}"\${lwd?'':' disabled'}>
+          <span class="pfhint">The day the money leaves. Defaults to the last working day.</span></div>
+      </div>
+      \${already && already.id !== state.exitId
+        ? \`<p class="note" style="margin-top:16px;border-left-color:var(--warn)"><b>\${nm(sel)} already has a settlement in progress</b>
+            &mdash; \${esc(EXLABEL[already.status] || already.status)}. <button class="btn ghost sm" data-exopen="\${esc(already.id)}" type="button">Open it</button></p>\`
+        : ''}
+      \${!c?\`<p class="note" style="margin-top:16px">Pick someone and a last working day. Everything else is worked out from what the portal already holds &mdash; joining date, salary, leave balance, unclaimed air tickets and any advance still running.</p>\`:''}
+    </div>
+  </section>
+
+  \${c?\`
+  <div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>\${nm(sel)}</h3><span class="pill mute">\${esc(c.row.id)}</span>
+        <span class="hint">\${esc(DATA.companies[coByCode(c.row.company).key].name)}</span></header>
+      <div class="pad"><dl class="kv">
+        <dt>Joined</dt><dd>\${esc(c.doj)||'—'}</dd>
+        <dt>Last working day</dt><dd>\${esc(dayLabel(c.lwd))} \${c.lwd.slice(0,4)}</dd>
+        <dt>Service</dt><dd>\${c.years.toFixed(2)} years</dd>
+        <div class="sep"></div>
+        <dt>Monthly salary</dt><dd>\${money(c.salary,2)}</dd>
+        <dt>Basic (\${Math.round(DATA.master.basicPct*100)}%)</dt><dd>\${money(c.basic,2)}</dd>
+        <dt>Daily basic</dt><dd>\${money(c.dayBasic,2)}</dd>
+        <dt>Leave days left</dt><dd>\${c.leaveDays}</dd>
+      </dl></div>
+    </section>
+
+    <section class="panel">
+      <header><h3>What is due</h3>
+        <button class="btn ghost" id="exDoc" type="button">Open the settlement</button></header>
+      <div class="tw"><table>
+        <tbody>
+          \${line('Salary for ' + c.period + ' \\u2014 ' + c.paidDays + ' paid day' + (c.paidDays===1?'':'s'), c.monthPay)}
+          \${line('End-of-service gratuity', c.grat)}
+          \${line('Leave encashment — '+c.leaveDays+' days at daily basic', c.leaveCash)}
+          \${c.ticket?line('Unclaimed air tickets', c.ticket):''}
+          \${lines.map((x,i)=>\`<tr><td>\${x.label?esc(x.label):'<i style="color:var(--ink3)">describe this line</i>'}
+            <button class="exdrop" data-exdrop="\${i}" type="button" title="Remove this line" aria-label="Remove this line">&times;</button></td>
+            <td class="n r"\${x.deduct?' style="color:var(--bad)"':''}>\${x.deduct?'(':''}\${money(Math.abs(+x.amount||0),2)}\${x.deduct?')':''}</td></tr>\`).join('')}
+          \${c.adv?line('Advance still outstanding', -c.adv, true):''}
+          <tr class="tot"><td><b>Final settlement</b></td><td class="n r netcol"><b>AED \${money(c.net,2)}</b></td></tr>
+        </tbody></table></div>
+      <div class="pad" style="padding-top:14px">
+        \${lines.map((x,i)=>\`<div class="exline">
+          <input class="ff" placeholder="What is it for" value="\${esc(x.label)}" data-exlbl="\${i}">
+          <input class="ff n" type="number" step="0.01" min="0" placeholder="0.00" value="\${x.amount===''?'':esc(String(x.amount))}" data-examt="\${i}">
+          <div class="seg sm"><button data-exsign="\${i}" data-v="add" aria-pressed="\${x.deduct?'false':'true'}" type="button">Add</button><button data-exsign="\${i}" data-v="less" aria-pressed="\${x.deduct?'true':'false'}" type="button">Deduct</button></div>
+        </div>\`).join('')}
+        <div class="btns" style="margin-top:\${lines.length?'12px':'0'}">
+          <button class="btn ghost" id="exAdd" type="button">Add a line</button>
+          <button class="btn" id="exSave" type="button"\${state.exBusy?' disabled':''}>\${
+            state.exBusy ? 'Saving\\u2026' : state.exitId ? 'Save the changes' : 'Save as draft'}</button>
+          \${state.exitId?'<button class="btn ghost" id="exCancel" type="button">Stop editing</button>':''}
+        </div>
+      </div>
+      <p class="cap">A line is a description and an amount &mdash; a bonus, a quarter's commission, a laptop that did
+        not come back. Gratuity on the standard rule &mdash; \${c.years<1?'under one year of service, so none is due':'21 days of basic pay for each of the first five years and 30 days a year after that'}\${c.capped?', capped at two years of total pay':''}.
+        Leave and gratuity are both worked out on <b>basic</b>, not total salary.</p>
+    </section>
+  </div>\`:''}
+
+  <section class="panel">
+    <header><h3>Settlements</h3>
+      <span class="hint">\${list.length ? list.filter(x=>x.status!=='paid').length + ' open' : 'none yet'}</span></header>
+    \${list.length ? \`<div class="tw"><table class="cotab">
+      \${colsOf([21, 13, 12, 15, 15, 24])}
+      <thead><tr><th>Employee</th><th>Last day</th><th>Month</th><th class="r">Settlement</th><th>Stage</th><th class="r"></th></tr></thead>
+      <tbody>\${list.map(x=>{
+        const cc = exitOf(x).c;
+        return \`<tr>
+        <td>\${nm(x.who)}</td>
+        <td class="n nw">\${esc(dayLabel(x.lastDay))} \${x.lastDay.slice(0,4)}</td>
+        <td class="nw" style="color:var(--ink2)">\${x.month ? esc(MONTHNAME[+x.month.slice(5)-1] + ' ' + x.month.slice(0,4)) : '\\u2014'}</td>
+        <td class="n r netcol">\${money(x.net === null ? cc.net : x.net, 2)}</td>
+        <td class="nw">\${exitPill(x.status)}</td>
+        <td class="r nw">\${x.status === 'draft'
+          ? \`<button class="btn ghost sm" data-exedit="\${esc(x.id)}" type="button">Edit</button>
+             <button class="btn sm" data-exgo="\${esc(x.id)}" type="button">Initiate exit process</button>\`
+          : \`<button class="btn ghost sm" data-exopen="\${esc(x.id)}" type="button">Open</button>\`}</td></tr>\`;}).join('')}
+      </tbody></table></div>\` : '<div class="pad"><p style="margin:0;color:var(--ink3)">Nothing saved yet. Work one out above and save it as a draft.</p></div>'}
+    <p class="cap">A draft is yours to change as often as you need to, right up to the day.
+      <b>Initiate</b> writes the figures down, posts the settlement to the month of the last working day, and takes
+      the person off that month's payroll and off the staff list &mdash; every record they have is kept. After that
+      it goes to their reporting manager and to \${nm((USERS.find(u=>u.role==='owner')||{}).name||'the owner')} to approve.</p>
+  </section>\`;
+}
+
+/* One settlement, opened: where it has got to, who it is with, and the only
+   buttons that belong to whoever is looking at it. */
+function vExitOne(x){
+  const c = x.c, me = state.user;
+  const owner = (USERS.find(u=>u.role==='owner')||{}).name || '';
+  const isOwner = roleOf(me) === 'owner';
+  const isMgr = x.mgr === me;
+  const isAcc = canUpload(me);
+  const one = x.mgr === owner;            // the manager IS the owner: one stage
+  const st = x.status, at = EXSTAGE[st] || 0;
+  /* The rail. It was six calls with their own hand-worked done/now flags, and
+     two of them said "here" at the same time — at 'initiated' both step 2 and
+     step 3 claimed to be where it was. It is a list now, each step carrying
+     the status it IS, so done and here are read off one number and cannot
+     disagree with each other:
+
+       done  the settlement has reached this step's own status
+       here  the first step it has not \\u2014 what is being waited on
+
+     'Miraziz approved' was also typed in rather than read off the owner, and
+     the whole thing had no stylesheet, which is why it came out as
+     '1 · doneDraftedby Avin Mascarenhas'. */
+  const OWN1 = (NM(owner) || 'The owner').split(' ')[0];
+  const STEPS = [
+    ['draft', 'Drafted', x.by ? 'by ' + NM(x.by) : 'not sent yet'],
+    ['initiated', 'Initiated', x.month
+        ? MONTHNAME[+x.month.slice(5)-1] + ' ' + x.month.slice(0,4) + ' payroll'
+        : 'waiting on accounts'],
+    ...(one ? [] : [['mgr_ok', 'Manager approved', x.mgrOkBy
+        ? NM(x.mgrOkBy) + ', ' + dayLabel(x.mgrOkAt)
+        : 'with ' + (NM(x.mgr) || NM(mgrName(x.who)) || 'the manager')]]),
+    ['owner_ok', one ? 'Approved' : OWN1 + ' approved', x.ownerOkBy
+        ? NM(x.ownerOkBy) + ', ' + dayLabel(x.ownerOkAt)
+        : 'with ' + (NM(owner) || 'the owner')],
+    ['decided', 'Payment decided', x.payMode
+        ? (x.payMode === 'with_salaries' ? 'with the salaries' : 'on its own')
+        : 'accounts chooses how'],
+    ['paid', 'Paid', x.paidOn ? dayLabel(x.paidOn) + ' ' + x.paidOn.slice(0,4) : 'not yet']
+  ];
+  /* A step is done when the settlement has reached the status that step ends
+     at; 'here' is the first one it has not. The last step has no status after
+     it, so it is done only when everything is paid. */
+  const reached = k => at >= EXSTAGE[k];
+  const hereAt = STEPS.findIndex(([k]) => !reached(k));
+  const step = ([k, label, sub], i) => \`<div class="step\${reached(k)?' done':''}\${
+      i === hereAt ? ' now' : ''}">
+    <i>\${i + 1}</i>
+    <span class="sw">\${reached(k) ? 'done' : i === hereAt ? 'here' : ''}</span>
+    <b>\${esc(label)}</b><em>\${esc(sub || '')}</em></div>\`;
+  return \`
+  <section class="panel">
+    <header><h3>\${nm(x.who)} &mdash; final settlement</h3>
+      \${exitPill(st)}
+      <span class="hint">last day \${esc(dayLabel(x.lastDay))} \${x.lastDay.slice(0,4)} &middot; AED \${money(x.net===null?c.net:x.net,2)}</span>
+      <button class="btn ghost" id="exBack" type="button" style="margin-left:12px">Back to settlements</button></header>
+    <div class="pad">
+      <div class="wfbar exrail">\${STEPS.map(step).join('')}</div>
+      \${x.backWhy?\`<div class="note" style="border-left-color:var(--bad);margin-bottom:16px"><b>Sent back\${x.backBy?' by '+NM(x.backBy):''}.</b> \${esc(x.backWhy)}</div>\`:''}
+      \${state.exAsk===x.id?\`<div class="ciwarn" style="border-left-color:var(--bad)">
+        <b>What is wrong with it?</b>
+        <div class="ciwrow"><input id="exWhy" placeholder="so accounts knows what to fix" value="\${esc(state.exWhy||'')}">
+          <button class="btn" id="exWhyGo" type="button"\${(state.exWhy||'').trim()?'':' disabled'}>Send it back</button>
+          <button class="btn ghost" id="exWhyNo" type="button">Cancel</button></div></div>\`:''}
+      <div class="btns" style="margin-top:16px">
+        \${(isMgr && st==='initiated') || (isOwner && ['initiated','mgr_ok'].includes(st))
+          ? \`<button class="btn" data-exok="\${esc(x.id)}" type="button">Approve it</button>
+             <button class="btn ghost" data-exno="\${esc(x.id)}" type="button">Send it back</button>
+             \${isOwner && !isMgr && st === 'initiated' && !one
+               ? \`<span style="font-size:13px;color:var(--ink2)">Still with \${NM(x.mgr) || NM(mgrName(x.who)) || 'the manager'}.
+                   Approving now counts as both.</span>\` : ''}\` : ''}
+        \${isAcc && st==='owner_ok' ? \`<span style="font-size:13px;color:var(--ink2)">Approved. How is it paid?</span>
+          <button class="btn" data-expay="\${esc(x.id)}" data-mode="with_salaries" type="button">With the salaries</button>
+          <button class="btn ghost" data-expay="\${esc(x.id)}" data-mode="separate" type="button">On its own</button>\` : ''}
+        \${isAcc && st==='decided' ? \`<button class="btn" data-exdone="\${esc(x.id)}" type="button">Mark it paid</button>
+          <span style="font-size:13px;color:var(--ink2)">\${x.payMode==='with_salaries'?'going out with the salaries':'going out on its own'}</span>\` : ''}
+        <button class="btn ghost" data-exsee="\${esc(x.id)}" type="button">Open the settlement document</button>
+        \${isAcc && !['paid','draft'].includes(st)
+          ? \`<button class="btn ghost" data-exundo="\${esc(x.id)}" type="button">Undo &mdash; back to draft</button>\` : ''}
+        \${isAcc && st !== 'paid'
+          ? \`<button class="btn ghost bad" data-exkill="\${esc(x.id)}" type="button">\${
+              st === 'draft' ? 'Discard this draft' : 'Withdraw &mdash; they are staying'}</button>\` : ''}
+      </div>
+      \${isAcc && st === 'draft' ? \`<p class="cap" style="padding:14px 0 0">Nothing has been sent to anybody yet
+        and \${nm(x.who)} is on the payroll as normal. <b>Discard this draft</b> clears it \\u2014 which is what to
+        press after working a settlement out for somebody who then stays, or for somebody who only wanted to
+        see the number.</p>\` : ''}
+      \${isAcc && st==='paid' ? '<p class="cap" style="padding:14px 0 0">Paid and closed. Nothing further to do.</p>' : ''}
+    </div>
+  </section>
+
+  <div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>What was owed</h3><span class="hint">\${x.frozen?'frozen when it was initiated':'still being worked out'}</span></header>
+      <div class="tw"><table><tbody>
+        <tr><td>Salary for \${esc(c.period)} &mdash; \${c.paidDays} paid day\${c.paidDays===1?'':'s'}</td><td class="n r">\${money(c.monthPay,2)}</td></tr>
+        <tr><td>End-of-service gratuity</td><td class="n r">\${money(c.grat,2)}</td></tr>
+        <tr><td>Leave encashment &mdash; \${c.leaveDays} days</td><td class="n r">\${money(c.leaveCash,2)}</td></tr>
+        \${c.ticket?\`<tr><td>Unclaimed air tickets</td><td class="n r">\${money(c.ticket,2)}</td></tr>\`:''}
+        \${(c.extra||[]).map(l=>\`<tr><td>\${esc(l.label||'—')}</td><td class="n r"\${l.deduct?' style="color:var(--bad)"':''}>\${l.deduct?'(':''}\${money(Math.abs(+l.amount||0),2)}\${l.deduct?')':''}</td></tr>\`).join('')}
+        \${c.adv?\`<tr><td>Advance still outstanding</td><td class="n r" style="color:var(--bad)">(\${money(c.adv,2)})</td></tr>\`:''}
+        <tr class="tot"><td><b>Final settlement</b></td><td class="n r netcol"><b>AED \${money(x.net===null?c.net:x.net,2)}</b></td></tr>
+      </tbody></table></div>
+      <p class="cap">\${x.frozen
+        ? 'These figures were written down when the exit was initiated. A salary revision or another month of leave accrual cannot move them now &mdash; which is the point, because this is what somebody signs for.'
+        : 'Worked out from what the portal holds today. Initiating writes them down.'}</p>
+    </section>
+
+    <section class="panel">
+      <header><h3>Before the last day</h3><span class="hint">tick these off</span></header>
+      <div class="pad"><dl class="kv wide">
+        <dt>Handover</dt><dd>Named successor for live files and clients, and their portal access updated.</dd>
+        <dt>Company property</dt><dd>Laptop, phone, SIM, access card and keys returned.</dd>
+        <dt>Portal access</dt><dd>\${x.status==='draft'?'Ends by itself the day after the last working day, once the exit is initiated.':'Ends after '+esc(dayLabel(x.lastDay))+'.'}</dd>
+        <dt>Visa and labour card</dt><dd>Cancellation started with the PRO &mdash; the expiry dates are on the Documents page.</dd>
+        <dt>Air ticket</dt><dd>\${c.ticket?\`AED \${money(c.ticket,2)} of unclaimed entitlement is included above.\`:'Nothing unclaimed.'}</dd>
+        <dt>The last month</dt><dd>\${x.month?\`Inside the settlement, and \${nm(x.who)} is off the \${esc(MONTHNAME[+x.month.slice(5)-1])} run.\`:'Inside the settlement once this is initiated.'}</dd>
+      </dl></div>
+    </section>
+  </div>\`;
+}
+
+/* ---------- employee profile ---------- */`,
+  'the exits screen: draft, initiate, approve, pay');
+
+
+/* ---------------------------------------------- the box you cannot walk past
+ * Avin: 'It must not be along with other employees but a different box, which
+ * will make me realise payment is pending.'
+ *
+ * A settlement belongs to the month, not to the run: the register's totals do
+ * not move, and a month that was closed months ago is never restated. What
+ * changes is that the month gains this, and it stays amber until the money has
+ * gone. Together with the person being missing from the rows above — the
+ * portal took them off, not you — that is two things to walk past before a
+ * month-end leaver could be forgotten, and close_run in the database is the
+ * third, which cannot be walked past at all.
+ */
+app = swap(app,
+`const EXITS = () => (HR().exits || []).filter(x => x.status !== 'withdrawn');`,
+`const EXITS = () => (HR().exits || []).filter(x => x.status !== 'withdrawn');
+function exitBox(monthKey){
+  const on = EXITS().filter(x => x.month === monthKey && x.status !== 'draft');
+  if(!on.length) return '';
+  const owed = on.filter(x => x.status !== 'paid');
+  const sum = on.reduce((t, x) => t + (x.net || 0), 0);
+  return \`<div class="exbox\${owed.length ? '' : ' done'}">
+    <div class="exboxh">Final settlements &mdash; not part of the payroll, but leaving the account this month
+      <span>\${owed.length
+        ? owed.length + ' waiting' + (owed.length === 1 ? '' : ' ') + ' \\u00b7 nothing paid yet'
+        : 'all paid'} \\u00b7 AED \${money(sum, 2)}</span></div>
+    <div class="tw"><table class="cotab">
+      \${colsOf([26, 15, 13, 20, 26])}
+      <thead><tr><th>Employee</th><th>Last day</th><th class="r">Amount</th><th>Stage</th><th class="r"></th></tr></thead>
+      <tbody>\${on.map(x => \`<tr>
+        <td>\${nm(x.who)} <span class="pill mute">\${esc((payrollRowFor(x.who)||{}).id || '')}</span></td>
+        <td class="n nw">\${esc(dayLabel(x.lastDay))} \${x.lastDay.slice(0,4)}</td>
+        <td class="n r netcol">\${money(x.net || 0, 2)}</td>
+        <td class="nw">\${exitPill(x.status)}</td>
+        <td class="r nw"><button class="btn ghost sm" data-exgoto="\${esc(x.id)}" type="button">Open</button></td>
+      </tr>\`).join('')}</tbody></table></div>
+    <p class="cap">These do not fold into the run's totals \\u2014 the payroll above is unchanged by them, and a
+      month that is already closed is never restated. \${owed.length
+        ? '<b>The month cannot be closed while one of these is unpaid.</b>'
+        : 'All settled.'} The people on this list are already off the payroll above.</p>
+  </div>\`;
+}`,
+  'a settlement sits beside the month, never inside it');
+
+// on the month being prepared
+app = swap(app,
+`      attNone.length ? ' <b>' + attNone.length + ' ' + (attNone.length===1?'person has':'people have') + ' no attendance recorded this month</b> &mdash; ' + esc(attNone.map(r=>nm(r.portalName)).join(', ')) + '.' : ''}</p>
+  </section>`,
+`      attNone.length ? ' <b>' + attNone.length + ' ' + (attNone.length===1?'person has':'people have') + ' no attendance recorded this month</b> &mdash; ' + esc(attNone.map(r=>nm(r.portalName)).join(', ')) + '.' : ''}</p>
+    \${exitBox(run.key)}
+  </section>`,
+  'and on the month being prepared');
+
+// and on every other month, open or long closed
+app = swap(app,
+`    <header><h3>Payroll register</h3>
+      <span class="pill mute">\${esc(P.month)}</span>`,
+`    <header><h3>Payroll register</h3>
+      <span class="pill mute">\${esc(P.month)}</span>
+      \${(() => { const b = EXITS().filter(x => x.month === (HERE ? HERE.key : P.monthKey)
+                    && x.status !== 'draft' && x.status !== 'paid').length;
+          return b ? \`<span class="pill warn" style="margin-left:8px"><span class="dt"></span>\${b} settlement\${b===1?'':'s'} to pay</span>\` : ''; })()}`,
+  'and the register says when one is outstanding');
+
+
+/* --------------------------------------------- the leaver keeps their own copy
+ * Avin: 'the exit letter also should be saved in the My payslip page'.
+ *
+ * It appears the moment the exit is initiated rather than when it is paid,
+ * because their login closes the day after their last working day and a
+ * settlement is often approved and paid after they have gone. Better it is
+ * already there while they can still open it.
+ */
+app = swap(app,
+`function revNote(u){`,
+`function exitNote(u){
+  const x = (HR().exits || []).find(y => y.who === u && !['draft','withdrawn'].includes(y.status));
+  if(!x) return '';
+  const e = exitOf(x);
+  return \`<button class="revlink" data-exslip="\${esc(x.id)}" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3v5h5"/><path d="M19 8v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7z"/><path d="M9 13h6M9 17h4"/></svg>
+    <span><b>Your final settlement \\u2014 \${esc(dayLabel(x.lastDay))} \${x.lastDay.slice(0,4)}</b>
+      <i>\${x.status === 'paid' ? 'Paid. Tap to open it, print it or save it as a PDF.'
+                               : 'Tap to open it, print it or save it as a PDF.'}</i></span>
+    <svg class="rvgo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+  </button>\`;
+}
+function revNote(u){`,
+  'the leaver keeps their settlement');
+
+app = swap(app,
+  `    \${revNote(state.user)}`,
+  `    \${exitNote(state.user)}\${revNote(state.user)}`,
+  'on the phone');
+app = swap(app,
+  `  \${revNote(state.user)}\``,
+  `  \${exitNote(state.user)}\${revNote(state.user)}\``,
+  'and on a desk');
+
+app = swap(app,
+`  document.querySelectorAll('[data-exgoto]').forEach(b=>b.onclick=()=>{`,
+`  document.querySelectorAll('[data-exslip]').forEach(b=>b.onclick=()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.exslip); if(!x) return;
+    const c = exitOf(x).c, s = settleOf(c);
+    showSlip(settleHTML(s), legalOf(c.row.name), s.ent.legal + ' \\u00b7 full and final settlement'); });
+  document.querySelectorAll('[data-exgoto]').forEach(b=>b.onclick=()=>{`,
+  'and can open it');
+
+
+/* ------------------------------------------ three gaps the tests found ------
+ * Written after driving the whole thing end to end, which is the only way any
+ * of these would have shown up.
+ */
+
+/* 1. The box existed only on a month being prepared. A settlement is posted to
+ *    the month of the LAST WORKING DAY whether or not that month is open — so
+ *    the common case, a leaver in a month already closed and paid, had nowhere
+ *    to appear at all. Exactly the case Avin was worried about. */
+app = swap(app,
+`      <span style="\${isPrep?'':'margin-left:auto;'}color:var(--ink3);font-size:12.5px">\${rows.length} of \${coRows.length} rows</span></header>`,
+`      <span style="\${isPrep?'':'margin-left:auto;'}color:var(--ink3);font-size:12.5px">\${rows.length} of \${coRows.length} rows</span></header>
+    \${exitBox(HERE ? HERE.key : P.monthKey)}`,
+  'the box is on every month, not only the one being prepared');
+
+/* 2. The approvers could not reach it. The Exits screen is in the accounts
+ *    console, which a reporting manager cannot open — so a settlement was sent
+ *    to somebody who had no way of seeing it. Payment approvals already solved
+ *    this shape: a hidden tab that appears for the person it is waiting on. */
+app = swap(app,
+`  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',`,
+`  {id:'exitapprove', group:'other', label:'Final settlements', title:'Settlements waiting on you',
+   gate:u=>exitsWaitingOn(u).length > 0, hide:true},
+  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',`,
+  'an approver has somewhere to approve from');
+
+app = swap(app,
+`function exitBox(monthKey){`,
+`/* Whose desk is it on? The manager while it is initiated, the owner from then
+   until it is approved. Accounts never approves its own settlement. */
+function exitsWaitingOn(u){
+  const owner = roleOf(u) === 'owner';
+  return EXITS().filter(x =>
+    (x.status === 'initiated' && (x.mgr === u || owner)) ||
+    (x.status === 'mgr_ok' && owner));
+}
+function vExitApprove(){
+  const mine = exitsWaitingOn(state.user);
+  if(state.exitOpen){
+    const x = EXITS().find(y => y.id === state.exitOpen);
+    if(x) return vExitOne(exitOf(x));
+  }
+  if(!mine.length) return \`<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">Nothing waiting on you</h3>
+    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">A final settlement appears here when accounts has
+      initiated it and it is your turn to approve.</p></div></section>\`;
+  return \`
+  <section class="panel">
+    <header><h3>Settlements waiting on you</h3>
+      <span class="pill warn"><span class="dt"></span>\${mine.length}</span>
+      <span class="hint">approve, or send it back with a reason</span></header>
+    <div class="tw"><table class="cotab">
+      \${colsOf([26, 16, 16, 18, 24])}
+      <thead><tr><th>Employee</th><th>Last day</th><th class="r">Settlement</th><th>Stage</th><th class="r"></th></tr></thead>
+      <tbody>\${mine.map(x => \`<tr>
+        <td>\${nm(x.who)}</td>
+        <td class="n nw">\${esc(dayLabel(x.lastDay))} \${x.lastDay.slice(0,4)}</td>
+        <td class="n r netcol">AED \${money(x.net || 0, 2)}</td>
+        <td class="nw">\${exitPill(x.status)}</td>
+        <td class="r nw"><button class="btn sm" data-exopen="\${esc(x.id)}" type="button">Open it</button></td>
+      </tr>\`).join('')}</tbody></table></div>
+    <p class="cap">This is what somebody is owed on the way out &mdash; their last month's pay, the end-of-service
+      gratuity, any leave not taken, and anything accounts has added or deducted. Open it to see the working before
+      you approve. Sending it back returns it to accounts as a draft with your reason on it.</p>
+  </section>\`;
+}
+function exitBox(monthKey){`,
+  'and something to look at when they get there');
+
+app = swap(app,
+  `payment:vPayment, payapprove:vPayApprove,`,
+  `payment:vPayment, payapprove:vPayApprove, exitapprove:vExitApprove,`,
+  'and the router knows it');
+
+/* 3. A leaver's payslip page said 'No payslip for you' and stopped, because
+ *    initiating had taken them off the run — so the one page their settlement
+ *    lives on was the one page that refused to draw. */
+app = swap(app,
+`  if(!row) return \`<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">No payslip for you</h3>
+    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">You are not on this payroll run. If that looks wrong, speak to accounts.</p></div></section>\`;`,
+`  if(!row) return \`\${exitNote(state.user)}
+    <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">No payslip for this month</h3>
+    <p style="color:var(--ink2);max-width:52ch;margin:0 auto">\${exitNote(state.user)
+      ? 'Your last month is inside your final settlement above rather than on a payslip.'
+      : 'You are not on this payroll run. If that looks wrong, speak to accounts.'}</p></div></section>\`;`,
+  'a leaver still finds their settlement');
+
+app = swap(app,
+`  if(!released) return \`<section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">\${esc(P.month)} is not released yet</h3>`,
+`  if(!released) return \`\${exitNote(state.user)}
+    <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">\${esc(P.month)} is not released yet</h3>`,
+  'and finds it before the month is released too');
+
+
+/* ================================= the salary revision, task 2 =============
+ * Avin drafted one, then found he could not read what he was about to send:
+ *
+ *   'Then i didnt get to view the draft - only option is that of to send or
+ *    withdraw ... Is this process correct?'
+ *
+ * No, and there was a second fault underneath it. The draft letter is written
+ * as WAITING, which put it in the ordinary letters queue on Advances &
+ * letters, beside genuine staff requests, with Issue and Decline buttons.
+ * Pressing Issue there marks the letter issued and does NOT move the salary —
+ * a signed letter promising a rise, a payslip still reading the old figure,
+ * and the draft still sitting on the Revisions page. Nobody would catch it
+ * until the person read their payslip.
+ *
+ * Avin: 'A drafted revision letter should land in the revisions page and not
+ * in advances & letters.'
+ */
+
+/* 1. Out of that queue, in both directions. Out of accounts' inbox, where it
+ *    could be issued by the wrong route; and out of the employee's own letters
+ *    list, where a draft would have told them about a rise before it was sent. */
+app = swap(app,
+  `  const inbox = L.filter(x=>x.status==='Pending');`,
+  `  /* A revision is accounts' own draft, not a request from staff waiting on a
+     decision. It has no business in this queue: issuing it from here marks the
+     letter issued without moving the salary. */
+  const inbox = L.filter(x=>x.status==='Pending' && x.type!=='revision');`,
+  'a revision draft is out of the letters queue');
+
+app = swap(app,
+  `  const mine = L.filter(x=>x.who===u).sort((a,b)=>b.asked.localeCompare(a.asked));`,
+  `  /* And out of the person's own list until it is issued — otherwise a draft
+     tells somebody about a pay rise before it has been decided to send it. */
+  const mine = L.filter(x=>x.who===u && !(x.type==='revision' && x.status!=='Issued'))
+    .sort((a,b)=>b.asked.localeCompare(a.asked));`,
+  'and out of the employee’s own letters until it is sent');
+
+app = swap(app,
+  `  const nLtr  = canUpload(u) ? (HR().letters||[]).filter(x=>x.status==='Pending').length : 0;`,
+  `  const nLtr  = canUpload(u) ? (HR().letters||[]).filter(x=>x.status==='Pending' && x.type!=='revision').length : 0;`,
+  'and does not inflate the letters count');
+
+/* 2. View. The letter as it will print, in the window payslips and settlements
+ *    already use — so a letter looks the same wherever it is opened from. */
+app = swap(app,
+`              \${state.revAsk===r.revId ? '' : \`<button class="btn sm" data-rvsend="\${esc(r.revId)}" type="button">Send it</button>`,
+`              \${state.revAsk===r.revId ? '' : \`<button class="btn ghost sm" data-rvsee="\${esc(r.ref)}" type="button">View</button>
+              <button class="btn sm" data-rvsend="\${esc(r.revId)}" type="button">Send it</button>`,
+  'a draft can be read before it is sent');
+
+app = swap(app,
+`  document.querySelectorAll('[data-rvsend]').forEach(b=>b.onclick=()=>{`,
+`  document.querySelectorAll('[data-rvsee]').forEach(b=>b.onclick=()=>{
+    const l = (HR().letters||[]).find(x=>x.id===b.dataset.rvsee);
+    if(!l) return oops2('That letter is not there yet — reload the page.');
+    showSlip(letterHTML(l), legalOf(l.who), 'Draft \\u2014 not sent');
+  });
+  document.querySelectorAll('[data-rvsend]').forEach(b=>b.onclick=()=>{`,
+  'and View opens it');
+
+/* A small, honest way to say something went wrong on a screen that has no
+   other. Nothing in the portal should fail silently. */
+app = swap(app,
+`function showSlip(html, title, sub){`,
+`function oops2(msg){
+  const t = document.createElement('div');
+  t.className = 'toast bad'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 6000);
+}
+function showSlip(html, title, sub){`,
+  'and says so when it cannot');
+
+/* 3. The one case the effective date leaves open. Avin dropped the separate
+ *    paying month, so there is no arithmetic for arrears — but a revision
+ *    dated back into a month that is closed and paid cannot reach that month,
+ *    and the person would be owed the difference with nothing saying so. One
+ *    line, before it is sent, rather than a machine nobody asked for. */
+app = swap(app,
+`        \${state.revSent?\`<div class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Drafted. Nothing has moved.</b>`,
+`        \${(() => {
+          const g = state.revForm || {};
+          if(!g.eff) return '';
+          const shut = (DATA.payroll.runs || []).filter(r => r.status === 'closed'
+            && r.key >= String(g.eff).slice(0, 7));
+          if(!shut.length) return '';
+          return \`<div class="note" style="margin-top:14px;border-left-color:var(--bad)">
+            <b>\${esc(shut.map(r => r.label).join(', '))} \${shut.length === 1 ? 'is' : 'are'} already closed and paid.</b>
+            A revision dated \${esc(effLabel(g.eff))} cannot reach \${shut.length === 1 ? 'that month' : 'those months'} \\u2014 a closed
+            run is never restated. The difference for \${shut.length === 1 ? 'it' : 'them'} will not appear on any payroll
+            month, so pay it by hand or date this from the first open month instead.</div>\`;
+        })()}
+        \${state.revSent?\`<div class="note" style="margin-top:14px;border-left-color:var(--warn)"><b>Drafted. Nothing has moved.</b>`,
+  'a back-dated revision says what it cannot reach');
+
+/* 4. The record. Avin: 'Keep them, use a scroller or a search box to find
+ *    them. The main thing is records!!!' — so nothing drops off the end. */
+app = swap(app,
+`    <header><h3>Sent</h3><span class="hint" style="margin-left:auto">the last few letters that went out</span></header>
+    <div class="tw"><table>`,
+`    <header><h3>Sent</h3>
+      <span class="pill mute">\${SENTREV().length}</span>
+      <input id="revQ" placeholder="Find a name" value="\${esc(state.revQ||'')}"
+        style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+      <span class="hint">every letter that has gone out</span></header>
+    <div class="tw revsent"><table>`,
+  'every revision is kept, and can be found');
+
+app = swap(app,
+  `      <tbody>\${SENTREV().slice(0,12).map(r => \`<tr>`,
+  `      <tbody>\${SENTREV().filter(r => !state.revQ
+        || NM(r.who).toLowerCase().includes(state.revQ.toLowerCase())
+        || String(r.ref).toLowerCase().includes(state.revQ.toLowerCase())).map(r => \`<tr>`,
+  'and the search finds it');
+
+app = swap(app,
+  `  exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',`,
+  `  exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',\n  revQ: '',`,
+  'somewhere to hold the search');
+
+app = swap(app,
+`  document.querySelectorAll('[data-rvsee]').forEach(b=>b.onclick=()=>{`,
+`  { const q = document.getElementById('revQ');
+    if(q) q.oninput = () => { state.revQ = q.value; render();
+      const e2 = document.getElementById('revQ');
+      if(e2){ e2.focus(); e2.setSelectionRange(e2.value.length, e2.value.length); } }; }
+  document.querySelectorAll('[data-rvsee]').forEach(b=>b.onclick=()=>{`,
+  'and the box is wired');
+
+// a long record scrolls inside its panel rather than growing the page
+shell = swap(shell,
+`/* the settlement box on a month: beside the run, never inside it */`,
+`.revsent{max-height:420px;overflow-y:auto}
+.revsent thead th{position:sticky;top:0;background:var(--panel);z-index:1;box-shadow:0 1px 0 var(--line)}
+/* the settlement box on a month: beside the run, never inside it */`,
+  'the sent record scrolls in place');
+
+
+/* ==================================== staff documents and the directory, #3 ==
+ * Avin's specification:
+ *
+ *   'Fill in dates is perfect ... rename it to Staff Documents'
+ *   'EID#, Expiry, Document | Passport#, Expiry, Document | Visa#, Expiry,
+ *    Document | Labour Card #, Expiry, Document'
+ *   'We can easily track the data missing and ask them to add or we add it
+ *    here'
+ *   'The staff directory should show all the fields from the my profile
+ *    section except for the documents'
+ *   'I cannot edit this part, its completely upto them. However dont allow
+ *    them to change the birth date, thats the only part which I can do. And
+ *    lets keep the year as well'
+ *
+ * The four document types already existed under exactly those names, and the
+ * expiry and the copy already worked for all four; 0039_staff_records.sql adds
+ * the three references that were deliberately not stored, and the birthday
+ * year. He accepted a flat thirteen-column grid rather than a stacked one,
+ * knowing it would be tight — 'for this time we can have an exception as it
+ * would be difficult to track vertical'.
+ */
+
+// ---- the references, masked the way the Emirates ID already is
+app = swap(app,
+`const UPLOADS = () => HR().uploadTypes || [];`,
+`const UPLOADS = () => HR().uploadTypes || [];
+/* The four references. Held so a gap in somebody's file is visible on one
+   screen; masked by default because they are government identifiers and this
+   table is looked at with somebody standing behind you. */
+const REFOF = (n, k) => ((HR().ref || {})[n] || {})[k] || '';
+/* Two characters, four dots, four characters — the same shape whatever the
+   document, so it fits a column and two rows can still be told apart. It is
+   deliberately not "everything but the last digit": a mask that keeps almost
+   all of a government number is not a mask, and an Emirates ID's readable
+   prefix is the year of birth. */
+function maskRef(v){
+  const s = String(v || '').trim();
+  if(s.length <= 6) return s.length <= 2 ? s : s.slice(0, 1) + '\\u2022'.repeat(s.length - 1);
+  return s.slice(0, 2) + '\\u2022\\u2022\\u2022\\u2022' + s.slice(-4);
+}
+const DOCREF = {eid:'eid', passport:'passport', visa:'visa', labour:'labour'};`,
+  'the four references, and how they are shown');
+
+app = swap(app,
+  `  exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',\n  revQ: '',`,
+  `  exitId: null, exitLines: [], exBusy: false, exitOpen: null, exAsk: null, exWhy: '',\n  revQ: '', refShow: false, dirWho: null,`,
+  'somewhere to hold the unmask and the open card');
+
+/* ---- the grid: the rename, four documents across, three things under each */
+app = swap(app,
+`    <header><h3>Fill in document dates</h3>
+      <span class="pill \${left?'warn':'good'}"><span class="dt"></span>\${left} still blank</span>
+      <input id="docQ" placeholder="Find a name" value="\${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+      \${edBar('docdates')}
+    </header>
+    \${edSaved('docdates')}\${edConfirm('docdates')}`,
+`    <header><h3>Staff Documents</h3>
+      <span class="pill \${left?'warn':'good'}"><span class="dt"></span>\${left} still blank</span>
+      <input id="docQ" placeholder="Find a name" value="\${esc(state.docQ||'')}" style="margin-left:auto;max-width:220px;padding:5px 10px;font-size:13px">
+      <button class="btn ghost edbtn" id="refShow" type="button">\${state.refShow?'Hide the numbers':'Show the numbers'}</button>
+      \${edBar('docs')}
+    </header>
+    \${edSaved('docs')}\${edConfirm('docs')}`,
+  'Fill in dates is now Staff Documents');
+
+app = swap(app,
+  `  docdates:   ['docs',    ['Fill in document dates'], true],
+  profiles:   ['docs',    ['Profile completeness'], true],
+  directory:  ['docs',    ['Staff directory'], true]`,
+  `  docdates:   ['docs',    ['Staff Documents', 'Dates of birth'], true],
+  profiles:   ['docs',    ['Profile completeness'], true]`,
+  'and the page finds it under its new name, with the birth dates beside it');
+
+/* The console had a fourth tab under Documents called Staff directory: a name,
+   a work phone, a masked Emirates ID and a work email. Three of those four are
+   on the grid or the person's own card now, and the fourth thing that panel
+   became \u2014 the birth dates \u2014 belongs beside the documents it is read off,
+   not on a tab of its own. So the tab goes, and its name goes with it: there is
+   one Staff directory in this portal now, the one everybody can open. */
+app = swap(app,
+`  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
+  {id:'directory',  group:'con', sec:'docs',   label:'Staff directory',title:'Staff directory', gate:canAdmin, con:true}`,
+`  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true}`,
+  'and the console tab it used to sit on is retired');
+app = swap(app,
+  `  {id:'docdates',   group:'con', sec:'docs',   label:'Fill in dates',  title:'Fill in document dates', gate:canAdmin, con:true},`,
+  `  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:canAdmin, con:true},`,
+  'and so does the tab');
+
+
+/* The grid itself: four documents across, number / expiry / the copy under
+   each. Thirteen columns, which is more than this portal puts anywhere else —
+   it is the exception Avin asked for, and the alternative (one column per
+   document, stacked) was the thing he said would be hard to track. */
+app = swap(app,
+`    \${byCompany(rows, {
+      who: n => n, cls: 'invtable',
+      cols: colsOf([25, 23].concat(types.map(() => 52 / types.length))),
+      note: rs => \`\${rs.filter(n => gaps(n)).length} still to fill in\`,
+      head: \`<thead><tr><th>Employee</th><th>Emirates ID number</th>
+        \${types.map(t=>\`<th class="r">\${esc(t.label)}</th>\`).join('')}</tr></thead>\`,
+      row: n => \`<tr>
+        <td class="nw">\${nm(n)}\${gaps(n)?\` <span class="pill mute">\${gaps(n)} blank</span>\`:''}</td>
+        <td><input class="ff" data-deid="\${esc(n)}" value="\${esc(eidOf(n))}" placeholder="784-0000-0000000-0"
+          style="font-variant-numeric:tabular-nums;width:100%;min-width:0"></td>
+        \${types.map(t=>cell(n, t.k)).join('')}</tr>\`,
+      empty: 'Nobody matches that.'
+    })}
+    <p class="cap">The rows with the most blanks come first. Type a date and the expiry table, the reminders and the person&rsquo;s own page all follow it straight away &mdash; a wrong date is a missed warning, so take them off the card rather than from memory. <b>Passport and visa numbers are never stored</b>, only the expiry dates and the copy the employee uploads.</p>`,
+`    \${(() => {
+      /* The four, in the order Avin wrote them. */
+      const ORDER = ['eid','passport','visa','labour'];
+      const DOCS = ORDER.map(k => types.find(t => t.k === k)).filter(Boolean)
+        .concat(types.filter(t => !ORDER.includes(t.k)));
+      /* Thirteen columns wide plus the birth date, so the widths are set from
+         what each one actually has to hold at the grid's own width. Two of
+         those were sized wrong to begin with: the heading came out as
+         "DOCUME\u2026", and the number column was cut to fit a MASKED number
+         when the width that matters is the one it needs with the numbers
+         SHOWN — '784-1990-1234567-1' is eighteen characters and the point of
+         the button is to read it. Avin: 'i want to see the numbers clearly'. */
+      const each = (100 - 15.4 - 7.7) / (DOCS.length * 3);
+      /* Second column, off the same passport as the rest of the row. A date
+         held without a year still shows what there is, with the gap named,
+         because 'not on file' would be a lie about a birthday everybody
+         already wishes somebody. */
+      const dobCell = n => {
+        const key = n + '|dob|d';
+        return \`<td class="n b">\${edCell('docs', key,
+          x => \`<input class="ff dt" type="date"\${edAttr('docs', key)} value="\${esc(x)}" max="\${esc(HDATE())}">\`,
+          x => x ? \`<span class="edread">\${esc(dayLabel(x))} \${esc(String(x).slice(0,4))}</span>\`
+                 : bdayOf(n) ? \`<span class="edread">\${esc(bdayDM(n))}</span> <span class="pill warn">no year</span>\`
+                 : '<span class="miss">\\u2014</span>')}</td>\`;
+      };
+      const refCell = (n, k) => {
+        const v = REFOF(n, k);
+        return \`<td class="num b">\${edCell('docs', n + '|' + k + '|no',
+          x => \`<input class="ff"\${edAttr('docs', n + '|' + k + '|no')} value="\${esc(x)}" placeholder="\\u2014">\`,
+          () => v ? \`<span class="edread"\${full(state.refShow ? '' : v)}>\${esc(state.refShow ? v : maskRef(v))}</span>\`
+                  : '<span class="miss">\\u2014</span>')}</td>\`;
+      };
+      const expCell = (n, k) => {
+        const v = ((HR().docs||{})[n]||{})[k] || '';
+        const d = v ? dTo(v) : null;
+        const col = d === null ? '' : d < 0 ? 'var(--bad)' : d <= 60 ? 'var(--warn)' : '';
+        return \`<td class="n">\${edCell('docs', n + '|' + k + '|exp',
+          x => \`<input class="ff dt" type="date"\${edAttr('docs', n + '|' + k + '|exp')} value="\${esc(x)}"\${col?\` style="border-color:\${col};color:\${col}"\`:''}>\`,
+          x => x ? \`<span class="edread"\${col?\` style="color:\${col}"\`:''}>\${esc(dayLabel(x))} \${esc(String(x).slice(0,4))}</span>\`
+                 : '<span class="miss">\\u2014</span>')}</td>\`;
+      };
+      const clip = (n, k) => {
+        const f = fileOf(n, k);
+        return \`<td class="clipc">\${f
+          ? \`<button class="clip on" data-docsee="\${esc(n)}|\${esc(k)}" type="button" title="Open the copy" aria-label="Open \${esc(NM(n))}&rsquo;s \${esc(k)}">\\u{1F4CE}</button>\`
+          : \`<span class="clip no" title="No copy on file" aria-label="No copy on file">\\u{1F4CE}</span>\`}</td>\`;
+      };
+      return byCompany(rows, {
+        who: n => n, cls: 'dgrid',
+        cols: colsOf([15.4, 7.7].concat([].concat(...DOCS.map(() => [each * 1.282, each * 0.893, each * 0.815])))),
+        note: rs => \`\${rs.filter(n => gaps(n)).length} still to fill in\`,
+        head: \`<thead>
+          <tr class="dgrp"><th></th><th></th>\${DOCS.map(t =>
+            \`<th class="grp b" colspan="3">\${esc(t.label)}</th>\`).join('')}</tr>
+          <tr><th>Employee</th><th class="b">Date of birth</th>\${DOCS.map(() =>
+            '<th class="b">Number</th><th>Expiry</th><th class="doc">Document</th>').join('')}</tr>
+        </thead>\`,
+        row: n => \`<tr>
+          <td class="nw"\${full(NM(n) + (gaps(n) ? ' \\u2014 ' + gaps(n) + ' still blank' : ''))}>\${nm(n)}\${gaps(n)?\` <span class="pill mute">\${gaps(n)} blank</span>\`:''}</td>
+          \${dobCell(n)}\${DOCS.map(t => refCell(n, t.k) + expCell(n, t.k) + clip(n, t.k)).join('')}</tr>\`,
+        empty: 'Nobody matches that.'
+      });
+    })()}
+    <p class="cap">The rows with the most blanks come first. A number is masked until you press <b>Show the
+      numbers</b> &mdash; they are government references and this screen gets looked at with somebody standing
+      behind you. The paperclip opens the copy the employee uploaded; hollow and amber means there is none. A date
+      in <b style="color:var(--bad)">red</b> has already passed and one in <b style="color:var(--warn)">amber</b>
+      is inside two months. Typing a date feeds the expiry table, the reminders and the person&rsquo;s own page, so
+      take them off the card rather than from memory.</p>`,
+  'four documents across, three things under each');
+
+// the old single Emirates ID box and its live handler go with it
+app = swap(app,
+`  document.querySelectorAll('[data-deid]').forEach(el=>el.onchange=()=>{
+    const v = el.value.trim();
+    const E = HR().eid || (HR().eid = {});
+    if(v) E[el.dataset.deid] = v; else delete E[el.dataset.deid];`,
+`  document.querySelectorAll('[data-deid-gone]').forEach(el=>el.onchange=()=>{
+    const v = el.value.trim();
+    const E = HR().eid || (HR().eid = {});
+    if(v) E[el.dataset.deid] = v; else delete E[el.dataset.deid];`,
+  'and the old single box is no longer bound');
+
+// the references join the one mechanism that writes anything in this console
+app = swap(app,
+`  docdates: {
+    title: 'Document expiry dates',`,
+`  /* The grid holds a number and an expiry date for each of four documents,
+     and it is one table on the screen, so it is one table here: one Edit, one
+     list of what is about to change, one Save. Two Edit buttons on one grid
+     would mean a number and its own expiry could not be corrected in the same
+     sitting, which is exactly how they arrive — off one card.
+
+     A key is 'Rana Amine|passport|no' or 'Rana Amine|passport|exp'. Dropping
+     the last segment gives 'Rana Amine|passport', which is the key both
+     writers already take, so the split at the end is the whole of it.
+
+     The date of birth is the third thing this table writes, under the key
+     'Rana Amine|dob|d'. It used to be a table of its own further down the
+     page, which meant correcting somebody's passport and their birth date —
+     both read off the same passport, in the same sitting — was two Edits, two
+     confirmations and two Saves. Avin's sketch of this screen puts the date of
+     birth in the second column, so that is where it is, and it goes in on the
+     same Save as everything else in the row. */
+  docs: {
+    title: 'Staff documents',
+    now:  k => { const i = k.lastIndexOf('|'), who = k.slice(0, i), rest = k.slice(i + 1);
+                 const j = who.lastIndexOf('|'), n = who.slice(0, j), kind = who.slice(j + 1);
+                 return kind === 'dob' ? (bdayToISO(bdayOf(n)) || '')
+                      : rest === 'no'  ? REFOF(n, kind)
+                      : (((HR().docs||{})[n] || {})[kind]) || ''; },
+    name: k => { const i = k.lastIndexOf('|'), who = k.slice(0, i), rest = k.slice(i + 1);
+                 const j = who.lastIndexOf('|'), n = who.slice(0, j), kind = who.slice(j + 1);
+                 if(kind === 'dob') return NM(n) + ' \\u2014 date of birth';
+                 const t = DOCTYPES().find(x => x.k === kind);
+                 return NM(n) + ' \\u2014 ' + ((t && t.label) || kind)
+                      + (rest === 'no' ? ' number' : ' expiry'); },
+    /* A number is shown whole here, not masked: this is the one moment you are
+       being asked to check that it is right. */
+    fmt:  (v, k) => { const rest = k ? k.slice(k.lastIndexOf('|') + 1) : '';
+      return (rest === 'exp' || rest === 'd')
+        ? (v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file')
+        : (String(v || '').trim() || 'not on file'); },
+    save: async d => {
+      const nos = {}, exp = {}, dob = {};
+      Object.keys(d).forEach(k => { const i = k.lastIndexOf('|'), rest = k.slice(i + 1);
+        const who = k.slice(0, i);
+        if(rest === 'd') dob[who.slice(0, who.lastIndexOf('|'))] = d[k];
+        else (rest === 'no' ? nos : exp)[who] = d[k]; });
+      /* Numbers first. If they fail the dates are not attempted, so what the
+         confirmation listed and what was written cannot drift apart silently
+         \\u2014 the error names the half that did not go in. */
+      if(Object.keys(nos).length && !await window.__db.saveDocRefs(nos))   return null;
+      if(Object.keys(exp).length && !await window.__db.saveDocDates(exp))  return null;
+      if(Object.keys(dob).length && !await window.__db.setBirthDates(dob)) return null;
+      return true;
+    }
+  },
+  docdates: {
+    title: 'Document expiry dates',`,
+  'the numbers are saved the same way as everything else in the console');
+
+app = swap(app,
+`  document.querySelectorAll('[data-edrm]').forEach(b=>b.onclick=()=>{`,
+`  { const rb = document.getElementById('refShow');
+    if(rb) rb.onclick = () => { state.refShow = !state.refShow; render(); }; }
+  document.querySelectorAll('[data-docsee]').forEach(b=>b.onclick=()=>{
+    const [who, kind] = b.dataset.docsee.split('|');
+    const f = fileOf(who, kind); if(!f) return;
+    const t = DOCTYPES().find(x => x.k === kind) || {label: kind};
+    const exp = ((HR().docs||{})[who]||{})[kind];
+    showDoc(f, NM(who) + ' \\u2014 ' + t.label,
+      exp ? 'expires ' + dayLabel(exp) + ' ' + String(exp).slice(0,4) : 'no expiry on file'); });
+  document.querySelectorAll('[data-edrm]').forEach(b=>b.onclick=()=>{`,
+  'the unmask and the paperclip are wired');
+
+/* =====================================================================
+   THE BIRTH DATE
+
+   It has been held as day and month — '16 Feb' — and the profile said so:
+   "Only the day and month are kept, never the year." Avin wants the year, so
+   that sentence comes off in the same build that stops it being true.
+
+     'lets keep the year as well, its important for the company, but not
+      shown on profiles if some one views'
+
+   Two halves to that, and both are done here. The year is kept, and every
+   screen a colleague looks at still shows the day and the month alone.
+
+   It also stops being the employee's to type. It comes off the passport now,
+   so accounts sets it, and the box on My profile becomes a line of text. That
+   is not a new restriction so much as an honest one: 'birthday' has never
+   been in the four fields the database lets a person change on their own row,
+   so a staff member editing it here has been watching the trigger quietly put
+   it back ever since. The screen now says what the database has always done.
+   ===================================================================== */
+
+// Day and month, whatever else is on the string. Every reader of the raw value
+// already took the first two words, so nothing else has to change.
+app = swap(app,
+`const bdayOf = u => ((HR().birthdays||{})[u]||{}).d || '';`,
+`const bdayOf = u => ((HR().birthdays||{})[u]||{}).d || '';
+/* '16 Feb 1991' is what is on file; '16 Feb' is what a colleague sees. BDM is
+   the one that goes on a screen unless the viewer is the person themselves or
+   accounts, and BYEAR is how a screen asks whether the year is known yet. */
+const BDM    = v => String(v || '').split(' ').slice(0, 2).join(' ');
+const BYEAR  = v => (String(v || '').split(' ')[2] || '');
+const bdayDM = u => BDM(bdayOf(u));
+const bdayYr = u => BYEAR(bdayOf(u));
+// '16 Feb 1991' <-> '1991-02-16', for the one box that sets it
+const bdayToISO = v => { const p = String(v||'').split(' '); const mm = MIDX[p[1]];
+  return (p[2] && mm) ? \`\${p[2]}-\${String(mm).padStart(2,'0')}-\${String(+p[0]).padStart(2,'0')}\` : ''; };
+const bdayFromISO = v => { const m = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(String(v||'').trim());
+  return m ? \`\${+m[3]} \${Object.keys(MIDX)[+m[2]-1]} \${m[1]}\` : ''; };`,
+  'the birthday, day and month and year kept apart');
+
+// the person's card, seen by every colleague
+app = swap(app,
+  `          \${row('Birthday', (bdayOf(who) && !quietBday(who)) ? esc(bdayOf(who)) : '')}`,
+  `          \${row('Birthday', (bdayDM(who) && !quietBday(who))
+            ? esc(bdayDM(who)) + (SEESALL(who) && bdayYr(who)
+                ? ' <span style="color:var(--ink3)">' + esc(bdayYr(who)) + '</span>' : '') : '')}`,
+  'the card shows the day and the month');
+
+// the home page's four upcoming birthdays
+app = swap(app,
+  `    .map(n=>({n, dm:H.birthdays[n].d, on:nextOccur(H.birthdays[n].d)}))`,
+  `    .map(n=>({n, dm:BDM(H.birthdays[n].d), on:nextOccur(H.birthdays[n].d)}))`,
+  'the home page shows the day and the month');
+
+// and whatever is being celebrated today
+app = swap(app,
+  `    .map(n=>({n, dm:(HR().birthdays[n]||{}).d}));`,
+  `    .map(n=>({n, dm:BDM((HR().birthdays[n]||{}).d)}));`,
+  'the celebration strip shows the day and the month');
+
+/* Who may see the year: the person themselves, and accounts. Nobody else,
+   anywhere — that is the whole of Avin's second half. */
+app = swap(app,
+`const quietBday = u => !!((HR().profile||{})[u]||{}).quietBday;`,
+`const quietBday = u => !!((HR().profile||{})[u]||{}).quietBday;
+// the year is yours and accounts', and nobody else's, on any screen
+const SEESALL = u => u === state.user || canAdmin(state.user);`,
+  'who may see the year');
+
+// My profile: a line of text where the two dropdowns were
+app = swap(app,
+`      ? (() => { const on = bdayOf(u).split(' ');
+          const dd = on[0] || '', mo = on[1] || '';
+          const MON = Object.keys(MIDX);
+          return \`<div class="bdrow">
+            <select id="pf_bdayD" data-bday="1"><option value="">Day</option>\${
+              Array.from({length:31},(_,i)=>String(i+1).padStart(2,'0')).map(d=>
+                \`<option value="\${d}"\${d===dd?' selected':''}>\${+d}</option>\`).join('')}</select>
+            <select id="pf_bdayM" data-bday="1"><option value="">Month</option>\${
+              MON.map(m=>\`<option value="\${m}"\${m===mo?' selected':''}>\${m}</option>\`).join('')}</select>
+          </div>
+          <span class="pfhint">Only the day and month are kept &mdash; never the year.</span>\`; })()`,
+`      ? \`<div class="pfread">\${bdayOf(u)
+            ? esc(bdayDM(u)) + (bdayYr(u) ? ' <span style="color:var(--ink3)">' + esc(bdayYr(u)) + '</span>' : '')
+            : '<span class="miss">not on file</span>'}</div>
+         <span class="pfhint">\${bdayOf(u)
+            ? 'Accounts sets this from your passport. If it is wrong, tell them and it is a two-second fix.'
+            : 'Accounts has not filled this in yet. Until they do you cannot book your birthday half-day.'}
+           \${bdayYr(u) ? 'Your colleagues see the day and the month only \\u2014 never the year.' : ''}</span>\``,
+  'the profile: the birthday is read now, not typed');
+
+// so the handler behind those two dropdowns has nothing left to bind
+app = swap(app,
+`  document.querySelectorAll('[data-bday]').forEach(el => el.onchange = ()=>{
+    const d = (document.getElementById('pf_bdayD')||{}).value || '';
+    const m = (document.getElementById('pf_bdayM')||{}).value || '';
+    const B = HR().birthdays || (HR().birthdays={});
+    const v = (d && m) ? d + ' ' + m : '';
+    if(v) B[state.user] = {d: v, sample:false}; else delete B[state.user];
+    const p=PROF(state.user); if(p) p.updated=HDATE();
+    state.pfDirty = Object.assign(state.pfDirty||{}, {birthday: v});
+    state.pfSaved = ''; render(); });`,
+`  /* The birthday was typed here once. It is accounts' now, and the database
+     has always agreed: 'birthday' is not one of the four fields the guard on
+     employees lets a person change on their own row, so this handler was
+     writing into a trigger that put it straight back. */`,
+  'and nothing on the profile writes a birthday any more');
+
+// the same field is no longer the employee's to fix, so nor is the advice
+app = swap(app,
+  `    if(!bdayOf(u)) return {ok:false, why:'add your birthday on My profile first'};`,
+  `    if(!bdayOf(u)) return {ok:false, why:'accounts has not put your birthday on file yet \\u2014 ask them'};`,
+  'and the birthday leave points at the right person');
+
+// it stops counting against the employee's own completeness, for the same reason
+app = swap(app,
+  `  {k:'bday',        label:'Birthday (day and month)', group:'you', req:true,  bday:true, row:1},`,
+  `  {k:'bday',        label:'Date of birth',          group:'you',   req:false, bday:true, row:1, theirs:false},`,
+  'the birthday is not the employee’s to complete');
+
+/* ---------------------------------------------------------------------
+   And the one screen that does set it. It joins the same mechanism as
+   everything else in this console: Edit, change, read what you are about to
+   do, Save. A birth date typed one digit out is a gratuity calculation and a
+   visa application both quietly wrong, so it gets the same confirmation as a
+   leave balance rather than a live box.
+   --------------------------------------------------------------------- */
+app = swap(app,
+`  docs: {
+    title: 'Staff documents',`,
+`  bdate: {
+    title: 'Dates of birth',
+    now:  k => bdayToISO(bdayOf(k)),
+    name: k => NM(k) + ' \\u2014 date of birth',
+    fmt:  v => v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file',
+    save: d => window.__db.setBirthDates(d)
+  },
+  docs: {
+    title: 'Staff documents',`,
+  'the birth date is set the same way as everything else in the console');
+
+/* The old bottom panel of this page listed a name, a work phone, an Emirates
+   ID and a work email. Two of those four are on the person's own card and the
+   third is now in the grid above, unmasked by a button. What is left is the
+   one field that has nowhere else to live. */
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Staff directory</h3><span class="hint">accounts only &mdash; never in an email or a team list</span></header>
+    \${byCompany(USERS.map(x=>x.name), {
+      who: n => n,
+      cols: colsOf([27, 19, 22, 32]),
+      head: \`<thead><tr><th>Name</th><th>Work phone</th><th>Emirates ID</th><th>Work email</th></tr></thead>\`,
+      row: n => \`<tr>
+        <td class="nw">\${esc(n)}</td>
+        <td class="n nw">\${esc(phoneOf(n)||'—')}</td>
+        <td class="n nw" style="color:var(--ink2)">\${eidOf(n)?\`<span data-eid="\${esc(eidOf(n))}">\${esc(maskEID(eidOf(n)))}</span>\`:'—'}</td>
+        <td class="nw" style="color:var(--ink2)">\${esc(emailOf(n)||'—')}</td></tr>\`,
+      empty: 'Nobody on the staff list yet.'
+    })}
+    <p class="cap">Emirates ID numbers are masked. <button class="btn ghost" id="eidAll" type="button" style="padding:2px 10px;font-size:12px">Show all</button>
+      &nbsp;They are held because payroll, insurance and MOHRE filings need them. They never appear in an email, on a team list, or on anyone's page but their own.</p>
+  </section>\`;`,
+`  \${(() => {
+    const roll = USERS.map(x => x.name);
+    const noYear = roll.filter(n => bdayOf(n) && !bdayYr(n)).length;
+    const none   = roll.filter(n => !bdayOf(n)).length;
+    return \`<section class="panel">
+    <header><h3>Dates of birth</h3>
+      <span class="hint">\${none || noYear
+        ? [none ? none + ' missing' : '', noYear ? noYear + ' without a year' : ''].filter(Boolean).join(' \\u00b7 ')
+        : 'all on file'}</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">\${edBar('bdate')}</span></header>
+    \${edConfirm('bdate')}\${edSaved('bdate')}
+    \${byCompany(roll.slice().sort((a, b) =>
+        (bdayToISO(bdayOf(a)) ? 1 : 0) - (bdayToISO(bdayOf(b)) ? 1 : 0) || a.localeCompare(b)), {
+      who: n => n,
+      cols: colsOf([34, 26, 40]),
+      head: \`<thead><tr><th>Employee</th><th>Date of birth</th><th>Turns</th></tr></thead>\`,
+      row: n => { const iso = bdayToISO(bdayOf(n));
+        const age = iso ? (() => { const t = HDATE();
+          let y = +t.slice(0,4) - +iso.slice(0,4);
+          if(t.slice(5) < iso.slice(5)) y--;
+          return y; })() : null;
+        return \`<tr>
+        <td class="nw">\${nm(n)}</td>
+        <td class="n nw">\${edCell('bdate', n,
+          x => \`<input class="ff dt" type="date"\${edAttr('bdate', n)} value="\${esc(x)}" max="\${esc(HDATE())}">\`,
+          x => x ? \`<span class="edread">\${esc(dayLabel(x))} \${esc(String(x).slice(0,4))}</span>\`
+                 : bdayOf(n) ? \`<span class="edread">\${esc(bdayDM(n))}</span> <span class="pill warn">no year</span>\`
+                 : '<span class="miss">not on file</span>')}</td>
+        <td style="color:var(--ink2)">\${age === null ? '\\u2014'
+          : age + ' this year' + (quietBday(n) ? ' \\u00b7 asked not to be announced' : '')}</td></tr>\`; },
+      empty: 'Nobody on the staff list yet.'
+    })}
+    <p class="cap">This comes off the passport, not off a form &mdash; a birth date one digit out is a gratuity
+      calculation and a visa application both quietly wrong, which is why it is yours to set and not theirs to
+      type. The people with nothing on file are at the top. <b>Colleagues see the day and the month only</b>;
+      the year is on this screen and on the person's own profile, nowhere else.</p>
+  </section>\`;
+  })()}\`;`,
+  'the console sets the birth date');
+
+/* =====================================================================
+   THE TWO SENTENCES THAT HAVE STOPPED BEING TRUE
+
+   The portal told staff, in as many words, that their passport, Emirates ID
+   and visa numbers were not stored anywhere in it. As of this build they are.
+   A promise that has quietly stopped holding is worse than one that was never
+   made, so both places it was made are rewritten here rather than left to be
+   found by whoever reads the page next.
+   ===================================================================== */
+
+app = swap(app,
+  `      <span class="hint">expiry dates only &mdash; no document numbers are held</span></header>`,
+  `      <span class="hint">accounts and you &mdash; nobody else</span></header>`,
+  'the staff documents page, the heading');
+
+app = swap(app,
+  `    <p class="cap">\${HR().docs && HR().docs[u] && HR().docs[u].sample ? '<b>Sample dates.</b> Send accounts the real expiry dates and these fill in. ':''}The portal holds the expiry date only. Passport, Emirates ID and visa numbers are deliberately not stored anywhere in it. Accounts will contact you before anything expires &mdash; you do not need to chase.</p>`,
+  `    <p class="cap">\${HR().docs && HR().docs[u] && HR().docs[u].sample ? '<b>Sample dates.</b> Send accounts the real expiry dates and these fill in. ':''}The portal holds the expiry date, the copy you upload, and &mdash; since September 2026 &mdash; the number itself, for your Emirates ID, passport, residency visa and labour card. They are held because payroll, insurance and the MOHRE filings need them, and because a gap in your file is better found here than at a renewal counter. <b>Only you and accounts can see them</b>, on any screen; they are masked even there, and they never go in an email or on a list. Accounts will contact you before anything expires &mdash; you do not need to chase.</p>`,
+  'the staff documents page, the caption');
+
+app = swap(app,
+  `    <p class="cap">Warning windows: visa and labour card 60 days, Emirates ID 45 days, passport 180 days, company documents 90 days. Employees upload their own copies and type their own expiry dates. <b>Emirates ID numbers</b> are held here for payroll, insurance and MOHRE, masked on screen and never sent in an email; <b>passport and visa numbers are not stored at all</b> &mdash; the uploaded copy is the record.</p>`,
+  `    <p class="cap">Warning windows: visa and labour card 60 days, Emirates ID 45 days, passport 180 days, company documents 90 days. Employees upload their own copies and type their own expiry dates. The four <b>reference numbers</b> &mdash; Emirates ID, passport, residency visa, labour card &mdash; are held on the grid below, masked until you ask for them, readable by the person themselves and by accounts and by nobody else. They never go in an email or on a team list.</p>`,
+  'the console, the same correction');
+
+/* =====================================================================
+   TASK 3 — THE STAFF DIRECTORY
+
+     'The staff directory should show all the fields from the my profile
+      section except for the documents.'
+
+   The card already existed; it showed four things out of twenty. What it was
+   missing was not a feature so much as a reason for anybody to fill the form
+   in — a profile nobody ever sees is a form, and people do not finish forms.
+   So the card now carries the whole of My profile bar the documents, which is
+   also what makes the completeness banner further down worth putting up.
+
+   One field is held back, and deliberately: the personal mobile. Avin's own
+   rule, written on the field itself, is that colleagues get the work number
+   and never the personal one. He has not withdrawn it, and "all the fields"
+   read as an instruction about the form rather than a reversal of that rule,
+   so it stays self-and-accounts and the screen says so out loud. It is one
+   line to change if he meant otherwise.
+   ===================================================================== */
+
+app = swap(app,
+`        <header><h3>Good to know</h3></header>
+        <div class="pad"><dl class="kv wide">
+          \${row('Home country', esc((p.homeCountry) || ''))}
+          \${row('Birthday', (bdayDM(who) && !quietBday(who))
+            ? esc(bdayDM(who)) + (SEESALL(who) && bdayYr(who)
+                ? ' <span style="color:var(--ink3)">' + esc(bdayYr(who)) + '</span>' : '') : '')}
+          \${row('With us', yw ? (yw.years < 1 ? \`Joined \${esc(yw.doj)}\` : \`\${yw.years} year\${yw.years===1?'':'s'} &middot; joined \${esc(yw.doj)}\`) : '')}
+          \${row('Next booked off', nl ? \`\${esc(reqLabel(nl.type))} &middot; \${esc(dayLabel(nl.from))}\${nl.from!==nl.to?' \\u2013 '+esc(dayLabel(nl.to)):''}\` : 'Nothing booked')}
+        </dl></div>
+      </section>
+    </div>
+    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Personal numbers, home addresses, documents and emergency contacts are not shown to colleagues \\u2014 accounts holds those.</p>\`;`,
+`        <header><h3>Good to know</h3></header>
+        <div class="pad"><dl class="kv wide">
+          \${row('Home country', esc((p.homeCountry) || ''))}
+          \${row('Birthday', (bdayDM(who) && !quietBday(who))
+            ? esc(bdayDM(who)) + (SEESALL(who) && bdayYr(who)
+                ? ' <span style="color:var(--ink3)">' + esc(bdayYr(who)) + '</span>' : '') : '')}
+          \${row('With us', yw ? (yw.years < 1 ? \`Joined \${esc(yw.doj)}\` : \`\${yw.years} year\${yw.years===1?'':'s'} &middot; joined \${esc(yw.doj)}\`) : '')}
+          \${row('Next booked off', nl ? \`\${esc(reqLabel(nl.type))} &middot; \${esc(dayLabel(nl.from))}\${nl.from!==nl.to?' \\u2013 '+esc(dayLabel(nl.to)):''}\` : 'Nothing booked')}
+          \${row('Gender', esc(p.gender || ''))}
+          \${row('Marital status', esc(p.marital || ''))}
+        </dl></div>
+      </section>
+    </div>
+
+    \${(() => {
+      /* The rest of their profile. Drawn only where there is something in it,
+         so a card does not fill up with a column of dashes reproaching
+         somebody who has not got round to it yet. */
+      const own  = SEESALL(who);
+      const home = [
+        ['Permanent address', p.homeAddr],
+        ['Contact there',     p.homeContact],
+        ['Their phone',       p.homePhone]
+      ].filter(x => String(x[1] || '').trim());
+      const emg = [
+        ['Name',            p.ecName],
+        ['Relationship',    p.ecRel],
+        ['Phone',           p.ecPhone],
+        ['Alternate phone', p.ecAlt]
+      ].filter(x => String(x[1] || '').trim());
+      const here = [
+        ['Address in the UAE', p.uaeAddr],
+        ['Personal email',     p.pemail ? \`<a href="mailto:\${esc(p.pemail)}">\${esc(p.pemail)}</a>\` : ''],
+        own ? ['Personal mobile', p.mobile
+                ? \`\${esc(p.mobile)} <span class="pill mute">not shown to colleagues</span>\` : '']
+            : null
+      ].filter(Boolean).filter(x => String(x[1] || '').trim());
+      const D = profDone(who);
+      const panel = (h, hint, list) => list.length ? \`<section class="panel">
+        <header><h3>\${h}</h3>\${hint ? \`<span class="hint">\${hint}</span>\` : ''}</header>
+        <div class="pad"><dl class="kv wide">\${list.map(x =>
+          \`<dt>\${esc(x[0])}</dt><dd>\${/^</.test(String(x[1])) ? x[1] : esc(x[1])}</dd>\`).join('')}
+        </dl></div></section>\` : '';
+      const any = here.length || home.length || emg.length;
+      if(!any) return \`<section class="panel"><div class="pad" style="padding:34px 24px;text-align:center;color:var(--ink3)">
+        \${esc(NM(who))} has not filled in a profile yet \\u2014 \${D.total - D.done} of \${D.total} things still to go.</div></section>\`;
+      return \`<div class="grid g3 gtop">
+        \${panel('Where they live', 'in the UAE', here)}
+        \${panel('Back home', '', home)}
+        \${panel('In an emergency', 'who we call', emg)}
+      </div>\`;
+    })()}
+    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Everyone in the group can see this page. Documents,
+      document numbers, pay and the year of somebody's birth are not on it and never are \\u2014 those are accounts' and the
+      person's own. Personal mobiles are not on it either: colleagues get the work number.
+      \${SEESALL(who) ? '' : \`If something here is wrong about you, it is yours to fix on <b>My profile</b>.\`}</p>\`;`,
+  'the card shows the whole profile, bar the documents');
+
+/* =====================================================================
+   THE COMPLETENESS BANNER
+
+     'Let me make them fill the whole data - Everyone has to be 100%'
+     'The banner should be good enough to start with!'
+
+   profDone() already counted this, for the ring on My profile. It is the same
+   count, moved to the one page everybody opens, and it says what is missing
+   rather than only that something is. It goes away by itself at a hundred per
+   cent, which is the only way a banner keeps meaning anything.
+   ===================================================================== */
+
+app = swap(app,
+`  const me = PROF(u) || {};
+  const initials = u.split(' ').map(x=>x[0]).slice(0,2).join('');
+  return \`
+  \${nudgeBanner(u)}`,
+`  const me = PROF(u) || {};
+  const initials = u.split(' ').map(x=>x[0]).slice(0,2).join('');
+  const PD = profDone(u);
+  const profBanner = (!PROF(u) || PD.pct >= 100) ? '' : (() => {
+    const n = PD.missing.length;
+    const first = PD.missing.slice(0, 3).map(esc).join(', ');
+    const rest  = n > 3 ? \` and \${n - 3} more\` : '';
+    return \`<div class="nudge\${PD.pct < 60 ? ' loud' : ''}">
+      <span class="ndot"></span>
+      <div><b>Your file is \${PD.pct}% complete</b>
+        <span>Still needed: \${first}\${rest}. It takes a couple of minutes, and it is what the
+          company has to show when somebody asks \\u2014 a visa renewal, an insurance claim, or a
+          hospital at two in the morning.</span></div>
+      <button class="btn" data-go="profile" type="button">Finish it</button>
+    </div>\`;
+  })();
+  return \`
+  \${profBanner}
+  \${nudgeBanner(u)}`,
+  'the completeness banner, on the page everybody opens');
+
+/* The two things the merge above left behind. A definition nothing renders and
+   a helper nothing calls are how a screen ends up with two ways to write one
+   field, so they go now rather than at the next reading. */
+app = swap(app,
+`  docdates: {
+    title: 'Document expiry dates',
+    now:  k => { const i = k.lastIndexOf('|');
+                 return (((HR().docs||{})[k.slice(0,i)] || {})[k.slice(i+1)]) || ''; },
+    name: k => { const i = k.lastIndexOf('|'), t = DOCTYPES().find(x => x.k === k.slice(i+1));
+                 return NM(k.slice(0,i)) + ' \\u2014 ' + ((t && t.label) || k.slice(i+1)); },
+    fmt:  v => v ? dayLabel(v) + ' ' + String(v).slice(0,4) : 'not on file',
+    save: d => window.__db.saveDocDates(d)
+  },
+  payline: {`,
+`  payline: {`,
+  'the expiry dates no longer have a table of their own');
+
+app = swap(app,
+`  const cell = (n, k) => {
+    const v = ((HR().docs||{})[n]||{})[k] || '';
+    const d = v ? dTo(v) : null;
+    const col = d===null ? '' : d<0 ? 'var(--bad)' : d<=60 ? 'var(--warn)' : '';
+    return \`<td class="r">\${edCell('docdates', n + '|' + k,
+      x => \`<input class="ff dt" type="date"\${edAttr('docdates', n + '|' + k)} value="\${esc(x)}"\${col?\` style="border-color:\${col};color:\${col}"\`:''}>\`,
+      x => x ? \`<span class="edread"\${col?\` style="color:\${col}"\`:''}>\${esc(dayLabel(x))} \${esc(String(x).slice(0,4))}</span>\`
+             : '<span class="edread none">\\u2014</span>')}</td>\`;
+  };
+`,
+``,
+  'and the cell that drew them is gone with the old grid');
+
+/* The hero already carried a chip saying the same thing, ten pixels under the
+   banner. Two of a message is not twice the nudge; it is a page you learn to
+   skim. The banner keeps it, because the banner says what is missing and takes
+   you there, and the chip goes. */
+app = swap(app,
+  `    if(D.total && D.pct < 100) todo.push([D.pct===0 ? 'Fill in your profile' : \`Your profile is \${D.pct}% done — \${D.missing.length} thing\${D.missing.length===1?'':'s'} left\`, 'profile', null]);`,
+  `    // the profile chip lives in the banner at the top of this page now`,
+  'and the same message is not made twice');
+
+/* =====================================================================
+   AND THE THIRD PLACE THE OLD PROMISE WAS MADE
+
+   My profile said it too, at the foot of Your documents: "Only your Emirates
+   ID number is held... Your passport and visa numbers are not typed or stored
+   anywhere." Same correction, and while the Employment card is open it may as
+   well show the person what IS on file about them, masked, behind the Show
+   button that was already there for the Emirates ID alone. That is the half of
+   Avin's sentence that needs no console at all:
+
+     'We can easily track the data missing and ask them to add or we add it
+      here.'
+
+   Read-only. The four come off a passport and a residency stamp and they are
+   accounts' to type, but somebody who can see that their labour card number is
+   blank, or wrong, can say so — which is the whole mechanism.
+   ===================================================================== */
+
+app = swap(app,
+`        \${eidOf(u) ? \`<dt>Emirates ID</dt><dd style="font-family:inherit;font-weight:600">
+          <span id="eidVal" data-full="\${esc(eidOf(u))}">\${esc(maskEID(eidOf(u)))}</span>
+          <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show</button></dd>\` : ''}
+      </dl>
+      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID</b> is held because payroll, insurance and MOHRE filings need it &mdash; only you and accounts can see it, it is never in an email, and it is masked until you press Show. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>`,
+`        \${(() => {
+          const REFS = [['eid','Emirates ID'],['passport','Passport'],['visa','Residence visa'],['labour','Labour card']];
+          const have = REFS.filter(([k]) => REFOF(u, k));
+          if(!have.length) return '';
+          return have.map(([k, l], i) => \`<dt>\${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
+            <span class="refval" data-full="\${esc(REFOF(u, k))}">\${esc(maskRef(REFOF(u, k)))}</span>\${i ? '' :
+            \` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>\`}</dd>\`).join('')
+            + (have.length < REFS.length ? \`<dt>Not on file</dt><dd style="font-family:inherit;color:var(--ink3)">\${
+                esc(REFS.filter(([k]) => !REFOF(u, k)).map(x => x[1]).join(', '))}</dd>\` : '');
+        })()}
+      </dl>
+      <p class="cap" style="padding:0;margin-top:14px">Bank details are not held here at all, and your salary breakdown is on your payslip rather than this page. Your <b>Emirates ID, passport, residency visa and labour card numbers</b> are held because payroll, insurance and the MOHRE filings need them &mdash; only you and accounts can see them, on any screen, they are never in an email, and they are masked until you press Show. They are accounts&rsquo; to type, off the documents themselves; if one of them is wrong or missing here, tell accounts. Gender and marital status are asked only because maternity and paternity leave depend on them.</p></div>`,
+  'the profile shows what is on file, and says who types it');
+
+// Show now unmasks all four rather than the one
+app = swap(app,
+`  const eb = document.getElementById('eidShow');
+  if(eb) eb.onclick = ()=>{ const v = document.getElementById('eidVal');
+    const shown = v.dataset.shown === '1';
+    v.textContent = shown ? maskEID(v.dataset.full) : v.dataset.full;
+    v.dataset.shown = shown ? '' : '1'; eb.textContent = shown ? 'Show' : 'Hide'; };`,
+`  const eb = document.getElementById('eidShow');
+  if(eb) eb.onclick = ()=>{
+    const on = eb.dataset.on === '1';
+    document.querySelectorAll('.refval').forEach(v => {
+      v.textContent = on ? maskRef(v.dataset.full) : v.dataset.full; });
+    eb.dataset.on = on ? '' : '1'; eb.textContent = on ? 'Show numbers' : 'Hide them'; };`,
+  'and Show uncovers all of them at once');
+
+app = swap(app,
+  `    <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. <b>Only your Emirates ID number is held, by accounts, because payroll and insurance need it. Your passport and visa numbers are not typed or stored anywhere</b> &mdash; the copy is the record, and only the expiry date is used, to warn accounts before it runs out. Your documents are visible to you and to accounts, nobody else.</p>`,
+  `    <p class="cap">Take a clear photo or scan of the whole page. PDF or image, up to about 5 MB each. The expiry date you type is what drives the reminders, so take it off the document rather than from memory. <b>The number on each of these is held too</b>, by accounts, off the copy you upload &mdash; that changed in September 2026, and the four are listed under Employment above. Your documents and your numbers are visible to you and to accounts, nobody else.</p>`,
+  'and the third place the old promise was made');
+
+/* A field the person cannot change should not be labelled "(optional)", which
+   reads as "we did not think it mattered". */
+app = swap(app,
+  `  const fld = f => \`<div class="field"><label for="pf_\${f.k}">\${esc(f.label)}\${f.req?'':' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(optional)</span>'}</label>`,
+  `  const fld = f => \`<div class="field"><label for="pf_\${f.k}">\${esc(f.label)}\${
+      f.theirs === false ? ' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(accounts sets this)</span>'
+      : f.req ? '' : ' <span style="text-transform:none;letter-spacing:0;color:var(--ink3)">(optional)</span>'}</label>`,
+  'and a field that is not yours is not "optional"');
+
+/* =====================================================================
+   TASK 4 — ATTENDANCE REGULARIZATION
+
+     'I sent in a request for attendance regularization. It has reached
+      nowhere but lying in my request list.'
+
+   That is the whole of it, and the mechanism underneath was never the
+   problem: the request was written, the limit was counted, and approving one
+   already writes the times onto the day and marks it regularized. What was
+   missing was every part that tells a person something happened. Nobody was
+   told a request had arrived — no bell, no line on anybody's home page — and
+   the person who sent it had to go and look at the box they sent it from.
+   A request that nobody is told about has, exactly as he says, reached
+   nowhere.
+
+   So the four things he listed:
+
+     - a Regularization tab on My attendance, which is where you go to see
+       your requests rather than finding them inside the form;
+     - the form staying parallel to Check in and out, with the day, the time
+       in and the time out on one line;
+     - the list as its own box below, the full width of the screen;
+     - and the button saying what it does rather than who it goes to.
+
+   And the one he did not list, because from where he sits it looks like the
+   others: the request now appears in the bell and on the home page of the
+   person who has to decide it, and its answer appears in the bell of the
+   person who asked.
+   ===================================================================== */
+
+app = swap(app,
+  `  revQ: '', refShow: false, dirWho: null,`,
+  `  revQ: '', refShow: false, dirWho: null, attTab: 'me',`,
+  'somewhere to hold which half of My attendance you are on');
+
+/* ---- the panel splits in two: the form, and the list ---- */
+app = swap(app,
+`function regularPanel(u){
+  const R = REG(), missing = regularDays(u), mine = R.mine;
+  if(!missing.length && !mine.length) return '';`,
+`/* The two halves of it. They were one panel, with the list of what you had
+   asked for tucked inside the box you ask from, which is why a request looked
+   like it had gone nowhere: the only place it appeared was the form. */
+function regularForm(u){
+  const R = REG(), missing = regularDays(u), mine = R.mine;
+  if(!missing.length && !mine.length) return '';`,
+  'the form is its own thing now');
+
+app = swap(app,
+`      <button class="btn" id="rgGo" type="button"\${ok?'':' disabled'}>Send to \${esc((adminName()||'accounts').split(' ')[0])}</button>`,
+`      <button class="btn" id="rgGo" type="button"\${ok?'':' disabled'}>Send request</button>`,
+  'the button says what it does, not who it goes to');
+
+/* the list comes out of the form's panel and becomes its own, full width */
+app = swap(app,
+`    \${mine.length ? \`<div class="tw"><table>
+      <thead><tr><th>Ref</th><th>Day</th><th class="n">In</th><th class="n">Out</th><th>Why</th><th>State</th><th></th></tr></thead>
+      <tbody>\${mine.map(r => \`<tr>
+        <td class="n">\${esc(r.id)}</td>
+        <td class="nw">\${esc(dayName(r.d))} \${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px">\${esc(r.reason)}\${r.note?' \\u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:\${RGCOL(r.status)}">\${esc(r.status)}</span></td>
+        <td>\${r.status==='Pending'?\`<button class="btn ghost sm" data-rgdrop="\${esc(r.uid)}" type="button">Withdraw</button>\`:''}</td>
+      </tr>\`).join('')}</tbody></table></div>\` : ''}
+  </section>\`;
+}`,
+`  </section>\`;
+}
+
+/* Everything you have ever asked for, and what came of it. Its own box, the
+   full width of the screen, because this is the answer to "where did my
+   request go" and an answer should not be a column inside a form. */
+function regularList(u){
+  const mine = REG().mine;
+  return \`<section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Your requests</h3>
+      <span class="hint">\${mine.length
+        ? mine.filter(r => r.status === 'Pending').length + ' waiting \\u00b7 ' + mine.length + ' in all'
+        : 'nothing asked for yet'}</span></header>
+    \${mine.length ? \`<div class="tw"><table class="invtable">
+      <thead><tr><th>Ref</th><th>Day</th><th class="n">In</th><th class="n">Out</th><th>Why</th>
+        <th>State</th><th>Decided</th><th></th></tr></thead>
+      <tbody>\${mine.map(r => \`<tr>
+        <td class="n">\${esc(r.id)}</td>
+        <td class="nw">\${esc(dayName(r.d))} \${esc(dayLabel(r.d))}</td>
+        <td class="n">\${esc(r.in)||'\\u2014'}</td><td class="n">\${esc(r.out)||'\\u2014'}</td>
+        <td style="color:var(--ink2);font-size:12.5px"\${full(r.reason + (r.note ? ' \\u2014 ' + r.note : ''))}>\${
+          esc(r.reason)}\${r.note?' \\u00b7 <i>'+esc(r.note)+'</i>':''}</td>
+        <td><span class="dpill" style="--dc:\${RGCOL(r.status)}">\${esc(r.status)}</span></td>
+        <td class="n nw">\${r.decided ? esc(dayLabel(r.decided)) : '\\u2014'}</td>
+        <td>\${r.status==='Pending'?\`<button class="btn ghost sm" data-rgdrop="\${esc(r.uid)}" type="button">Withdraw</button>\`:''}</td>
+      </tr>\`).join('')}</tbody></table></div>\`
+      : \`<div class="pad" style="padding:34px 24px;color:var(--ink3)">You have not asked to fix a day yet.
+          A day with no check-in, or one you forgot to check out of, can be corrected here \\u2014 twice a month.</div>\`}
+    <p class="cap">Two a month, counted by the database rather than by this screen. A declined request costs
+      nothing. Once one is approved the times go straight onto that day, so the hours and the working-days
+      figure that payroll reads move with it \\u2014 there is nothing further for you to do.</p>
+  </section>\`;
+}`,
+  'and the list is its own box, the full width of the screen');
+
+/* ---- the tab, and what sits under each half ---- */
+app = swap(app,
+`function vAttend(){
+  const u = state.user, today = HDATE();`,
+`function attTabs(){
+  const T = [['me','My attendance'], ['reg','Regularization']];
+  const cur = T.some(x => x[0] === state.attTab) ? state.attTab : 'me';
+  const wait = REG().mine.filter(r => r.status === 'Pending').length;
+  return {cur, bar: \`<div class="seg segbig" id="attSeg">\${T.map(([v, l]) =>
+    \`<button data-att="\${v}" aria-pressed="\${cur === v}" type="button">\${esc(l)}\${
+      v === 'reg' && wait ? \` <span class="pill warn" style="margin-left:6px;padding:0 7px">\${wait}</span>\` : ''
+    }</button>\`).join('')}</div>\`};
+}
+
+function vAttend(){
+  const u = state.user, today = HDATE();`,
+  'the two halves of My attendance');
+
+app = swap(app,
+`  return \`
+  \${nudgeBanner(u)}
+  <div class="strip">
+    <div class="stat"><span class="k">Today &middot; \${esc(dayName(today))} \${esc(dayLabel(today))}</span>`,
+`  const AT = attTabs();
+  /* The list is on both halves on purpose. On Regularization it is the point
+     of the page; under the form on My attendance it is the answer to "did
+     that go anywhere", four inches from where the question was asked. */
+  if(AT.cur === 'reg') return \`
+  \${nudgeBanner(u)}
+  \${AT.bar}
+  \${regularForm(u) || \`<section class="panel"><div class="pad" style="padding:40px 24px;color:var(--ink2)">
+    <b style="display:block;font-size:16px;margin-bottom:6px;color:var(--ink)">Nothing to fix</b>
+    Every working day since \${esc(dayLabel(REG().from || today))} has a check-in and a check-out.
+    If you spot one that does not, it will appear here.</div></section>\`}
+  \${regularList(u)}\`;
+
+  return \`
+  \${nudgeBanner(u)}
+  \${AT.bar}
+  <div class="strip">
+    <div class="stat"><span class="k">Today &middot; \${esc(dayName(today))} \${esc(dayLabel(today))}</span>`,
+  'the Regularization half');
+
+app = swap(app,
+`  \${regularPanel(u) || '<div></div>'}
+  </div>`,
+`  \${regularForm(u) || '<div></div>'}
+  </div>
+
+  \${REG().mine.length ? regularList(u) : ''}`,
+  'the form stays beside Check in and out, and the list goes under the pair');
+
+app = swap(app,
+  `  document.querySelectorAll('#attMonthSeg button').forEach(b=>b.onclick=()=>{ state.attMonth=b.dataset.am; render(); });`,
+  `  document.querySelectorAll('#attMonthSeg button').forEach(b=>b.onclick=()=>{ state.attMonth=b.dataset.am; render(); });
+  document.querySelectorAll('#attSeg button').forEach(b=>b.onclick=()=>{
+    state.attTab=b.dataset.att; state.rgSent=false; render(); window.scrollTo({top:0}); });`,
+  'and the tab is wired');
+
+/* ---- and the half that was actually missing ---- */
+app = swap(app,
+`  (H.loans||[]).filter(x=>x.status==='Pending' && x.approver===u).forEach(x=>
+    add('loan-'+x.id, \`\${x.who} — advance of AED \${money(x.amount,0)}\`,
+      \`\${x.months} months at \${money(x.monthly,0)} · \${x.why}\`, 'loans'));`,
+`  (H.loans||[]).filter(x=>x.status==='Pending' && x.approver===u).forEach(x=>
+    add('loan-'+x.id, \`\${x.who} — advance of AED \${money(x.amount,0)}\`,
+      \`\${x.months} months at \${money(x.monthly,0)} · \${x.why}\`, 'loans'));
+
+  /* Regularizations. Accounts decides them, so accounts is told one has
+     arrived — this is the line whose absence made a sent request look like a
+     request that went nowhere. */
+  if(adm) (REG().rows || []).filter(x => x.status === 'Pending').forEach(x =>
+    add('rg-'+x.id, \`\${NM(x.who)} — fix \${dayLabel(x.d)}\`,
+      \`\${x.in || '—'} to \${x.out || '—'} · \${x.reason}\`, 'regular', 'warn'));
+
+  /* And the person who asked is told the same two things they are told about
+     every other request they make: that it is with somebody, and what came
+     of it. */
+  (REG().mine || []).forEach(x => {
+    if(x.status === 'Pending')
+      add('rgmine-'+x.id, \`Your \${dayLabel(x.d)} fix is with accounts\`,
+        \`\${x.in || '—'} to \${x.out || '—'} · you will see the answer on My attendance\`, 'attend', 'warn');
+    else if(x.status === 'Approved')
+      add('rgok-'+x.id, \`\${dayLabel(x.d)} has been corrected\`,
+        \`\${x.in || '—'} to \${x.out || '—'} is on the record now\${x.note ? ' · ' + x.note : ''}\`, 'attend', 'good');
+    else if(x.status === 'Declined')
+      add('rgno-'+x.id, \`Your \${dayLabel(x.d)} fix was turned down\`,
+        x.note || 'No reason was given', 'attend', 'bad');
+  });`,
+  'a regularization is told to the person who decides it, and its answer to the person who asked');
+
+/* The bell is not the home page. A regularization sitting unread is the kind
+   of thing somebody notices on the way past rather than by opening a bell, so
+   accounts gets a chip on the hero as well — the same place the payslip and
+   the payroll approval already sit. */
+app = swap(app,
+`  if(!adm && payrollRowFor(u) && PAYST()==='closed') todo.push([\`Your \${DATA.payroll.month} payslip is ready\`, 'myslip', null]);`,
+`  if(!adm && payrollRowFor(u) && PAYST()==='closed') todo.push([\`Your \${DATA.payroll.month} payslip is ready\`, 'myslip', null]);
+  {
+    const rg = (REG().rows || []).filter(x => x.status === 'Pending');
+    if(adm && rg.length) todo.push([
+      rg.length === 1 ? \`\${NM(rg[0].who)} wants \${dayLabel(rg[0].d)} corrected\`
+                      : \`\${rg.length} attendance fixes waiting on you\`, 'regular', true]);
+    const my = (REG().mine || []).filter(x => x.status === 'Pending');
+    if(!adm && my.length) todo.push([
+      my.length === 1 ? \`Your \${dayLabel(my[0].d)} fix is with accounts\`
+                      : \`\${my.length} attendance fixes are with accounts\`, 'attend', null]);
+  }`,
+  'and a waiting fix is on the home page, not only in the bell');
+
+/* =====================================================================
+   STARTING THE NEXT MONTH
+
+     'I sent letter of salary revision to Nissa - It went from my console.
+      But never reached payroll as i cannot open September run'
+
+   Both halves of that are right, and the second one is a dead button. The
+   revision did everything it should: the letter went out, the salary moved
+   from its effective date, and it is on the person's record. It has not shown
+   up on a payroll line because a line's salary is written when the month is
+   GENERATED — that is deliberate, it is what stops a revision quietly moving
+   a month that has already been approved — and September had never been
+   generated.
+
+   It had never been generated because nothing in the portal could generate
+   it. "Start the Sep 2026 run" set state.payRun to the string 'sep', which is
+   not the key of any run (they are keyed '2026-09'), so the payroll screen
+   quietly put him back on August. Behind it sat vPayrollNext: a screen from
+   the prototype, driven by a counter in local state, offering to "Upload the
+   September file" — an upload that had not existed since payroll moved into
+   the database. It was never reachable and it is gone here.
+
+   In its place the button does the one thing it always claimed to: calls
+   generate_run for the month after the last one. That builds the lines from
+   what the portal holds today, which is where Nissa's new salary comes in.
+   ===================================================================== */
+
+app = swap(app,
+`function runSeg(){
+  const runs = (DATA.payroll.runs || []);
+  if(!runs.length) return '';
+  const here = state.payRun || (runs[0] && runs[0].key);
+  return \`<div class="seg" id="runSeg" style="margin-left:18px">
+    \${runs.slice().sort((a,b)=>a.key<b.key?-1:1).map(r=>
+      \`<button data-run="\${esc(r.key)}" aria-pressed="\${here===r.key}" type="button">\${
+        esc(MKEY(r.key))} &middot; \${esc(r.status)}</button>\`).join('')}
+  </div>\`;
+}`,
+`/* The month after the last one there is. Runs are keyed '2026-09', and this
+   is the only place that arithmetic happens. */
+function nextRunKey(){
+  const keys = (DATA.payroll.runs || []).map(r => r.key).sort();
+  const last = keys[keys.length - 1];
+  if(!last) return '';
+  const [y, m] = last.split('-').map(Number);
+  return m === 12 ? \`\${y + 1}-01\` : \`\${y}-\${String(m + 1).padStart(2, '0')}\`;
+}
+/* A month can be started once the one before it is closed. Anything else is
+   two open months at a time, which is how a figure gets typed into the wrong
+   one. The reason is returned rather than a bare false, because a button that
+   is simply absent teaches nobody anything. */
+function nextRunWhy(){
+  const runs = (DATA.payroll.runs || []);
+  if(!runs.length) return 'There is no payroll in the portal yet.';
+  const open = runs.filter(r => r.status !== 'closed')
+                   .sort((a, b) => a.key < b.key ? -1 : 1);
+  if(open.length) return \`\${MKEY(open[0].key)} is still \${open[0].status}. Close it and the next month can be started.\`;
+  return '';
+}
+function runSeg(){
+  const runs = (DATA.payroll.runs || []);
+  if(!runs.length) return '';
+  const here = state.payRun || (runs[0] && runs[0].key);
+  const nk = nextRunKey();
+  return \`<div class="seg" id="runSeg" style="margin-left:18px">
+    \${runs.slice().sort((a,b)=>a.key<b.key?-1:1).map(r=>
+      \`<button data-run="\${esc(r.key)}" aria-pressed="\${here===r.key}" type="button">\${
+        esc(MKEY(r.key))} &middot; \${esc(r.status)}</button>\`).join('')}
+    \${nk && canUpload(state.user) && !nextRunWhy()
+      ? \`<button id="payNext" type="button" title="Build the \${esc(MKEY(nk))} lines from what the portal holds today">+ \${esc(MKEY(nk))}</button>\`
+      : ''}
+  </div>\`;
+}`,
+  'the next month is one click from any run, and the arithmetic lives in one place');
+
+/* The button on a closed month does the same thing, and says what it will do
+   rather than naming a month that was written into the page. */
+app = swap(app,
+  `        \${st==='closed' ? \`\${isPrep?\`<button class="btn" id="payNext" type="button">Start the \${esc(NEXTRUN.label)} run</button><button class="btn ghost" id="paySlips" type="button">Payslips</button>\`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED \${money(staffNet,2)}, and \${staff.length} payslips released to staff</span>\` : ''}`,
+  `        \${st==='closed' ? \`\${isPrep?\`\${nextRunKey() && !nextRunWhy()
+            ? \`<button class="btn" id="payNextBtn" type="button">Start the \${esc(MKEY(nextRunKey()))} run</button>\` : ''}<button class="btn ghost" id="paySlips" type="button">Payslips</button>\`:''}<span style="color:var(--good);font-size:13px">Paid &mdash; AED \${money(staffNet,2)}, and \${staff.length} payslips released to staff</span>\` : ''}
+        \${isPrep && st==='closed' && nextRunKey() && !nextRunWhy() ? \`<span style="color:var(--ink3);font-size:12.5px">Builds the \${esc(MKEY(nextRunKey()))} lines from the salaries, joining dates and leave the portal holds today &mdash; including any revision letter that has gone out since.</span>\` : ''}`,
+  'and the closed month offers the real thing');
+
+// and it calls the database rather than setting a key that matches no run
+app = swap(app,
+  `    on('payNext',()=>{state.payRun='sep';render();});`,
+  `    /* This set state.payRun to 'sep'. No run is keyed 'sep' — they are keyed
+       '2026-09' — so the payroll screen fell through its own guard and put you
+       back on the month you were already looking at. Nothing happened, twice,
+       and there was no error to go on. */
+    { const go = async (b) => {
+        const k = nextRunKey(); if(!k) return;
+        b.disabled = true;
+        const made = await window.__db.generateRun(k);
+        if(made) state.payRun = k;
+        render(); };
+      ['payNext', 'payNextBtn'].forEach(id => {
+        const b = document.getElementById(id); if(b) b.onclick = () => go(b); }); }`,
+  'and the button generates the month');
+
+/* The prototype screen behind it, and the local counter that drove it. */
+app = cutout(app,
+  `function vPayrollNext(){`,
+  `// The newest run's status, read from the database every time rather than`,
+  `/* vPayrollNext lived here: a September screen driven by state.sepStage,
+   offering to upload a payroll spreadsheet. Payroll moved into the database
+   and the screen was never wired to anything — nothing called it, and the one
+   button that pointed at it set a key no run has. Removed rather than left
+   for somebody to find and believe. */
+
+// The newest run's status, read from the database every time rather than`,
+  'the September mock is gone');
+
+app = swap(app,
+  `const NEXTRUN = {key:'sep', label:'Sep 2026', month:'September 2026', proc:'Sep-2026'};`,
+  ``,
+  'and the month that was written into the page');
+
+app = swap(app,
+  `  payRun: 'aug', sepStage: 0, slipOpen: null, mode: 'staff',`,
+  `  payRun: null, slipOpen: null, mode: 'staff',`,
+  'and the state it kept');
+
+app = swap(app,
+`    if(role==='owner' && state.sepStage===2)
+      add('pr-sep', \`Payroll \${NEXTRUN.month} needs your approval\`, 'Uploaded by Avin, waiting on you', 'payroll', 'warn', {run:'sep'});`,
+  `    // a run waiting on the owner is already covered by pr-approve above,
+    // which reads the run's real status rather than a counter on this screen`,
+  'and the notification it raised');
+
+/* The two email previews named the month from the same constant. They read it
+   off the run that is actually next now. */
+app = swap(app,
+`    case 'pay-sub': return mailShell('Miraziz Makhamatzhanov &lt;his work email&gt;',
+      \`\${esc(NEXTRUN.month)} payroll needs your approval\`,
+      \`\${P(\`Avin has submitted the <b>\${esc(NEXTRUN.month)}</b> payroll.\`)}`,
+`    case 'pay-sub': return (() => { const M = MKEY(DATA.payroll.monthKey || nextRunKey() || '2026-01');
+      return mailShell('Miraziz Makhamatzhanov &lt;his work email&gt;',
+      \`\${esc(M)} payroll needs your approval\`,
+      \`\${P(\`Avin has submitted the <b>\${esc(M)}</b> payroll.\`)}`,
+  'the submitted-for-approval email');
+
+app = swap(app,
+`      \${P(\`Open <b>Payroll</b> in the accounts console to approve it or send it back with a note. Payslips stay hidden from staff until you approve and Avin releases the payment.\`)}\`);
+
+    case 'pay-back': return mailShell('Avin Mascarenhas &lt;his work email&gt;',
+      \`Miraziz sent the \${esc(NEXTRUN.month)} payroll back\`,
+      \`\${P(\`Miraziz has sent the <b>\${esc(NEXTRUN.month)}</b> payroll back rather than approving it.\`)}`,
+`      \${P(\`Open <b>Payroll</b> in the accounts console to approve it or send it back with a note. Payslips stay hidden from staff until you approve and Avin releases the payment.\`)}\`); })();
+
+    case 'pay-back': return (() => { const M = MKEY(DATA.payroll.monthKey || nextRunKey() || '2026-01');
+      return mailShell('Avin Mascarenhas &lt;his work email&gt;',
+      \`Miraziz sent the \${esc(M)} payroll back\`,
+      \`\${P(\`Miraziz has sent the <b>\${esc(M)}</b> payroll back rather than approving it.\`)}`,
+  'and the sent-back one');
+
+app = swap(app,
+`      \${P(\`Fix it and submit again. Nothing has been paid and no payslip is visible to anyone.\`)}\`);`,
+`      \${P(\`Fix it and submit again. Nothing has been paid and no payslip is visible to anyone.\`)}\`); })();`,
+  'closing the second of them');
+
+// the three handlers that drove the counter behind the screen that is gone
+app = swap(app,
+`    on('sepUpload',()=>{state.sepStage=1;render();});
+    on('sepReset',()=>{state.sepStage=0;render();});
+    on('sepSubmit',()=>{state.sepStage=2;render();});`,
+  ``,
+  'and the three handlers behind it');
+
+/* The month switcher was on the draft screen and on Payslips, but not on the
+   register — which is what a closed month shows. So once a month was closed
+   there was no way to move between months at all, and no way to see that
+   another one existed. */
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>`,
+`  <section class="panel">
+    <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
+      \${runSeg()}`,
+  'the month switcher is on the register too');
+
+/* =====================================================================
+   TWO SALARIES, ONE PERSON
+
+     'Miraziz needs to receive salary from POA and Corplex - 25k each.
+      This is missing.'
+
+   It was missing from the screens and had always been right in the database.
+   salary_parts is keyed (employee, effective_from, company); the payroll
+   generator loops over the companies a person is paid by and builds a line
+   for each, and it has been building Miraziz two lines of 25,000 all along.
+   What could not show it was map.js, which filed salary under the person's
+   name alone — so the second company overwrote the first and every screen
+   that says "salary" showed one of the two. That is fixed at the source; what
+   follows is the screens learning to read it.
+
+   The dangerous part was quieter. Issuing a revision sent no company at all,
+   which for a person paid by two companies matches neither of their rows: it
+   would have written a THIRD salary row against a blank company, and the
+   generator would then have paid him three times. So the form asks which
+   company the revision is for whenever there is more than one.
+   ===================================================================== */
+
+app = swap(app,
+`function salParts(name){
+  const p = (DATA.master.parts||{})[name];
+  if(p) return {salary:p.salary, basic:p.basic, allow:p.allow, assumed:false, from:p.from||'', src:p.src||''};
+  const r = payrollRowFor(name) || {};
+  const days = r.days || 30;
+  const salary = Math.round((r.salary||0) * 30 / days * 100)/100;
+  const basic = Math.round(salary * DATA.master.basicPct * 100)/100;
+  return {salary, basic, allow: Math.round((salary-basic)*100)/100, assumed:true, from:'', src:''};
+}`,
+`/* What is on file for somebody. The three headline figures are the total
+   across every company that pays them; \`co\` is the breakdown, one entry per
+   company, and \`ahead\` is anything already agreed but not yet in force. For
+   the great majority \`co\` has one entry and nothing else changes. */
+function salParts(name){
+  const p = (DATA.master.parts||{})[name];
+  if(p) return {salary:p.salary, basic:p.basic, allow:p.allow, assumed:false,
+                from:p.from||'', src:p.src||'',
+                co: p.co||[], ahead: p.ahead||[], multi: !!p.multi};
+  const r = payrollRowFor(name) || {};
+  const days = r.days || 30;
+  const salary = Math.round((r.salary||0) * 30 / days * 100)/100;
+  const basic = Math.round(salary * DATA.master.basicPct * 100)/100;
+  return {salary, basic, allow: Math.round((salary-basic)*100)/100, assumed:true,
+          from:'', src:'', co:[], ahead:[], multi:false};
+}
+/* The company a revision is for. One company and it is decided; more than one
+   and the form has to ask, because a revision against the wrong one writes a
+   salary row that belongs to nobody. */
+const salCos = n => (salParts(n).co || []);
+function revCo(){
+  const g = state.revForm || {}, cos = salCos(g.who);
+  if(!cos.length) return '';
+  return cos.some(c => c.company === g.co) ? g.co : cos[0].company;
+}
+const revCoPart = () => (salCos((state.revForm||{}).who)
+  .find(c => c.company === revCo()) || salParts((state.revForm||{}).who));`,
+  'salary is read per company now');
+
+/* The form asks which company, and reads that company's figures back. */
+app = swap(app,
+  `        <div class="field"><label for="rvEff">With effect from</label><input id="rvEff" type="date" value="\${esc(g.eff)}"></div>`,
+  `        \${(() => { const cos = salCos(g.who);
+          if(cos.length < 2) return '';
+          return \`<div class="field"><label for="rvCo">Which company</label>
+            <select id="rvCo">\${cos.map(c => \`<option value="\${esc(c.company)}"\${
+              c.company === revCo() ? ' selected' : ''}>\${esc(c.label)} &mdash; \${money(c.salary,2)} on file</option>\`).join('')}</select>
+            <span class="pfhint">\${esc(nm2(g.who))} is paid by \${cos.length} companies. A revision moves
+              one of them; the other is untouched.</span></div>\`; })()}
+        <div class="field"><label for="rvEff">With effect from</label><input id="rvEff" type="date" value="\${esc(g.eff)}"></div>`,
+  'and the form asks which one');
+
+// "On file now" is that company's figures, not a total across two of them
+app = swap(app,
+`        \${g.who?\`<dl class="kv">
+          <dt>On file now</dt><dd>\${money(cur.salary,2)}</dd>
+          <dt>&mdash; basic</dt><dd>\${money(cur.basic,2)}\${cur.assumed?' <span class="pill warn" style="margin-left:6px">assumed</span>':''}</dd>
+          <dt>&mdash; other allowance</dt><dd>\${money(cur.allow,2)}</dd>`,
+`        \${g.who?\`<dl class="kv">
+          \${cur.multi ? \`<dt>This revision moves</dt><dd><b>\${esc((salCos(g.who).find(c=>c.company===revCo())||{}).label || '')}</b></dd>\` : ''}
+          <dt>On file now</dt><dd>\${money(one.salary,2)}</dd>
+          <dt>&mdash; basic</dt><dd>\${money(one.basic,2)}\${cur.assumed?' <span class="pill warn" style="margin-left:6px">assumed</span>':''}</dd>
+          <dt>&mdash; other allowance</dt><dd>\${money(one.allow,2)}</dd>
+          \${cur.multi ? \`<div class="sep"></div><dt>Left alone</dt><dd style="color:var(--ink2)">\${
+            salCos(g.who).filter(c=>c.company!==revCo()).map(c=>esc(c.label)+' \\u00b7 '+money(c.salary,2)).join('<br>')}</dd>\` : ''}`,
+  'and reads back the company being moved');
+
+app = swap(app,
+  `    const cur = g.who ? salParts(g.who) : null;
+    const nb = +g.basic || 0, na = +g.allow || 0, nt = Math.round((nb+na)*100)/100;
+    const ok = g.who && g.eff && nb > 0;
+    const rise = (cur && nt) ? Math.round((nt - cur.salary)*100)/100 : 0;`,
+  `    const cur = g.who ? salParts(g.who) : null;
+    /* The figures the revision is measured against: the chosen company's, not
+       the total. A 25,000 rise on a man paid 25,000 by each of two companies
+       is a 100% rise on the half being moved, not 50% on the pair. */
+    const one = g.who ? revCoPart() : null;
+    const nb = +g.basic || 0, na = +g.allow || 0, nt = Math.round((nb+na)*100)/100;
+    const ok = g.who && g.eff && nb > 0;
+    const rise = (one && nt) ? Math.round((nt - one.salary)*100)/100 : 0;`,
+  'and the rise is measured against the half being moved');
+
+app = swap(app,
+  `          \${nt?\`<dt>Change</dt><dd style="color:var(--\${rise>0?'good':rise<0?'bad':'ink2'})">\${rise>0?'+':''}\${money(rise,2)}\${cur.salary?' · '+pct(rise/cur.salary,1):''}</dd>\`:''}`,
+  `          \${nt?\`<dt>Change</dt><dd style="color:var(--\${rise>0?'good':rise<0?'bad':'ink2'})">\${rise>0?'+':''}\${money(rise,2)}\${one.salary?' · '+pct(rise/one.salary,1):''}</dd>\`:''}`,
+  'and so is the percentage');
+
+// the company goes with the request
+app = swap(app,
+`    const r = await window.__db.issueRevision({
+      emp: (HR().ids||{})[who], basic: +g.basic||0, allow: +g.allow||0,
+      from: g.eff, reason: g.reason || 'Salary revision'});
+    if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:''}; }`,
+`    const r = await window.__db.issueRevision({
+      emp: (HR().ids||{})[who], basic: +g.basic||0, allow: +g.allow||0,
+      from: g.eff, reason: g.reason || 'Salary revision',
+      /* Without this a revision for somebody paid by two companies matched
+         neither of their salary rows and wrote a third against a blank
+         company, which the payroll generator would then have paid as well. */
+      company: revCo()});
+    if(r){ state.revSent = who; state.revForm = {who:'', eff:'', basic:'', allow:'', co:''}; }`,
+  'and the revision is written against the right company');
+
+app = swap(app,
+  `  { const q = document.getElementById('revQ');`,
+  `  { const c = document.getElementById('rvCo');
+    if(c) c.onchange = () => { state.revForm.co = c.value; render(); }; }
+  { const q = document.getElementById('revQ');`,
+  'and the selector is wired');
+
+app = swap(app,
+  `  const g = state.revForm || (state.revForm = {who:'', eff:'', basic:'', allow:''});`,
+  `  const g = state.revForm || (state.revForm = {who:'', eff:'', basic:'', allow:'', co:''});`,
+  'and the form remembers it');
+
+/* Salary on file: a line per company, so two 25,000s read as two 25,000s
+   rather than as one of them. */
+app = swap(app,
+`    \${byCompany(USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
+        .sort((a,b)=>a.localeCompare(b)).map(n=>({n, p:salParts(n)})), {
+      who: r => r.n,
+      cols: colsOf([22, 13, 15, 13, 12, 25]),
+      note: rs => \`\${money(rs.reduce((a,r)=>a+r.p.salary,0),2)} on file\`,
+      head: \`<thead><tr><th>Employee</th><th class="r">Basic</th><th class="r">Other allowance</th>
+        <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>\`,
+      row: r => \`<tr>
+        <td>\${nm(r.n)}</td>
+        <td class="n r">\${money(r.p.basic,2)}</td><td class="n r">\${money(r.p.allow,2)}</td>
+        <td class="n r netcol">\${money(r.p.salary,2)}</td>
+        <td class="n r" style="color:var(--ink2)">\${r.p.salary?pct(r.p.basic/r.p.salary,1):'\\u2014'}</td>
+        <td style="color:var(--ink2)"\${full(r.p.from?'From '+r.p.from:(r.p.src||''))}>\${r.p.from?esc('From '+r.p.from):esc(r.p.src||'\\u2014')}\${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}</td></tr>\`,
+      empty: 'Nothing on file.'`,
+`    \${byCompany(USERS.map(x=>x.name).filter(n=>(DATA.master.parts||{})[n])
+        .sort((a,b)=>a.localeCompare(b))
+        /* One line per company that pays them. Somebody paid by two shows
+           twice, which is the point: a single row of 50,000 would be a figure
+           that appears on no payslip and in no bank file. */
+        .flatMap(n => { const p = salParts(n);
+          return (p.co && p.co.length > 1) ? p.co.map(c => ({n, p, c}))
+                                           : [{n, p, c: (p.co||[])[0] || null}]; }), {
+      who: r => r.n,
+      cols: colsOf([22, 13, 15, 13, 12, 25]),
+      note: rs => \`\${money(rs.reduce((a,r)=>a + (r.c ? r.c.salary : r.p.salary), 0),2)} on file\`,
+      head: \`<thead><tr><th>Employee</th><th class="r">Basic</th><th class="r">Other allowance</th>
+        <th class="r">Total</th><th class="r">Basic share</th><th>Where it came from</th></tr></thead>\`,
+      row: r => { const v = r.c || r.p; return \`<tr>
+        <td>\${nm(r.n)}\${r.p.multi && r.c ? \` <span class="pill mute">\${esc(r.c.label)}</span>\` : ''}</td>
+        <td class="n r">\${money(v.basic,2)}</td><td class="n r">\${money(v.allow,2)}</td>
+        <td class="n r netcol">\${money(v.salary,2)}</td>
+        <td class="n r" style="color:var(--ink2)">\${v.salary?pct(v.basic/v.salary,1):'\\u2014'}</td>
+        <td style="color:var(--ink2)"\${full(v.from?'From '+v.from:(v.src||''))}>\${v.from?esc('From '+v.from):esc(v.src||'\\u2014')}\${r.p.assumed?' <span class="pill warn" style="margin-left:6px">assumed 60/40</span>':''}\${
+          (r.p.ahead||[]).filter(a => !r.c || a.company === r.c.company).map(a =>
+            \` <span class="pill warn" title="already agreed, not yet in force">from \${esc(a.from)} \\u00b7 \${money(a.salary,2)}</span>\`).join('')}</td></tr>\`; },
+      empty: 'Nothing on file.'`,
+  'and the salary-on-file table shows a line per company');
+
+/* =====================================================================
+   WHO IS ON PAYROLL
+
+     'Mukhamad Musulmonkulov should be on payroll - just like Fakriddin'
+
+   Nothing was broken. He is on the staff list, active, in Sales, recorded
+   with a payroll basis of 'off' and no salary on file, so the generator has
+   correctly skipped him every month. Fakhridin sits beside him on 'commission'
+   with 6,000 on file. Two men doing the same job, recorded two different
+   ways, and no screen anywhere that showed the difference or let anybody fix
+   it: payroll basis could only ever be set in the moment somebody was added
+   to the staff list, and never again.
+
+   So this is the screen. It shows every active person, whether they are paid,
+   how, and what is on file — and it lets accounts change the first two, and
+   record an opening salary where there is none.
+
+   What it deliberately does NOT do is let anybody type over a salary that
+   exists. That is a revision letter's job, and the database refuses it here
+   whatever this screen offers. A figure somebody is paid should always have a
+   document behind it.
+   ===================================================================== */
+
+app = swap(app,
+`  {id:'revisions',  group:'con', sec:'pay',    label:'Revisions',      title:'Salary revisions', gate:canUpload, con:true},`,
+`  {id:'revisions',  group:'con', sec:'pay',    label:'Revisions',      title:'Salary revisions', gate:canUpload, con:true},
+  {id:'onpay',      group:'con', sec:'pay',    label:'On payroll',     title:'Who is on payroll', gate:canUpload, con:true},`,
+  'a tab for who is on payroll, beside the others about pay');
+
+app = swap(app,
+`const PAGEVIEW = {};
+Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });`,
+`const PAGEVIEW = {};
+Object.keys(PAGE).forEach(id => { PAGEVIEW[id] = () => pageOf(id); });
+/* Not a cut-out of a bigger screen: its own view, so it joins the map the
+   router reads rather than the list of things carved out of a page. */
+PAGEVIEW.onpay = () => vOnPayroll();`,
+  'and the router finds it');
+
+/* The table itself, and the two things it can change. */
+app = swap(app,
+`function vGratuity(){`,
+`const BASIS = {salaried: 'A fixed salary', commission: 'Commission only', off: 'Not on payroll'};
+const BASISOF = n => { const e = USERS.find(x => x.name === n) || {};
+  return e.payBasis || (HR().payBasis || {})[n] || 'salaried'; };
+
+/* The four columns Avin reads down: who, whether they are paid, how much is
+   on file, and where that figure came from. Somebody paid by two companies
+   gets a line each, for the same reason the salary-on-file table does. */
+function vOnPayroll(){
+  const roll = USERS.map(x => x.name).slice().sort((a, b) => a.localeCompare(b));
+  const rowsOf = n => { const p = salParts(n), cos = p.co || [];
+    return cos.length ? cos.map(c => ({n, p, c})) : [{n, p, c: null}]; };
+  const rows = roll.flatMap(rowsOf);
+  const off  = roll.filter(n => BASISOF(n) === 'off');
+  const noSal = roll.filter(n => BASISOF(n) !== 'off' && !(salParts(n).co || []).length
+                                 && !salParts(n).assumed);
+  const f = state.opForm || (state.opForm = {who: '', co: '', basic: '', allow: '', from: ''});
+  const canRecord = f.who && f.from && (+f.basic > 0 || +f.allow > 0)
+    && !(salParts(f.who).co || []).some(c => c.company === (f.co || ''));
+
+  return \`
+  <div class="strip">
+    <div class="stat"><span class="k">On payroll</span><span class="v">\${roll.filter(n => BASISOF(n) !== 'off').length}</span>
+      <span class="n">of \${roll.length} on the staff list</span></div>
+    <div class="stat"><span class="k">Not on payroll</span>
+      <span class="v" style="color:var(--\${off.length ? 'warn' : 'ink'})">\${off.length}</span>
+      <span class="n">\${off.length ? esc(off.map(NM).join(', ')) : 'everybody is paid through the portal'}</span></div>
+    <div class="stat"><span class="k">Paid by two companies</span>
+      <span class="v">\${roll.filter(n => (salParts(n).co || []).length > 1).length}</span>
+      <span class="n">a line each, every month</span></div>
+    <div class="stat"><span class="k">Nothing on file</span>
+      <span class="v" style="color:var(--\${noSal.length ? 'warn' : 'good'})">\${noSal.length}</span>
+      <span class="n">\${noSal.length ? 'paid, but no figure recorded' : 'every paid person has a figure'}</span></div>
+  </div>
+
+  <section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Who is on payroll</h3>
+      <span class="hint">the generator builds a line for everybody here, and for nobody else</span>
+      <span style="margin-left:auto;display:flex;gap:8px;align-items:center">\${edBar('basis')}</span></header>
+    \${edConfirm('basis')}\${edSaved('basis')}
+    \${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([24, 20, 13, 13, 13, 17]),
+      head: \`<thead><tr><th>Employee</th><th>Paid</th><th class="r">Basic</th>
+        <th class="r">Allowance</th><th class="r">Total</th><th>From</th></tr></thead>\`,
+      row: r => { const v = r.c, b = BASISOF(r.n), first = !r.c || r.p.co[0] === r.c;
+        return \`<tr>
+        <td class="nw">\${first ? nm(r.n) : ''}\${r.c && r.p.multi ? \` <span class="pill mute">\${esc(r.c.label)}</span>\` : ''}</td>
+        <td>\${first ? edCell('basis', r.n,
+          x => \`<select class="ff"\${edAttr('basis', r.n)}>\${Object.entries(BASIS).map(([k, l]) =>
+                 \`<option value="\${k}"\${x === k ? ' selected' : ''}>\${esc(l)}</option>\`).join('')}</select>\`,
+          x => \`<span class="edread"\${x === 'off' ? ' style="color:var(--ink3)"' : ''}>\${esc(BASIS[x] || x)}</span>\`) : ''}</td>
+        <td class="n r">\${v ? money(v.basic, 2) : '<span class="miss">\\u2014</span>'}</td>
+        <td class="n r">\${v ? money(v.allow, 2) : '<span class="miss">\\u2014</span>'}</td>
+        <td class="n r netcol">\${v ? money(v.salary, 2) : '<span class="miss">\\u2014</span>'}</td>
+        <td style="color:var(--ink2);font-size:12.5px"\${full(v ? (v.from ? 'From ' + v.from : v.src) : '')}>\${
+          v ? (v.from ? esc(v.from) : esc(v.src || '\\u2014')) : (b === 'commission'
+            ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td></tr>\`; },
+      empty: 'Nobody on the staff list yet.'
+    })}
+    <p class="cap">Setting somebody to <b>a fixed salary</b> needs a figure on file first &mdash; a salaried person
+      with nothing recorded would generate a line of nought. <b>Commission only</b> means no fixed pay: the line is
+      built from that month's commission. <b>Not on payroll</b> leaves them off the run entirely, and the database
+      refuses it while a month that pays them is still open.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>Record an opening salary</h3>
+      <span class="hint">for somebody who has none &mdash; a salary that exists moves by letter</span></header>
+    <div class="pad grid g2" style="gap:22px;align-items:start">
+      <div>
+        <div class="field"><label for="opWho">Employee</label>
+          <select id="opWho"><option value="">Choose someone</option>\${roll.map(n =>
+            \`<option value="\${esc(n)}"\${f.who === n ? ' selected' : ''}>\${esc(n)}\${
+              (salParts(n).co || []).length ? ' \\u2014 ' + money(salParts(n).salary, 0) + ' on file' : ''}</option>\`).join('')}</select></div>
+        <div class="field"><label for="opCo">Paid by</label>
+          <select id="opCo"><option value=""\${!f.co ? ' selected' : ''}>The group, not a named company</option>\${
+            (DATA.companies ? Object.values(DATA.companies) : []).map(c =>
+              \`<option value="\${esc(c.key)}"\${f.co === c.key ? ' selected' : ''}>\${esc(c.name)}</option>\`).join('')}</select>
+          <span class="pfhint">One entry per company. Somebody paid by two gets two, and two payroll lines every month.</span></div>
+        <div class="grid g2" style="gap:12px">
+          <div class="field"><label for="opBasic">Basic (AED)</label><input id="opBasic" inputmode="decimal" placeholder="0.00" value="\${esc(f.basic)}"></div>
+          <div class="field"><label for="opAllow">Other allowance</label><input id="opAllow" inputmode="decimal" placeholder="0.00" value="\${esc(f.allow)}"></div>
+        </div>
+        <div class="field"><label for="opFrom">On file from</label><input id="opFrom" type="date" value="\${esc(f.from)}"></div>
+        <button class="btn wide" id="opGo" type="button"\${canRecord ? '' : ' disabled'}>Record it</button>
+        \${state.opDone ? \`<div class="note" style="margin-top:14px;border-left-color:var(--good)"><b>Recorded.</b> \${esc(state.opDone)}</div>\` : ''}
+      </div>
+      <div>
+        \${f.who ? (() => { const p = salParts(f.who), hit = (p.co || []).find(c => c.company === (f.co || ''));
+          if(hit) return \`<div class="note" style="border-left-color:var(--warn)">
+            <b>\${esc(nm2(f.who))} already has \${money(hit.salary, 2)} on file\${
+              hit.label ? ' from ' + esc(hit.label) : ''}.</b>
+            A salary that exists is moved by a revision letter, not typed over &mdash; so that there is always a
+            document behind a figure somebody is paid. The database refuses this whatever this screen offers.
+            <div style="margin-top:10px"><button class="btn ghost" data-go="revisions" data-mode="console" type="button">Go to Revisions</button></div></div>\`;
+          const t = Math.round(((+f.basic || 0) + (+f.allow || 0)) * 100) / 100;
+          return \`<dl class="kv">
+            <dt>Total</dt><dd class="big">\${t ? money(t, 2) : '\\u2014'}</dd>
+            <dt>Basic share</dt><dd>\${t ? pct((+f.basic || 0) / t, 1) : '\\u2014'}</dd>
+            <div class="sep"></div>
+            <dt>Paid by</dt><dd>\${esc(f.co ? ((DATA.companies[f.co] || {}).name || f.co) : 'the group')}</dd>
+            <dt>From</dt><dd>\${f.from ? esc(effLabel(f.from)) : '\\u2014'}</dd>
+          </dl>
+          <p class="cap" style="padding:14px 0 0">This records what somebody is already paid; it is not a rise and
+            it writes no letter. The gratuity provision reads the basic from this date, so use the date the salary
+            actually started rather than today.</p>\`; })()
+        : '<p style="margin:0;color:var(--ink3);font-size:13.5px">Choose someone to see what is on file.</p>'}
+      </div>
+    </div>
+  </section>\`;
+}
+
+function vGratuity(){`,
+  'the screen for who is on payroll');
+
+/* The basis joins the one mechanism that writes anything in this console. */
+app = swap(app,
+`  bdate: {
+    title: 'Dates of birth',`,
+`  basis: {
+    title: 'Who is on payroll',
+    now:  k => BASISOF(k),
+    name: k => NM(k) + ' \\u2014 paid',
+    fmt:  v => BASIS[v] || v,
+    save: d => window.__db.setPayrollBasis(d)
+  },
+  bdate: {
+    title: 'Dates of birth',`,
+  'and it is set the same way as everything else here');
+
+app = swap(app,
+  `  revQ: '', refShow: false, dirWho: null, attTab: 'me',`,
+  `  revQ: '', refShow: false, dirWho: null, attTab: 'me',\n  opForm: null, opDone: '',`,
+  'somewhere to hold the opening-salary form');
+
+app = swap(app,
+  `  { const c = document.getElementById('rvCo');`,
+  `  { const F = () => state.opForm || (state.opForm = {who:'', co:'', basic:'', allow:'', from:''});
+    [['opWho','who'],['opCo','co'],['opFrom','from']].forEach(([id, k]) => {
+      const el = document.getElementById(id);
+      if(el) el.onchange = () => { F()[k] = el.value; state.opDone = ''; render(); }; });
+    [['opBasic','basic'],['opAllow','allow']].forEach(([id, k]) => {
+      const el = document.getElementById(id);
+      if(el){ let tm; el.oninput = () => { clearTimeout(tm); tm = setTimeout(() => {
+        F()[k] = el.value; state.opDone = ''; render();
+        const e2 = document.getElementById(id);
+        if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+      }, 320); }; } });
+    const go = document.getElementById('opGo');
+    if(go) go.onclick = async () => { const g = F();
+      go.disabled = true;
+      const r = await window.__db.recordSalary({
+        emp: (HR().ids||{})[g.who], company: g.co || '',
+        basic: +g.basic || 0, allow: +g.allow || 0, from: g.from});
+      if(r){ state.opDone = NM(g.who) + ' \\u2014 ' + money((+g.basic||0)+(+g.allow||0), 2)
+               + (g.co ? ' from ' + ((DATA.companies[g.co]||{}).name || g.co) : '')
+               + ', on file from ' + effLabel(g.from) + '.';
+             state.opForm = {who:'', co:'', basic:'', allow:'', from:''}; }
+      render(); }; }
+  { const c = document.getElementById('rvCo');`,
+  'and the opening-salary form is wired');
+
+/* "Air ticket" with its little "auto" badge under it read as one word —
+   "Air ticketauto" — to anything looking at the heading's text rather than at
+   the pixels. The badge is display:block so it has always LOOKED right; the
+   space is for everything that reads rather than looks, the screen checker
+   and a screen reader among them. */
+app = swap(app,
+  "`<th class=\"r${c.rule?' rule':''}\">${esc(c.label)}${c.auto?'<i class=\"autoc\">auto</i>':''}</th>`).join('')}",
+  "`<th class=\"r${c.rule?' rule':''}\">${esc(c.label)}${c.auto?' <i class=\"autoc\">auto</i>':''}</th>`).join('')}",
+  'the auto badge is a separate word');
+
+/* =====================================================================
+   A DIRECTOR'S REMUNERATION, AND A MONTH THAT HAS GONE OUT OF DATE
+
+   Four things off one screenshot, and three of them are the same fault:
+
+     'Mirazizbek Makhamatzhanov - should be 25k each from both POA and
+      Corplex, now showing under one company'
+     'And its not commission, its directors remuneration'
+     'refreshing the records have not fetched amounts into payroll of Miraziz'
+     'Fakhridin Kochkorov - should be commission only'
+
+   He was recorded as commission, and the generator's first branch is: on
+   commission, write a line of nought and move on WITHOUT reading the salary
+   rows at all. His two 25,000s were in the database being correctly ignored,
+   which is exactly why refreshing the month never fetched them. 'director' is
+   now a basis of its own, paid from the salary rows like a wage but not one.
+
+   His two lines also both sat under CorpLex, because the table grouped by the
+   company a person belongs to rather than the company paying that line. A
+   line belongs to whoever pays it.
+
+   And Fakhridin is the mirror: correctly marked commission only, still
+   carrying 6,000 from before, with nothing anywhere able to take it off.
+
+   Then the fourth, which is a different thing entirely:
+
+     'if there is a revision letter processed, the payroll should indicate
+      there is a change in salary so that i refresh it and the salary is
+      changed. Once its changed, the indication should go off - its for that
+      particular month only'
+   ===================================================================== */
+
+app = swap(app,
+  `const BASIS = {salaried: 'A fixed salary', commission: 'Commission only', off: 'Not on payroll'};`,
+  `/* Four kinds, and the order is the order they are offered in. 'director' is
+   paid from the salary rows exactly as a wage is — the generator's only
+   special case is commission — but it is not wages, and calling it that on a
+   screen is how it ends up on a salary certificate. */
+const BASIS = {salaried: 'A fixed salary', director: "A director's remuneration",
+               commission: 'Commission only', off: 'Not on payroll'};
+// the two that are paid from what is on file
+const FROMFILE = b => b === 'salaried' || b === 'director';`,
+  'a director’s remuneration is its own kind of pay');
+
+/* A line belongs to the company paying it. */
+app = swap(app,
+`    \${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      cols: colsOf([24, 20, 13, 13, 13, 17]),`,
+`    \${byCompany(rows, {
+      who: r => r.n, cls: 'invtable',
+      /* Grouped by whoever pays the line, not by the company the person
+         belongs to \\u2014 which is why Miraziz's POA half was sitting under
+         CorpLex. Somebody with no salary on file has no paying company, so
+         they stay under their own. */
+      code: r => { const k = r.c && r.c.company;
+        return (k && DATA.companies[k]) ? DATA.companies[k].code : companyOf(r.n).code; },
+      cols: colsOf([22, 17, 12, 12, 12, 14, 11]),`,
+  'and it is grouped under the company that pays it');
+
+app = swap(app,
+  `      head: \`<thead><tr><th>Employee</th><th>Paid</th><th class="r">Basic</th>
+        <th class="r">Allowance</th><th class="r">Total</th><th>From</th></tr></thead>\`,`,
+  `      head: \`<thead><tr><th>Employee</th><th>Paid</th><th class="r">Basic</th>
+        <th class="r">Allowance</th><th class="r">Total</th><th>From</th><th></th></tr></thead>\`,`,
+  'with room for the one thing you can take off');
+
+app = swap(app,
+`      row: r => { const v = r.c, b = BASISOF(r.n), first = !r.c || r.p.co[0] === r.c;
+        return \`<tr>
+        <td class="nw">\${first ? nm(r.n) : ''}\${r.c && r.p.multi ? \` <span class="pill mute">\${esc(r.c.label)}</span>\` : ''}</td>`,
+`      row: r => { const v = r.c, b = BASISOF(r.n), first = !r.c || r.p.co[0] === r.c;
+        /* A figure on file for somebody who is not paid from it. It is not an
+           error the portal can resolve on its own \\u2014 only accounts knows
+           whether the person moved to commission or the figure is simply
+           stale \\u2014 so it is marked and offered, not cleaned up. */
+        const orphan = v && !FROMFILE(b);
+        return \`<tr\${orphan ? ' style="background:color-mix(in srgb, var(--warn) 7%, transparent)"' : ''}>
+        <td class="nw">\${nm(r.n)}\${r.c && r.p.multi ? \` <span class="pill mute">\${esc(r.c.label)}</span>\` : ''}</td>`,
+  'and a figure nobody is paid is marked');
+
+/* The second company's line is the same person in another company's block, so
+   it says so in a quieter voice rather than going blank. A nameless, reasonless
+   row under a heading reads as an orphan; it carries no control, because there
+   is one basis to change and it sits on the first line. */
+app = swap(app,
+`        <td>\${first ? edCell('basis', r.n,
+          x => \`<select class="ff"\${edAttr('basis', r.n)}>\${Object.entries(BASIS).map(([k, l]) =>
+                 \`<option value="\${k}"\${x === k ? ' selected' : ''}>\${esc(l)}</option>\`).join('')}</select>\`,
+          x => \`<span class="edread"\${x === 'off' ? ' style="color:var(--ink3)"' : ''}>\${esc(BASIS[x] || x)}</span>\`) : ''}</td>`,
+`        <td>\${first ? edCell('basis', r.n,
+          x => \`<select class="ff"\${edAttr('basis', r.n)}>\${Object.entries(BASIS).map(([k, l]) =>
+                 \`<option value="\${k}"\${x === k ? ' selected' : ''}>\${esc(l)}</option>\`).join('')}</select>\`,
+          x => \`<span class="edread"\${x === 'off' ? ' style="color:var(--ink3)"' : ''}>\${esc(BASIS[x] || x)}</span>\`)
+          : \`<span style="color:var(--ink3)">\${esc(BASIS[b] || b)}</span>\`}</td>`,
+  'and the second line says whose it is');
+
+app = swap(app,
+`        <td style="color:var(--ink2);font-size:12.5px"\${full(v ? (v.from ? 'From ' + v.from : v.src) : '')}>\${
+          v ? (v.from ? esc(v.from) : esc(v.src || '\\u2014')) : (b === 'commission'
+            ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td></tr>\`; },`,
+`        <td style="color:var(--ink2);font-size:12.5px"\${full(v ? (v.from ? 'From ' + v.from : v.src) : '')}>\${
+          v ? (v.from ? esc(v.from) : esc(v.src || '\\u2014')) : (b === 'commission'
+            ? '<span class="miss">commission only</span>' : '<span class="miss">nothing on file</span>')}</td>
+        <td class="r nw">\${orphan
+          ? \`<button class="btn ghost sm" data-salclr="\${esc(r.n)}|\${esc((r.c||{}).company || '')}" type="button"
+              title="\${esc(NM(r.n))} is \${esc((BASIS[b]||b).toLowerCase())}, so nothing pays this figure">Take it off</button>\`
+          : ''}</td></tr>\`; },`,
+  'and can be taken off');
+
+app = swap(app,
+`    <p class="cap">Setting somebody to <b>a fixed salary</b> needs a figure on file first &mdash; a salaried person
+      with nothing recorded would generate a line of nought. <b>Commission only</b> means no fixed pay: the line is
+      built from that month's commission. <b>Not on payroll</b> leaves them off the run entirely, and the database
+      refuses it while a month that pays them is still open.</p>`,
+`    <p class="cap"><b>A fixed salary</b> and <b>a director&rsquo;s remuneration</b> are both paid from what is on
+      file, a line per company, so both need a figure recorded first &mdash; otherwise the month generates a line of
+      nought. They are kept apart because a director&rsquo;s remuneration is not wages: it does not belong on a
+      salary certificate and no gratuity accrues on it. <b>Commission only</b> means no fixed pay at all; the line is
+      built from that month&rsquo;s commission, and a figure still sitting on file for such a person is
+      <b style="color:var(--warn)">shaded</b>, because nothing pays it. <b>Not on payroll</b> leaves them off the run
+      entirely, and the database refuses it while a month that pays them is still open.</p>`,
+  'and the note says what the four are');
+
+// taking a figure off
+app = swap(app,
+  `  { const F = () => state.opForm || (state.opForm = {who:'', co:'', basic:'', allow:'', from:''});`,
+  `  document.querySelectorAll('[data-salclr]').forEach(b => b.onclick = async () => {
+    const i = b.dataset.salclr.lastIndexOf('|');
+    const who = b.dataset.salclr.slice(0, i), co = b.dataset.salclr.slice(i + 1);
+    const p = (salParts(who).co || []).find(c => c.company === co) || {};
+    if(!confirm('Take ' + money(p.salary || 0, 2) + ' off ' + NM(who) + "'s file"
+      + (p.label ? ' at ' + p.label : '') + '?\\n\\n'
+      + NM(who) + ' is ' + (BASIS[BASISOF(who)] || '').toLowerCase() + ', so nothing pays this figure.\\n'
+      + 'Any revision letter that set it stays exactly where it is \\u2014 the letter went out\\n'
+      + 'and they have a copy of it.')) return;
+    b.disabled = true;
+    await window.__db.clearSalary(who, co);
+    render(); });
+  { const F = () => state.opForm || (state.opForm = {who:'', co:'', basic:'', allow:'', from:''});`,
+  'and the button is wired');
+
+/* =====================================================================
+   THE MONTH THAT HAS GONE OUT OF DATE
+
+   map.js works out, every time the page loads, whether each line of an open
+   month still agrees with the records behind it. Nothing is stored, so
+   nothing can fall out of step: refreshing rewrites the lines from the same
+   records, the two agree, and the mark goes out by itself.
+   ===================================================================== */
+
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
+      \${runSeg()}`,
+`  \${staleNote(P.monthKey)}
+  <section class="panel">
+    <header><h3>Approval</h3><span class="hint">Avin prepares &middot; Miraziz approves</span>
+      \${runSeg()}`,
+  'the register says when it is out of date');
+
+app = swap(app,
+`function runSeg(){`,
+`/* What a month pays, against what the records now say it should. A revision
+   letter issued after the month was generated is the usual cause; a salary
+   recorded for somebody who had none is the other. */
+const staleOf = key => ((DATA.payroll.runs || []).find(r => r.key === key) || {}).stale || [];
+function staleNote(key){
+  const run = (DATA.payroll.runs || []).find(r => r.key === key);
+  if(!run || run.status === 'closed') return '';
+  const st = run.stale || [];
+  if(!st.length) return '';
+  const one = st.length === 1;
+  return \`<div class="nudge loud">
+    <span class="ndot"></span>
+    <div><b>\${esc(MKEY(key))} no longer matches the records \\u2014 \${st.length} \${one ? 'line' : 'lines'}</b>
+      <span>\${st.slice(0, 3).map(x => \`\${esc(NM(x.name))}\${x.company ? ' (' + esc(x.company) + ')' : ''}
+        \${x.missing ? 'is not on this month, and should be on <b>' + money(x.now, 2) + '</b>'
+                     : 'pays ' + money(x.was, 2) + ' and should pay <b>' + money(x.now, 2) + '</b>'}\`)
+        .join('; ')}\${st.length > 3 ? \`; and \${st.length - 3} more\` : ''}.
+        A revision letter has gone out, or somebody's pay has been set, since this month was built.
+        <b>Refresh from the records</b> rewrites \${one ? 'it' : 'them'} and this notice goes away by itself.</span></div>
+    \${canUpload(state.user) && run.status === 'draft'
+      ? '<button class="btn" id="payGenTop" type="button">Refresh from the records</button>' : ''}
+  </div>\`;
+}
+function runSeg(){`,
+  'and knows which lines they are');
+
+// the draft screen gets it too, and marks the rows
+app = swap(app,
+`  <section class="panel">
+    <header><h3>\${esc(run.label)}</h3>
+      <span class="pill warn"><span class="dt"></span>Draft</span>
+      \${runSeg()}`,
+`  \${staleNote(run.key)}
+  <section class="panel">
+    <header><h3>\${esc(run.label)}</h3>
+      <span class="pill warn"><span class="dt"></span>Draft</span>
+      \${runSeg()}`,
+  'and so does the draft month');
+
+app = swap(app,
+  `    on('paySlips',()=>{state.tab='payslips';render();});`,
+  `    on('paySlips',()=>{state.tab='payslips';render();});
+    /* The same act as the button in the panel header, offered where the
+       problem is written down. */
+    { const g = document.getElementById('payGenTop');
+      if(g) g.onclick = async () => { g.disabled = true;
+        await window.__db.generateRun(DATA.payroll.monthKey); render(); }; }`,
+  'and refreshing is offered on the notice itself');
+
+/* Being off payroll is a settled state, not a gap.
+     'Abdunosir has no salary - he is just part of organization, but not a
+      member of payroll'
+   The figure was amber, which reads as something outstanding. Somebody
+   deliberately outside payroll is not outstanding; somebody who is paid but
+   has no figure recorded is, and that is the tile next to it. */
+app = swap(app,
+`    <div class="stat"><span class="k">Not on payroll</span>
+      <span class="v" style="color:var(--\${off.length ? 'warn' : 'ink'})">\${off.length}</span>
+      <span class="n">\${off.length ? esc(off.map(NM).join(', ')) : 'everybody is paid through the portal'}</span></div>`,
+`    <div class="stat"><span class="k">Not on payroll</span>
+      <span class="v">\${off.length}</span>
+      <span class="n">\${off.length ? esc(off.map(NM).join(', ')) + ' \\u2014 on the staff list, paid outside it'
+        : 'everybody on the staff list is paid through the portal'}</span></div>`,
+  'being off payroll is a state, not a warning');
+
+/* A settlement showing 0.00 against "End-of-service gratuity" with nothing
+   said is indistinguishable from an arithmetic fault. Where it is nil because
+   none accrues for that person, the line says so. */
+app = swap(app,
+  `          \${line('End-of-service gratuity', c.grat)}`,
+  `          \${line('End-of-service gratuity' + (noGratuity(c.row.portalName || c.row.name)
+            ? ' \\u2014 none accrues' : ''), c.grat)}`,
+  'the settlement document says why gratuity is nil');
+
+app = swap(app,
+  `        <tr><td>End-of-service gratuity</td><td class="n r">\${money(c.grat,2)}</td></tr>`,
+  `        <tr><td>End-of-service gratuity\${noGratuity(x.who)
+          ? ' <span class="pill mute" title="No end-of-service provision is held for them">none accrues</span>' : ''}</td>
+          <td class="n r">\${money(c.grat,2)}</td></tr>`,
+  'and so does the exit screen');
+
+/* One assumption, written where the arithmetic is rather than on a screen:
+   salParts().salary is the total across every company that pays somebody,
+   while a settlement document is issued on one entity's letterhead. Those are
+   the same number for everybody who could actually have a settlement — the
+   only person paid by two companies is the owner. If that ever stops being
+   true, this is the line to come back to. */
+app = swap(app,
+  `  const salary = P.salary, basic = P.basic;
+  const dayBasic = basic/30;`,
+  `  // P.salary is the total across every company paying them; see the note above.
+  const salary = P.salary, basic = P.basic;
+  const dayBasic = basic/30;`,
+  'the assumption behind a settlement figure is written down');
+
+/* "Take it off" is ambiguous — Avin read it and had to ask whether it meant
+   taking the person off payroll. It clears one figure, so it says that.
+
+   And a real guard behind it. The screen shades a salary sitting on somebody
+   marked commission only, and calls it a contradiction, which it is. But
+   there are two ways to resolve a contradiction and the screen was offering
+   only one. Fakhridin is marked commission only AND was paid 6,000 as salary
+   in August — so the figure is not stale at all; the BASIS is the thing that
+   is likely wrong, and clearing the figure would be the exact opposite of the
+   right move. So the confirmation looks at what the last run actually paid
+   them, and says so, before anything is deleted. */
+app = swap(app,
+  `              title="\${esc(NM(r.n))} is \${esc((BASIS[b]||b).toLowerCase())}, so nothing pays this figure">Take it off</button>\``,
+  `              title="\${esc(NM(r.n))} is \${esc((BASIS[b]||b).toLowerCase())}, so nothing pays this figure">Clear the figure</button>\``,
+  'the button says what it clears');
+
+app = swap(app,
+`  document.querySelectorAll('[data-salclr]').forEach(b => b.onclick = async () => {
+    const i = b.dataset.salclr.lastIndexOf('|');
+    const who = b.dataset.salclr.slice(0, i), co = b.dataset.salclr.slice(i + 1);
+    const p = (salParts(who).co || []).find(c => c.company === co) || {};
+    if(!confirm('Take ' + money(p.salary || 0, 2) + ' off ' + NM(who) + "'s file"
+      + (p.label ? ' at ' + p.label : '') + '?\\n\\n'
+      + NM(who) + ' is ' + (BASIS[BASISOF(who)] || '').toLowerCase() + ', so nothing pays this figure.\\n'
+      + 'Any revision letter that set it stays exactly where it is \\u2014 the letter went out\\n'
+      + 'and they have a copy of it.')) return;`,
+`  document.querySelectorAll('[data-salclr]').forEach(b => b.onclick = async () => {
+    const i = b.dataset.salclr.lastIndexOf('|');
+    const who = b.dataset.salclr.slice(0, i), co = b.dataset.salclr.slice(i + 1);
+    const p = (salParts(who).co || []).find(c => c.company === co) || {};
+    /* The most recent month that actually paid them a salary. If there is one,
+       the figure is not a leftover and the basis is the thing to look at. */
+    const paid = (DATA.payroll.runs || []).slice()
+      .sort((x, y) => y.key < x.key ? -1 : 1)
+      .map(run => { const row = (run.rows || []).find(r =>
+              (r.portalName || r.name) === who && +r.salary > 0);
+            return row ? {label: run.label, salary: +row.salary} : null; })
+      .find(Boolean);
+    if(!confirm('Clear ' + money(p.salary || 0, 2) + ' from ' + NM(who) + "'s file"
+      + (p.label ? ' at ' + p.label : '') + '?\\n\\n'
+      + 'This removes the figure and nothing else. ' + NM(who) + ' stays on the staff list,\\n'
+      + 'stays ' + (BASIS[BASISOF(who)] || '').toLowerCase() + ', and no past payroll changes.\\n'
+      + 'Any revision letter that set it stays where it is \\u2014 the letter went out.\\n\\n'
+      + (paid
+         ? 'CHECK THIS FIRST: the ' + paid.label + ' run paid ' + NM(who) + ' '
+           + money(paid.salary, 2) + ' as salary.\\nIf that is still how they are paid then they are not '
+           + (BASIS[BASISOF(who)] || '').toLowerCase() + ' \\u2014 change\\nthe basis instead and leave this figure alone.'
+         : 'No payroll month has paid ' + NM(who) + ' a salary, so nothing is losing a figure it uses.'))) return;`,
+  'and the confirmation checks what they were actually paid');
+
+/* =====================================================================
+   MY PAYSLIP, WHEN THERE IS MORE THAN ONE MONTH
+
+     'This page should show my August payslip, Salary revision, however now I
+      can see only about September 2026'
+
+   Opening September hid August. The page was built around DATA.payroll, which
+   points at the NEWEST run — so its month, its status and the row it read
+   were all September's, and the very first thing it did was:
+
+       if(!released) return "September 2026 is not released yet"
+
+   and return before anything else on the page was drawn. That was correct for
+   as long as the portal only ever held one run, which was true until this
+   morning. It is a page about released months, and it was reading the draft.
+
+   So it is built from the released months now, newest first, and September
+   being open is a line at the top rather than the whole screen. The salary
+   revision letter and the settlement note come first and are shown whether or
+   not there is a payslip at all — they were inside the branches that returned
+   early, which is exactly when somebody most wants to see them.
+
+   A person paid by two companies gets a payslip from each, so the list is one
+   entry per month per company rather than one per month.
+   ===================================================================== */
+
+app = cutout(app,
+  `function vMySlip(){`,
+  `\nfunction vSlips(){`,
+`function vMySlip(){
+  const P = DATA.payroll;
+  const byNewest = (a, b) => a.key < b.key ? 1 : -1;
+
+  /* Every released month with a line for me — one per company, because
+     somebody paid by two of them is handed two payslips. */
+  const mine = (P.runs || []).slice().sort(byNewest).flatMap(r =>
+    r.status !== 'closed' ? [] :
+      (r.rows || []).filter(x => x.portalName === state.user && !x.dummy)
+        .map(row => ({run: r, row, key: r.key + '|' + (row.company || ''),
+                      label: r.label + ((r.rows || []).filter(y =>
+                        y.portalName === state.user && !y.dummy).length > 1
+                        ? ' \\u00b7 ' + (P.label[row.company] || row.company) : '')})));
+
+  /* The newest month overall. If it is not released, that is worth one line —
+     it is not worth the whole page, which is what it used to take.
+
+     Whether it is worth even that used to be decided by looking for my line
+     on the draft run, which is a question that can only ever answer no. The
+     rule on payroll_lines is: your own line, AND only once the run is closed.
+     That is the whole meaning of releasing a month, and it means the draft's
+     rows are empty for everybody except accounts — so the notice never
+     appeared for the one person it was written for, and appeared for accounts
+     instead. It went unnoticed because the check happened to pick somebody
+     who was not on the draft either way.
+
+     What a person CAN see is that a newer month exists, that it is not out
+     yet, and that they were paid in the last one. That is the honest form of
+     the same sentence. Accounts, who can see the draft's lines, still get the
+     precise version. */
+  const newest = (P.runs || []).slice().sort(byNewest)[0];
+  const draftRows = newest ? (newest.rows || []).filter(x => !x.dummy) : [];
+  const waiting = !!newest && newest.status !== 'closed' && !exitNote(state.user)
+    && (draftRows.length
+        ? draftRows.some(x => x.portalName === state.user)
+        : mine.length > 0);
+  const soon = waiting ? \`<div class="nudge">
+      <span class="ndot"></span>
+      <div><b>\${esc(newest.label)} is not released yet</b>
+        <span>It appears here as soon as the run is approved, the payment is made and accounts
+          releases it. You will get a notification.</span></div>
+    </div>\` : '';
+
+  /* These two come first and are shown whichever branch the page takes. They
+     used to sit at the foot of the one branch that got as far as drawing a
+     payslip, so the month a person most wanted to read about their revision
+     was the month the page said nothing at all. */
+  const notes = exitNote(state.user) + revNote(state.user);
+
+  if(!mine.length) return \`\${notes}\${soon}
+    <section class="panel"><div class="pad" style="text-align:center;padding:52px 24px">
+    <h3 style="font-size:20px;margin-bottom:8px">No payslip yet</h3>
+    <p style="color:var(--ink2);max-width:56ch;margin:0 auto">\${exitNote(state.user)
+      ? 'Your last month is inside your final settlement above rather than on a payslip.'
+      : waiting ? 'The month above is the first one due to you. Nothing is released yet.'
+      : 'No month has been released to you. If that looks wrong, speak to accounts.'}</p></div></section>\`;
+
+  const here = mine.find(x => x.key === state.slipRun) || mine[0];
+  const s = slipOf(here.row, here.run);
+
+  /* The list itself is the switcher, so there is no row of month buttons above
+     it — a person three years in would have had thirty of them. What a long
+     list needs instead is a way to cut it down, and the only cut that means
+     anything here is the year. It appears once there are more than a year and
+     a bit of payslips to scroll. */
+  const years = [...new Set(mine.map(x => x.run.key.slice(0, 4)))];
+  const long = mine.length > 14 && years.length > 1;
+  const year = !long ? '' :
+    (state.slipYear === 'all' || years.includes(state.slipYear)
+      ? state.slipYear : here.run.key.slice(0, 4));
+  const shown = year && year !== 'all'
+    ? mine.filter(x => x.run.key.slice(0, 4) === year) : mine;
+  const pick = long ? \`<select id="slipYear" class="ff" style="margin-left:auto;width:auto"
+      aria-label="Which year to list">\${years.map(y =>
+      \`<option value="\${y}"\${y === year ? ' selected' : ''}>\${y}</option>\`).join('')
+      }<option value="all"\${year === 'all' ? ' selected' : ''}>Every year</option></select>\` : '';
+
+  /* On a phone the A4 sheet is unreadable, so the figures are a list and the
+     document itself is one tap away. */
+  if(MOBILE()) return \`\${notes}\${soon}
+  <section class="panel">
+    <header><h3>\${esc(here.label)}</h3><span class="pill good"><span class="dt"></span>Released</span></header>
+    <div class="mnet">
+      <span>Total net pay</span>
+      <b>AED \${money(s.net,2)}</b>
+      <i>\${s.paidDays} paid day\${s.paidDays===1?'':'s'}\${s.lop?\` &middot; \${s.lop} LOP\`:''} &middot; paid \${esc(s.payDate)}</i>
+    </div>
+    <div class="mlines">
+      <h4>Earnings</h4>
+      \${s.earn.map(([l,v])=>\`<div class="mline"><span>\${esc(l)}</span><b>\${money(v,2)}</b></div>\`).join('')}
+      <div class="mline tot"><span>Gross earnings</span><b>\${money(s.gross,2)}</b></div>
+      <h4>Deductions</h4>
+      \${s.ded.length ? s.ded.map(([l,v])=>\`<div class="mline"><span>\${esc(l)}</span><b>\${money(v,2)}</b></div>\`).join('')
+        : \`<div class="mline"><span style="color:var(--ink3)">None this month</span><b>&mdash;</b></div>\`}
+      <div class="mline tot"><span>Total deductions</span><b>\${money(s.dedT,2)}</b></div>
+    </div>
+    <div class="pad">
+      <button class="btn wide" id="slPrint" type="button">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-3px;margin-right:7px"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Download as PDF</button>
+    </div>
+    <p class="cap">The full A4 payslip on \${esc(s.ent.legal)} letterhead. Amounts in AED.</p>
+    <div class="slwrap printonly">\${slipHTML(s)}</div>
+  </section>
+  \${mine.length > 1 ? \`<section class="panel">
+    <header><h3>All your payslips</h3><span class="hint">\${mine.length} in all</span>\${pick}</header>
+    <div class="pad" style="display:flex;flex-direction:column;gap:8px">\${shown.map(x => {
+      const ss = slipOf(x.row, x.run);
+      return \`<button class="btn\${x.key === here.key ? '' : ' ghost'} wide" data-mymonth="\${esc(x.key)}"
+        type="button" style="justify-content:space-between">\${esc(x.label)}<b>AED \${money(ss.net,2)}</b></button>\`;
+    }).join('')}</div>
+  </section>\` : ''}\`;
+
+  return \`\${notes}\${soon}
+  <div class="strip tight">
+    <div class="stat"><span class="k">\${esc(here.label)}</span>
+      <span class="v"><span class="cur">AED</span>\${money(s.net,2)}</span>
+      <span class="n">paid \${esc(s.payDate)}</span></div>
+    <div class="stat"><span class="k">Earnings</span>
+      <span class="v"><span class="cur">AED</span>\${money(s.gross,2)}</span>
+      <span class="n">\${s.earn.length} line\${s.earn.length===1?'':'s'}</span></div>
+    <div class="stat"><span class="k">Deductions</span>
+      <span class="v" style="color:var(--\${s.dedT?'warn':'ink'})"><span class="cur">AED</span>\${money(s.dedT,2)}</span>
+      <span class="n">\${s.ded.length?s.ded.map(d=>esc(d[0])).join(', '):'none this month'}</span></div>
+    <div class="stat"><span class="k">Days paid</span><span class="v">\${s.paidDays}</span>
+      <span class="n">\${s.lop?s.lop+' without pay':'a full month'}</span></div>
+  </div>
+
+  <section class="panel">
+    <header><h3>Your payslips</h3><span class="hint">click a month to open the sheet</span>\${pick}</header>
+    <div class="tw"><table>
+      <thead><tr><th>Month</th><th>Paid on</th><th class="r">Earnings</th>
+        <th class="r">Deductions</th><th class="r">Net</th><th></th></tr></thead>
+      <tbody>\${shown.map(x => { const ss = slipOf(x.row, x.run);
+        return '<tr class="sliprow' + (x.key === here.key ? ' on' : '') + '" data-myslip="' + esc(x.key) + '">'
+          + '<td class="nw"><b>' + esc(x.label) + '</b></td>'
+          + '<td class="n nw">' + esc(ss.payDate) + '</td>'
+          + '<td class="n r">' + money(ss.gross,2) + '</td>'
+          + '<td class="n r">' + (ss.dedT ? money(ss.dedT,2) : '&mdash;') + '</td>'
+          + '<td class="n r netcol">' + money(ss.net,2) + '</td>'
+          + '<td class="r"><button class="btn ghost" data-myslip="' + esc(x.key)
+          + '" type="button" style="padding:3px 10px;font-size:12.5px">View</button></td></tr>';
+      }).join('')}
+      </tbody></table></div>
+    <p class="cap">Every released month stays here\${year && year !== 'all'
+        ? ', and the year above chooses which of them the list shows' : ''}. The payslip opens on
+      \${esc(s.ent.legal)} letterhead and can be printed or saved as a PDF from the
+      window.\${mine.length > 1 ? '' : ' From here on, every released month joins this list.'}</p>
+  </section>\`;
+}
+
+function vSlips(){`,
+  'My payslip is about released months, not about the newest run');
+
+/* =====================================================================
+   A payslip is dated by its own month
+   ---------------------------------------------------------------------
+   slipOf took the pay date and the period off DATA.master and DATA.payroll,
+   both of which describe the CURRENT run. That was harmless while My payslip
+   only ever drew one month. Now that it lists every released month, June's
+   payslip was headed August and said it had been paid on 31 August. The run
+   the line came from is the only thing that knows, so it is handed in.
+   ===================================================================== */
+app = swap(app,
+  `function slipOf(r){`,
+  `function slipOf(r, run){`,
+  'slipOf is told which run the line came from');
+
+app = swap(app,
+  `    payDate: ent.payDate || M.payDate, period: DATA.payroll.month,`,
+  `    payDate: (run && run.payDate) || ent.payDate || M.payDate,
+    period: (run && run.label) || DATA.payroll.month,`,
+  'a payslip carries its own month and pay date');
+
+/* The month switcher, and the row that opens one. data-myslip used to carry a
+   run key; it carries the run and the company now, because a person paid by
+   two companies has two payslips in the same month. */
+app = swap(app,
+  `  revQ: '', refShow: false, dirWho: null, attTab: 'me',`,
+  `  revQ: '', refShow: false, dirWho: null, attTab: 'me', slipRun: null, slipYear: '',`,
+  'somewhere to hold which payslip is open, and which year is listed');
+
+app = swap(app,
+  `  { const c = document.getElementById('rvCo');`,
+  `  /* Not data-slip: that already means "open this person's payslip" on the
+     console Payslips screen, and its handler is bound after this one and would
+     quietly take the button over. */
+  document.querySelectorAll('[data-mymonth]').forEach(b => b.onclick = () => {
+    state.slipRun = b.dataset.mymonth; render(); window.scrollTo({top: 0}); });
+  { const y = document.getElementById('slipYear');
+    if(y) y.onchange = () => { state.slipYear = y.value; render(); }; }
+  { const c = document.getElementById('rvCo');`,
+  'and the switcher is wired');
+
+/* The row that opens a payslip. Its key was a run key; it is now the run and
+   the company, because a person paid by two companies has two payslips in the
+   same month and one key could not tell them apart. */
+app = swap(app,
+`    document.querySelectorAll('[data-myslip]').forEach(el => el.onclick = ev => {
+      ev.stopPropagation();
+      const run = (DATA.payroll.runs||[]).find(r => r.key === el.dataset.myslip);
+      const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy);
+      if(row) openSlipFor(row);
+    });`,
+`    document.querySelectorAll('[data-myslip]').forEach(el => el.onclick = ev => {
+      ev.stopPropagation();
+      const i = el.dataset.myslip.lastIndexOf('|');
+      const key = el.dataset.myslip.slice(0, i), co = el.dataset.myslip.slice(i + 1);
+      const run = (DATA.payroll.runs||[]).find(r => r.key === key);
+      const row = run && run.rows.find(x => x.portalName === state.user && !x.dummy
+        && (x.company || '') === co);
+      if(row) openSlipFor(row, run);
+    });`,
+  'and it knows which company’s payslip it is opening');
+
+/* The salary-revision link had its whole stylesheet inside
+   @media(max-width:720px) — it was written for the phone payslip and then used
+   on the desktop one as well, where it had no rules at all and its icon drew
+   at the SVG default of 300 by 150. Nobody saw it because it sat at the foot
+   of a long page; moving it to the top of My payslip put a picture of an
+   envelope the size of a table across the screen.
+
+   Lifted out of the media query. Nothing about it is phone-specific. */
+shell = swap(shell,
+`  .revlink{display:flex;align-items:center;gap:12px;width:100%;margin:0;padding:14px 16px;background:var(--accentSoft);
+  border:0;border-top:1px solid var(--line2);font:inherit;text-align:left;cursor:pointer;color:var(--accent2)}
+.revlink:hover{filter:brightness(.97)}
+.revlink>svg:first-child{width:20px;height:20px;flex:none}
+.revlink .rvgo{width:17px;height:17px;flex:none;margin-left:auto;opacity:.7}
+.revlink b{display:block;font-size:14px;font-weight:600;line-height:1.3}
+.revlink i{display:block;font-style:normal;font-size:12.5px;opacity:.82;margin-top:1px}`,
+`  /* .revlink moved out of this media query — see the note in mkweb.mjs. */`,
+  'the revision link stops being phone-only');
+
+shell = swap(shell,
+`/* ---------- the settlement rail ----------`,
+`/* ---------- a letter waiting to be read ----------
+   One line that says a revision letter or a settlement is there, and opens it.
+   It lives on My payslip at both widths, so its rules live at both widths. */
+.revlink{display:flex;align-items:center;gap:12px;width:100%;margin:0 0 16px;padding:14px 16px;
+  background:var(--accentSoft);border:1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius:12px;font:inherit;text-align:left;cursor:pointer;color:var(--accent2)}
+.revlink:hover{filter:brightness(.97)}
+.revlink > svg:first-child{width:20px;height:20px;flex:none}
+.revlink .rvgo{width:17px;height:17px;flex:none;margin-left:auto;opacity:.7}
+.revlink b{display:block;font-size:14px;font-weight:600;line-height:1.3}
+.revlink i{display:block;font-style:normal;font-size:12.5px;opacity:.82;margin-top:1px}
+@media(max-width:720px){ .revlink{margin:0;border-radius:0;border:0;border-top:1px solid var(--line2)} }
+
+/* ---------- the settlement rail ----------`,
+  'and gets its own rules at every width');
+
+/* =====================================================================
+   DOCUMENTS -> STAFF REGISTER
+   ---------------------------------------------------------------------
+   Avin drew this one, column for column: the person, then three groups —
+   Personal details, Home country, Emergency contact in the UAE — split by
+   company, and read-only.
+
+     'Staff register - view only'
+     'Again split by company, horizontal scrolling is fine'
+
+   Three decisions, all his:
+
+   ONE. Accounts only. Every field on it — personal mobile, personal email,
+   the address in the UAE, the address at home, gender, marital status — lives
+   on employee_private. A manager gets nothing from that table but their own
+   row, so for them this gate and the database agree.
+
+   The owner is the honest exception, and it is worth being exact about it.
+   The policy on employee_private is me() OR is_admin(), and is_admin() is
+   accounts OR owner — so at the database Miraziz can already read every one
+   of these rows, and has been able to since the table was made. Not offering
+   him the tab is therefore a decision about whose screen this is, not a wall:
+   it keeps a register of everybody's home address and personal mobile off the
+   owner's console, where nobody has asked for it, and it does not pretend to
+   stop him. Making it a wall means narrowing that policy to is_accounts(),
+   which would also take the document numbers and the profile screens away
+   from him — a bigger change than a tab, and Avin's to ask for.
+
+   TWO. View only, and it stays view only. Nothing here is accounts' to type:
+   it is the person's own account of themselves, and a home address corrected
+   by somebody else from memory is worse than a blank one. The register shows
+   the gap; the person fills it from their profile.
+
+   THREE. Split by the company somebody works for, not the one that sponsors
+   the visa — this is a register of people at work.
+
+   It replaces the Dates of birth panel that stood here, because the date of
+   birth is now the second column of the documents grid, which is where Avin's
+   other sketch puts it.
+   ===================================================================== */
+
+// Accounts, and not the owner: see ONE above.
+app = swap(app,
+  `const canAdmin = u => ['admin','owner'].includes(roleOf(u));`,
+  `const canAdmin = u => ['admin','owner'].includes(roleOf(u));
+/* Narrower than canAdmin on purpose: accounts, and not the owner. The staff
+   register is the one console screen the owner is not offered — see the long
+   note where it is built for why that is a choice about whose screen it is
+   rather than a restriction the database enforces. */
+const isAccounts = u => roleOf(u) === 'admin';`,
+  'a gate for the one screen that is accounts and nobody else');
+
+app = swap(app,
+`  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true}`,
+`  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},
+  {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true}`,
+  'and the tab it sits on');
+
+app = swap(app,
+  `  docdates:   ['docs',    ['Staff Documents', 'Dates of birth'], true],
+  profiles:   ['docs',    ['Profile completeness'], true]`,
+  `  docdates:   ['docs',    ['Staff Documents'], true],
+  profiles:   ['docs',    ['Profile completeness'], true],
+  staffreg:   ['docs',    ['Staff register'], true]`,
+  'and the page that is cut out for it');
+
+/* The panel itself, in place of the birth dates. */
+app = cutout(app,
+  `  \${(() => {
+    const roll = USERS.map(x => x.name);
+    const noYear = roll.filter(n => bdayOf(n) && !bdayYr(n)).length;`,
+  `  </section>\`;
+  })()}\`;
+}`,
+`  \${(() => {
+    /* The columns are Avin's, in his order and under his headings. Each one is
+       a label and the way to read it off the person, so the head, the body and
+       the count of what is still blank cannot fall out of step with each
+       other. */
+    const P = n => PROF(n) || {};
+    const GROUPS = [
+      ['Personal details', [
+        ['Gender',             9, n => P(n).gender],
+        ['Marital status',    10, n => P(n).marital],
+        ['Personal mobile',   14, n => P(n).mobile],
+        ['Personal email',    20, n => P(n).pemail],
+        ['Address in the UAE',26, n => P(n).uaeAddr]]],
+      ['Home country', [
+        ['Home country',      12, n => P(n).homeCountry],
+        ['Home address',      26, n => P(n).homeAddr],
+        ['Contact person',    15, n => P(n).homeContact],
+        ['Contact number',    14, n => P(n).homePhone]]],
+      ['Emergency contact in the UAE', [
+        ['Name',              15, n => P(n).ecName],
+        /* One long word that cannot wrap, so it needs the width outright or it
+           reads 'RELATIONSH...' */
+        ['Relationship',      15, n => P(n).ecRel],
+        ['Phone number',      14, n => P(n).ecPhone]]]
+    ];
+    const COLS = [].concat(...GROUPS.map(g => g[1]));
+    const val   = (n, c) => String(c[2](n) || '').trim();
+    const blank = n => COLS.filter(c => !val(n, c)).length;
+    const roll  = USERS.map(x => x.name);
+    /* The rows with the most missing come first, for the same reason they do
+       on the documents grid: this screen exists to be worked down. */
+    const rows  = roll.slice().sort((a, b) => blank(b) - blank(a) || a.localeCompare(b));
+    const short = rows.filter(n => blank(n)).length;
+    /* Weights, not percentages: the name is worth 34 of them and each column
+       above is worth what it has to hold, and the lot is scaled to a hundred
+       so the same numbers hold whatever the table is worth in pixels. The name
+       column is the widest because it carries a full legal name AND the count
+       of what is missing beside it; at a third of this it ended in an
+       ellipsis, which on a register of people is the one column that must
+       never be cut. */
+    const wide  = COLS.reduce((s, c) => s + c[1], 0) + 34;
+    const w     = x => x * 100 / wide;
+    const cell  = (n, c, first) => { const v = val(n, c);
+      return \`<td\${first ? ' class="b"' : ''}>\${v ? esc(v) : '<span class="miss">\\u2014</span>'}</td>\`; };
+    return \`<section class="panel invpanel" style="height:auto;max-height:none">
+    <header><h3>Staff register</h3>
+      <span class="pill \${short ? 'warn' : 'good'}"><span class="dt"></span>\${
+        short ? short + (short === 1 ? ' person has' : ' people have') + ' something missing'
+              : 'nothing missing'}</span>
+      <span class="hint" style="margin-left:auto">filled in by the employee, not by you</span></header>
+    \${byCompany(rows, {
+      who: n => n, cls: 'rgstr',
+      cols: colsOf([w(34)].concat(COLS.map(c => w(c[1])))),
+      note: rs => \`\${rs.filter(n => blank(n)).length} of \${rs.length} incomplete\`,
+      head: \`<thead>
+        <tr class="dgrp"><th></th>\${GROUPS.map(g =>
+          \`<th class="grp b" colspan="\${g[1].length}">\${esc(g[0])}</th>\`).join('')}</tr>
+        <tr><th>Employee name</th>\${GROUPS.map(g => g[1].map((c, i) =>
+          \`<th\${i ? '' : ' class="b"'}>\${esc(c[0])}</th>\`).join('')).join('')}</tr>
+      </thead>\`,
+      row: n => \`<tr>
+        <td class="nw"\${full(NM(n) + (blank(n) ? ' \\u2014 ' + blank(n) + ' still blank' : ''))}>\${nm(n)}\${
+          blank(n) ? \` <span class="pill mute">\${blank(n)} blank</span>\` : ''}</td>
+        \${GROUPS.map(g => g[1].map((c, i) => cell(n, c, !i)).join('')).join('')}</tr>\`,
+      empty: 'Nobody on the staff list yet.'
+    })}
+    <p class="cap">Read only, and it stays that way: every line of it is the person&rsquo;s own account of
+      themselves, kept on their profile. A blank is something to ask them for, not something to fill in from
+      memory &mdash; a home address or a next of kin taken down second-hand is worse than an empty box, because
+      it looks answered. The table scrolls sideways; the name column is what you read down.
+      <b>Only accounts can open this screen.</b> A manager cannot, and the database gives them nothing from
+      this table but their own row, so a personal mobile or a home address never reaches a colleague.</p>
+  </section>\`;
+  })()}\`;
+}`,
+  'the staff register, view only, split by company');
+
+shell = swap(shell,
+`.dgrid td.num{font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}`,
+`.dgrid td.num{font-variant-numeric:tabular-nums;font-size:13.5px;white-space:nowrap}
+
+/* ---------- the staff register ----------
+   Twelve columns of somebody's own words — two of them addresses — so this one
+   scrolls sideways like the documents grid, but its cells wrap instead of
+   ending in an ellipsis. Avin: 'I am ok with horizontal scrolling, but need to
+   see everything clearly', and half an address is not clearly. */
+.rgstr{min-width:2000px}
+.rgstr th,.rgstr td{padding-left:9px;padding-right:9px;vertical-align:top}
+.rgstr td{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.45}
+.rgstr td.nw{white-space:nowrap}
+.rgstr tr.dgrp th.grp{text-align:center;font-size:11.5px;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--ink2);padding-bottom:3px}
+.rgstr th.b,.rgstr td.b{border-left:1px solid var(--line)}
+.rgstr .miss{font-style:normal;opacity:.5}`,
+  'and its own rules, because its cells wrap where the grid clips');
+
+/* A table with a min-width inside an overflow:visible box does not scroll —
+   it pushes the whole PAGE sideways, and the panel edges, the hero above it
+   and the sticky company bar all slide out from under it. That box is
+   overflow:visible on a desktop so the company bar can stick, which is right
+   for every other table byCompany draws and wrong for the two wide ones. They
+   get their own scrollbar. Avin: 'I am ok with horizontal scrolling, but need
+   to see everything clearly' — scrolling the table is that; scrolling the
+   whole screen is not. */
+shell = swap(shell,
+`  .regblock .tw{overflow:visible}`,
+`  .regblock .tw{overflow:visible}
+  .regblock .tw-dgrid, .regblock .tw-rgstr{overflow-x:auto}`,
+  'the two wide grids scroll inside themselves, not by dragging the page');
+
+/* A console tab is gated per screen, and until now the gate decided only
+   whether the tab was DRAWN. state.tab could still be set to it — by a link,
+   by a bookmark, by #c/staffreg typed in — and render() would happily draw the
+   page, because the only check it made was that the person could open the
+   console at all. That was harmless while every console screen was gated the
+   same way. The staff register is the first one that is not, so the gate has
+   to hold for the router too, not only for the row of tabs. */
+app = swap(app,
+  `  if(state.mode!=='console' && (TABS.find(t=>t.id===state.tab)||{}).con) state.tab='home';`,
+  `  if(state.mode!=='console' && (TABS.find(t=>t.id===state.tab)||{}).con) state.tab='home';
+  /* A screen this person may not open is not opened, however they arrived at
+     it. They land on the first console screen they may have rather than on an
+     error, because being told 'no' by a page that then shows you nothing at
+     all reads as a broken link. */
+  if(state.mode==='console'){
+    const t = TABS.find(x => x.id === state.tab);
+    if(t && t.con && t.gate && !t.gate(state.user)) state.tab = (CONTABS()[0] || {id:'addstaff'}).id;
+  } else {
+    /* And the same on this side of the door. Approvals is the first staff
+       screen not everybody has, so the rail is no longer the only thing
+       deciding who sees what — a hash typed or bookmarked has to be checked
+       as well. */
+    const t = TABS.find(x => x.id === state.tab);
+    if(t && !t.con && t.gate && !t.gate(state.user)) state.tab = 'home';
+  }`,
+  'a gated screen cannot be reached by asking for it either');
+
+/* =====================================================================
+   THE WIDTH OF A SCREEN
+   ---------------------------------------------------------------------
+     'There is blank space at the right end of most of the screens. Can we
+      use the full width?'
+     'i want to see the numbers clearly, currently there are not seen as the
+      width of columns is very less'
+
+   Two faults, and they compound. The content column has been capped at
+   1560px, with a list of named tabs allowed 1800 — a list nothing has been
+   added to since it was written, so every screen built after it, the whole
+   Documents section included, has been sitting inside the narrower cap and
+   leaving a hand's width of empty page down the right of a wide monitor.
+
+   The cap is there so a paragraph does not run to a metre wide. That reason
+   holds for a page of prose and does not hold for a page that is one table:
+   a table cannot be too wide to read, it can only be too narrow, and the
+   whole console is tables. So the console takes the width it is given, the
+   staff side keeps a cap, and the cap it keeps is set from a monitor people
+   actually have rather than from 2019.
+   ===================================================================== */
+app = swap(app,
+  `  mainEl.classList.toggle('wide', ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));`,
+  `  /* Every console screen is a table or a form over one, so the console is
+     wide by definition rather than by a list somebody has to remember to add
+     to. The named staff screens keep their place on the list. */
+  mainEl.classList.toggle('wide', state.mode === 'console'
+    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));`,
+  'the console is wide because it is the console, not because it is on a list');
+
+shell = swap(shell,
+  `.content{padding:22px 24px 60px;display:flex;flex-direction:column;gap:18px;max-width:1560px}`,
+  `/* A cap so a line of prose stays readable on a wide monitor; 1560 was set
+   when the widest screen in the office was smaller than the ones on the desks
+   now, and it left a blank strip down the right of every staff page. */
+.content{padding:22px 24px 60px;display:flex;flex-direction:column;gap:18px;max-width:1780px}`,
+  'the staff cap is set from the monitors people have');
+
+shell = swap(shell,
+  `main.wide .content{max-width:1800px}`,
+  `/* No cap at all. A table is never too wide to read, only too narrow, and
+   everything this class is put on is a table. */
+main.wide .content{max-width:none}`,
+  'and a screen made of tables takes the width it is given');
+
+/* =====================================================================
+   THE OWNER'S CONSOLE IS SHORTER THAN ACCOUNTS'
+   ---------------------------------------------------------------------
+     'Remove the tabs from Miraziz / Attendance -> Office only / Sales ->
+      Totally / Staff -> Emails / Documents -> Totally / He doesnt need to
+      see every tab - its more of backend'
+
+   Nine screens come off the owner's console. They are the ones that
+   configure the portal rather than tell him anything about the firm: where
+   the office is measured from, the sales upload template and the commission
+   rules behind it, the staff accounts, the referral partners, which emails
+   the portal sends, and the three document screens.
+
+   What he keeps is what he would actually open — payroll, payslips, air
+   tickets, gratuity, attendance, regularization, shifts, holidays, the leave
+   balances. Sales and Documents lose every screen he could see, so those two
+   headings disappear from his console altogether: a section with nothing in
+   it is not drawn.
+
+   The gate is isAccounts, the same one the staff register uses, and it says
+   the same thing here as it does there: this hides a screen, it does not
+   revoke anything. Miraziz is is_admin() at the database and can still read
+   every table behind these pages. It is a console that fits the person, not
+   a wall — and the router refuses these ids for him too, so a bookmark to one
+   lands on the first screen he does have rather than opening it anyway.
+   ===================================================================== */
+
+app = swap(app,
+  `  {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:canAdmin, con:true},`,
+  `  {id:'office',     group:'con', sec:'people', label:'Office',         title:'Where the office is', gate:isAccounts, con:true},`,
+  'where the office is measured from is a setting, not a report');
+
+app = swap(app,
+`  {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:canAdmin, con:true},
+  {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:canAdmin, con:true},
+  {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:canAdmin, con:true},
+  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:canAdmin, con:true},`,
+`  {id:'salestpl',   group:'con', sec:'sales',  label:'Upload template',title:'Upload template', gate:isAccounts, con:true},
+  {id:'salesrules', group:'con', sec:'sales',  label:'Commission rules', title:'Commission rules', gate:isAccounts, con:true},
+  {id:'salesstaff', group:'con', sec:'sales',  label:'Staff accounts', title:'Staff accounts', gate:isAccounts, con:true},
+  {id:'salesptr',   group:'con', sec:'sales',  label:'Referral partners', title:'Referral partners', gate:isAccounts, con:true},`,
+  'the sales section, whole \u2014 the weekly upload was already accounts only');
+
+app = swap(app,
+  `  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:canAdmin, con:true},`,
+  `  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:isAccounts, con:true},`,
+  'which emails the portal sends');
+
+app = swap(app,
+`  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:canAdmin, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:canAdmin, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:canAdmin, con:true},`,
+`  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:isAccounts, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:isAccounts, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:isAccounts, con:true},`,
+  'the documents section, whole \u2014 the register was already accounts only');
+
+/* =====================================================================
+   THE PERSON CARD: THREE ROWS, AND TWO FAULTS ON THE WAY
+   ---------------------------------------------------------------------
+     'A new looking profile view for Miraziz and me: 1. Boxes should be
+      parallel, the header and bottom line of the boxes should be equivalent
+      2. Some issue with the personal mobile (see the code next to it)
+      3. Salary details 4. Leave details 5. Visa Details ...
+      So the boxes now will be 3+3+3'
+      'And it should be viewed only by Miraziz and me'
+
+   FAULT ONE — the boxes were not parallel. Both rows carry `gtop`, whose
+   whole job is align-items:start, so every box shrank to its own content and
+   no two bottom lines in a row agreed. It is right on a screen where a short
+   panel beside a long one should not grow a field of white; it is wrong here,
+   where the boxes are a grid somebody reads across. Taken off these two rows
+   and nowhere else.
+
+   FAULT TWO — the personal mobile printed its own markup:
+
+       +971505297289 <span class="pill mute">not shown to colleagues</span>
+
+   The helper that draws these boxes decided whether a value was already HTML
+   by testing whether it STARTED with '<'. The personal email begins
+   '<a href=...' and passed; the mobile begins with the number and merely
+   contains the pill, so the whole string was escaped and the tag came out as
+   text. A sniff, not a rule, and it would have done the same to the next
+   value that carried markup anywhere but the front. Values now say for
+   themselves whether they are HTML.
+
+   AND THE THIRD ROW — what they are paid, their leave and tickets, and when
+   their visa runs out. Accounts and the owner only: it is the same test the
+   birth year and the document numbers already use on this card, so a
+   colleague opening the same page sees six boxes and nothing else changes.
+   ===================================================================== */
+
+// The two rows of the card stretch; every other grid in the portal is left alone.
+app = swap(app,
+`    <div class="grid g3 gtop">
+      <section class="panel">
+        <header><h3>How to reach them</h3><span class="hint">work only</span></header>`,
+`    <div class="grid g3">
+      <section class="panel">
+        <header><h3>How to reach them</h3><span class="hint">work only</span></header>`,
+  'the first row of boxes shares a height');
+
+app = swap(app,
+`      return \`<div class="grid g3 gtop">
+        \${panel('Where they live', 'in the UAE', here)}`,
+`      return \`<div class="grid g3">
+        \${panel('Where they live', 'in the UAE', here)}`,
+  'and so does the second');
+
+/* A value says whether it is HTML instead of being guessed at. */
+app = swap(app,
+`        own ? ['Personal mobile', p.mobile
+                ? \`\${esc(p.mobile)} <span class="pill mute">not shown to colleagues</span>\` : '']
+            : null`,
+`        own ? ['Personal mobile', p.mobile
+                ? \`\${esc(p.mobile)} <span class="pill mute">not shown to colleagues</span>\` : '', true]
+            : null`,
+  'the mobile declares itself HTML');
+
+app = swap(app,
+  `        ['Personal email',     p.pemail ? \`<a href="mailto:\${esc(p.pemail)}">\${esc(p.pemail)}</a>\` : ''],`,
+  `        ['Personal email',     p.pemail ? \`<a href="mailto:\${esc(p.pemail)}">\${esc(p.pemail)}</a>\` : '', true],`,
+  'and so does the email');
+
+app = swap(app,
+`        <div class="pad"><dl class="kv wide">\${list.map(x =>
+          \`<dt>\${esc(x[0])}</dt><dd>\${/^</.test(String(x[1])) ? x[1] : esc(x[1])}</dd>\`).join('')}`,
+`        <div class="pad"><dl class="kv wide">\${list.map(x =>
+          \`<dt>\${esc(x[0])}</dt><dd>\${x[2] ? x[1] : esc(x[1])}</dd>\`).join('')}`,
+  'and the helper stops sniffing for a leading angle bracket');
+
+/* The third row. Accounts and the owner only — the same test the birth year
+   and the document numbers on this card already use. */
+app = swap(app,
+`    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Everyone in the group can see this page. Documents,`,
+`    \${(() => {
+      /* Avin: 'it should be viewed only by Miraziz and me'. canAdmin is
+         accounts and the owner, which is exactly those two today and stays
+         right if a second accounts person is ever added. A colleague opening
+         the same card sees the six boxes above and no sign that these exist. */
+      if(!canAdmin(state.user)) return '';
+
+      const kv = rows => \`<div class="pad"><dl class="kv wide">\${rows
+        .map(r => \`<dt>\${esc(r[0])}</dt><dd>\${r[1]}</dd>\`).join('')}</dl></div>\`;
+      const box = (h, hint, rows) => \`<section class="panel">
+        <header><h3>\${esc(h)}</h3>\${hint ? \`<span class="hint">\${esc(hint)}</span>\` : ''}</header>
+        \${kv(rows)}</section>\`;
+      const dim = t => \`<span style="color:var(--ink3)">\${esc(t)}</span>\`;
+      /* Whole months between two dates, which is how a raise is talked about
+         for the first two years and how long ago it was after that. */
+      const monthsSince = iso => {
+        if(!iso) return null;
+        const t = HDATE();
+        let m = (+t.slice(0,4) - +iso.slice(0,4)) * 12 + (+t.slice(5,7) - +iso.slice(5,7));
+        if(+t.slice(8,10) < +iso.slice(8,10)) m--;
+        return Math.max(0, m);
+      };
+      const spell = m => m === null ? '' : m < 1 ? 'this month'
+        : m < 12 ? m + ' month' + (m === 1 ? '' : 's')
+        : (m % 12 === 0 ? (m / 12) + ' year' + (m === 12 ? '' : 's')
+           : Math.floor(m / 12) + ' year' + (m >= 24 ? 's' : '') + ' ' + (m % 12) + ' month' + (m % 12 === 1 ? '' : 's'));
+
+      // ---------------------------------------------------------- what they are paid
+      const basis = BASISOF(who);
+      const S = salParts(who);
+      const pay = [];
+      if(basis === 'commission'){
+        pay.push(['On payroll as', 'Commission only ' + dim('\\u2014 no salary on file')]);
+      } else if(basis === 'off'){
+        pay.push(['On payroll as', 'Not on payroll ' + dim('\\u2014 on the staff list, off the run')]);
+      } else if(!S || !S.co || !S.co.length){
+        pay.push(['Current salary', dim('nothing on file')]);
+      } else {
+        const one = S.co.length === 1;
+        pay.push(['Current salary',
+          \`<b style="font-size:15px">AED \${money(S.salary,2)}</b> a month\`]);
+        S.co.forEach(c => pay.push([one ? 'Made up of' : esc(c.label),
+          \`\${money(c.basic,2)} basic &middot; \${money(c.allow,2)} allowance\`
+          + (one ? '' : \` \${dim('\\u2014 ' + money(c.salary,2))}\`)]));
+        const lead = S.co[0] || {};
+        pay.push(['Running since', esc(lead.from || '') || dim('not dated')]);
+        /* The revision is the row before the one in force. Somebody still on
+           their first salary has none, and saying so is better than a dash
+           that could mean either. */
+        const pv = lead.prev;
+        if(pv){
+          const rise = Math.round((lead.salary - pv.salary) * 100) / 100;
+          pay.push(['Last revision',
+            \`\${money(pv.salary,2)} <span style="color:var(--ink3)">&rarr;</span> <b>\${money(lead.salary,2)}</b>\`]);
+          pay.push(['', dim((rise >= 0 ? 'a rise of ' : 'a cut of ') + money(Math.abs(rise),2)
+            + (pv.salary ? ' \\u00b7 ' + Math.round(Math.abs(rise) / pv.salary * 100) + '%' : ''))]);
+        } else {
+          pay.push(['Last revision', dim('none on file \\u2014 this is the first figure')]);
+        }
+        const m = monthsSince(lead.on);
+        if(m !== null) pay.push(['Time since',
+          esc(spell(m)) + (m >= 12 ? ' <span class="pill warn">due a review</span>' : '')]);
+        (S.ahead || []).forEach(a => pay.push(['Already agreed',
+          \`<b>\${money(a.salary,2)}</b> from \${esc(a.from)}\`]));
+      }
+
+      // -------------------------------------------------------- leave and air tickets
+      const B = leaveBal(who);
+      const lv = [];
+      lv.push(['Annual leave balance', \`<b style="font-size:15px">\${(B.left||0).toFixed(1)} days</b>\`]);
+      lv.push(['Made up of', dim(\`\${(B.carried||0).toFixed(1)} carried \\u00b7 \${(B.accrued||0).toFixed(1)} earned \\u00b7 \${(B.taken||0).toFixed(1)} taken\`)]);
+      /* The three most recent that have actually started. A booking for next
+         month is on the card already, under Next booked off. */
+      const past = (HR().requests || [])
+        .filter(r => r.who === who && r.status === 'Approved' && r.from <= HDATE())
+        .sort((a, b) => a.from < b.from ? 1 : -1).slice(0, 3);
+      if(past.length) past.forEach((r, i) => lv.push([i ? '' : 'Last three taken',
+        \`\${esc(dayLabel(r.from))} \\u2013 \${esc(dayLabel(r.to))} \${esc(String(r.to).slice(0,4))}\`
+        + \` \${dim('\\u00b7 ' + (r.days === null ? '' : r.days + ' day' + (r.days === 1 ? '' : 's') + ' \\u00b7 ') + reqLabel(r.type).toLowerCase())}\`]));
+      else lv.push(['Last three taken', dim('none taken yet')]);
+      const tk = (DATA.tickets.employees || []).find(e => e.portalName === who || e.name === who);
+      if(tk){
+        const h = (DATA.tickets.history || {})[tk.id] || (DATA.tickets.history || {})[who] || {rows: []};
+        const last = (h.rows || [])[(h.rows || []).length - 1];
+        lv.push(['Air tickets paid', (h.rows || []).length
+          ? \`\${h.rows.length} \${dim('\\u00b7 last ' + last[1] + ', AED ' + money(last[2],2))}\`
+          : dim('none yet')]);
+        lv.push(['Next air ticket due', tk.next
+          ? \`\${esc(tk.next)} \${tk.status ? \`<span class="pill mute">\${esc(tk.status.toLowerCase())}</span>\` : ''}\`
+          : dim(tk.status || 'not scheduled')]);
+      } else {
+        lv.push(['Air tickets', dim('not on the scheme')]);
+      }
+
+      // ---------------------------------------------------------------- visa
+      const D = (HR().docs || {})[who] || {};
+      const vco = visaCoOf(who);
+      const KINDS = [['visa','Residency visa'],['eid','Emirates ID'],
+                     ['passport','Passport'],['labour','Labour card']];
+      const doc = KINDS.map(([k, label]) => {
+        const v = D[k];
+        if(!v) return [label, dim('\\u2014 not on file')];
+        const d = dTo(v);
+        const pill = d === null ? '' : d < 0 ? ' <span class="pill bad">expired</span>'
+          : d <= 60 ? \` <span class="pill warn">\${d} day\${d === 1 ? '' : 's'}</span>\`
+          : d <= 183 ? \` <span class="pill warn">\${Math.round(d / 30)} months</span>\` : '';
+        const col = d === null ? '' : d < 0 ? 'var(--bad)' : d <= 60 ? 'var(--warn)' : '';
+        return [label, \`<b\${col ? \` style="color:\${col}"\` : ''}>\${esc(dayLabel(v))} \${esc(String(v).slice(0,4))}</b>\${pill}\`];
+      });
+      doc.push(['Sponsored by', esc(vco.name)]);
+
+      return \`<div class="grid g3">
+        \${box('What they are paid', 'accounts and the owner', pay)}
+        \${box('Leave and air tickets', '', lv)}
+        \${box('Visa and documents', 'expiry only', doc)}
+      </div>\`;
+    })()}
+    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Everyone in the group can see this page. Documents,`,
+  'what they are paid, their leave and tickets, and when their visa runs out');
+
+
+/* The line at the foot of the card promised that pay and document numbers are
+   never on this page. For a colleague that is still true and still worth
+   saying. For accounts and the owner it stopped being true the moment the
+   third row was added, and a promise that has quietly stopped holding is
+   worse than one that was never made -- the same rule that took two sentences
+   off the documents page in Task 3. So it says what is true of whoever is
+   reading it.
+
+   Built by concatenation rather than as a template literal: the sentence
+   contains an em dash which app.js carries as the escape —, and an
+   anchor written as a template literal turns that into the character itself
+   and then matches nothing. */
+{
+  const capOld =
+    '    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Everyone in the group can see this page. Documents,\n'
+  + "      document numbers, pay and the year of somebody's birth are not on it and never are \\u2014 those are accounts' and the\n"
+  + "      person's own. Personal mobiles are not on it either: colleagues get the work number.\n"
+  + "      ${SEESALL(who) ? '' : `If something here is wrong about you, it is yours to fix on <b>My profile</b>.`}</p>`;";
+  const capNew =
+    '    <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">${canAdmin(state.user)\n'
+  + "      ? `Everyone in the group can see the boxes above. <b>The three below the line are yours and the owner&rsquo;s\n"
+  + "         alone</b> &mdash; pay, leave and document expiry are not on a colleague&rsquo;s view of this page and never\n"
+  + "         are, and neither are document numbers, personal mobiles, or the year of somebody&rsquo;s birth.`\n"
+  + "      : `Everyone in the group can see this page. Documents, document numbers, pay and the year of somebody&rsquo;s\n"
+  + "         birth are not on it and never are &mdash; those are accounts&rsquo; and the person&rsquo;s own. Personal\n"
+  + "         mobiles are not on it either: colleagues get the work number.\n"
+  + "         ${SEESALL(who) ? '' : `If something here is wrong about you, it is yours to fix on <b>My profile</b>.`}`}</p>`;";
+  app = swap(app, capOld, capNew,
+    'and the line at the foot says what is true of whoever is reading it');
+}
+
+/* =====================================================================
+   AN EMPTY BOX IS STILL A BOX
+   ---------------------------------------------------------------------
+     'If they have not filled the details, still show the boxes with heading'
+
+   The middle three were drawn only where there was something in them, on the
+   reasoning that a card should not fill up with a column of dashes
+   reproaching somebody who has not got round to it yet. That is a fair
+   instinct and it produced a worse thing: a row with one box in it and two
+   empty thirds beside it, or no row at all, so the card was 3+1+3 or 3+3 and
+   never the 3+3+3 it was asked to be. A heading with nothing under it says
+   'we hold nothing here' in one line; a missing box says nothing at all.
+
+   So the boxes always stand, and an empty one carries a single quiet line
+   rather than a column of dashes — the instinct kept, the layout fixed. The
+   sentence about how much of the profile is still to go was the whole
+   contents of the row when nothing was filled in; it moves under the row,
+   where it can be read alongside the boxes instead of in place of them.
+   ===================================================================== */
+{
+  const oldPanel =
+    '      const panel = (h, hint, list) => list.length ? `<section class="panel">\n'
+  + '        <header><h3>${h}</h3>${hint ? `<span class="hint">${hint}</span>` : \'\'}</header>\n'
+  + '        <div class="pad"><dl class="kv wide">${list.map(x =>\n'
+  + '          `<dt>${esc(x[0])}</dt><dd>${x[2] ? x[1] : esc(x[1])}</dd>`).join(\'\')}\n'
+  + '        </dl></div></section>` : \'\';\n'
+  + '      const any = here.length || home.length || emg.length;\n'
+  + '      if(!any) return `<section class="panel"><div class="pad" style="padding:34px 24px;text-align:center;color:var(--ink3)">\n'
+  + '        ${esc(NM(who))} has not filled in a profile yet \\u2014 ${D.total - D.done} of ${D.total} things still to go.</div></section>`;\n'
+  + '      return `<div class="grid g3">\n'
+  + "        ${panel('Where they live', 'in the UAE', here)}\n"
+  + "        ${panel('Back home', '', home)}\n"
+  + "        ${panel('In an emergency', 'who we call', emg)}\n"
+  + '      </div>`;';
+  const newPanel =
+    '      const panel = (h, hint, list) => `<section class="panel">\n'
+  + '        <header><h3>${h}</h3>${hint ? `<span class="hint">${hint}</span>` : \'\'}</header>\n'
+  + '        <div class="pad">${list.length\n'
+  + '          ? `<dl class="kv wide">${list.map(x =>\n'
+  + '              `<dt>${esc(x[0])}</dt><dd>${x[2] ? x[1] : esc(x[1])}</dd>`).join(\'\')}</dl>`\n'
+  + '          : `<p style="margin:0;color:var(--ink3)">Nothing on file yet</p>`}</div></section>`;\n'
+  + '      const any = here.length || home.length || emg.length;\n'
+  + '      /* And not drawn at all for a colleague. The three of them are built\n'
+  + '         from the private table, which answers only the person and accounts,\n'
+  + '         so for anybody else they were three empty boxes saying "Nothing on\n'
+  + '         file yet" about a profile that might be filled to the brim — and a\n'
+  + '         line underneath stating it as a fact about that person to the whole\n'
+  + '         company. An empty box is a question in the reader\'s mind, and the\n'
+  + '         answer is not theirs to have. */\n'
+  + '      if(!own) return \'\';\n'
+  + '      return `<div class="grid g3">\n'
+  + "        ${panel('Where they live', 'in the UAE', here)}\n"
+  + "        ${panel('Back home', '', home)}\n"
+  + "        ${panel('In an emergency', 'who we call', emg)}\n"
+  + '      </div>`\n'
+  + '      + (any ? \'\' : `<p class="cap" style="color:var(--ink3);font-size:13px;margin:0;border:0;padding:2px 0 0">\n'
+  + '          ${esc(NM(who))} has not filled in a profile yet \\u2014 ${D.total - D.done} of ${D.total} things still to go.</p>`);';
+  app = swap(app, oldPanel, newPanel,
+    'the three profile boxes stand whether or not there is anything in them');
+}
+
+/* =====================================================================
+   THE CONSOLE, ARRANGED THE WAY THE WORK IS
+   ---------------------------------------------------------------------
+     'Console should look like this. This i feel is the correct way'
+     Pay | People | Sales | Documents | Notifications
+
+   Staff was never a subject. It was three screens that had nothing to do
+   with each other filed under a word broad enough to cover anything, which
+   is what a section called Staff always becomes in a staff portal. Each of
+   the three belongs somewhere that already exists:
+
+     Probation      -> Pay. Confirming somebody is a pay event: it is what
+                       ends the probationary rate and starts the full one,
+                       and it sits with the run rather than beside a form for
+                       adding a new joiner.
+     Add somebody   -> People. It is the first thing that happens to a
+                       person, and everything else under People is about a
+                       person's days.
+     Emails         -> Notifications, a section of its own. What the portal
+                       sends out is not a fact about staff; it is a setting
+                       about the portal, and burying it under Staff is why it
+                       was hard to find. Singular on the tab, because there is
+                       one screen and it is about email.
+
+   And Staff goes, because a section with nothing left in it is not drawn.
+   ===================================================================== */
+
+app = swap(app,
+`  {id:'onpay',      group:'con', sec:'pay',    label:'On payroll',     title:'Who is on payroll', gate:canUpload, con:true},
+  {id:'tickets',    group:'con', sec:'pay',    label:'Air ticket',     title:'Air ticket tracker', gate:canAdmin, con:true},`,
+`  {id:'onpay',      group:'con', sec:'pay',    label:'On payroll',     title:'Who is on payroll', gate:canUpload, con:true},
+  // Confirming somebody ends the probationary rate and starts the full one,
+  // which makes it a pay event rather than a piece of paperwork.
+  {id:'probation',  group:'con', sec:'pay',    label:'Probation',      title:'Probation', gate:canAdmin, con:true},
+  {id:'tickets',    group:'con', sec:'pay',    label:'Air ticket',     title:'Air ticket tracker', gate:canAdmin, con:true},`,
+  'Probation moves to Pay, after On payroll');
+
+app = swap(app,
+`  {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},
+  // ---- Sales: was buried at the bottom of Rules & staff`,
+`  {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},
+  // The first thing that happens to a person, at the end of the section
+  // about people, rather than under a heading of its own.
+  {id:'addstaff',   group:'con', sec:'people', label:'Add somebody',   title:'Add somebody to the staff list', gate:canUpload, con:true},
+  // ---- Sales: was buried at the bottom of Rules & staff`,
+  'Add somebody moves to People, at the end');
+
+app = swap(app,
+`  // ---- Staff
+  {id:'addstaff',   group:'con', sec:'staff',  label:'Add somebody',   title:'Add somebody to the staff list', gate:canUpload, con:true},
+  {id:'probation',  group:'con', sec:'staff',  label:'Probation',      title:'Probation', gate:canAdmin, con:true},
+  {id:'digest',     group:'con', sec:'staff',  label:'Emails',         title:'Emails the portal sends', gate:isAccounts, con:true},
+  // ---- Documents: the hero stays put as you move between these four`,
+`  // ---- Documents: the hero stays put as you move between these four`,
+  'and the Staff section is emptied');
+
+app = swap(app,
+`  {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true}
+];`,
+`  {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true},
+  // ---- Notifications: what the portal sends out, which is a setting about
+  // the portal and not a fact about anybody.
+  {id:'digest',     group:'con', sec:'notif',  label:'Email',          title:'Emails the portal sends', gate:isAccounts, con:true}
+];`,
+  'Emails becomes Notifications -> Email');
+
+app = swap(app,
+`const SECTIONS = [['pay','Pay'], ['people','People'], ['sales','Sales'],
+                  ['staff','Staff'], ['docs','Documents']];`,
+`const SECTIONS = [['pay','Pay'], ['people','People'], ['sales','Sales'],
+                  ['docs','Documents'], ['notif','Notifications']];`,
+  'and the row of sections is Avin’s');
+
+/* =====================================================================
+   A CONSULTANT CAN SEE THEIR OWN COMMISSION
+   ---------------------------------------------------------------------
+     'My dashboard, My Commission, My invoices - For Rana and all sales
+      employees (their performance they need to know)'
+
+   They could not, and the reason was worth finding. inSales asked two
+   questions — has this person got sales figures, and does their company sell
+   through the portal — and BOTH were answered out of DATA.dept and
+   companies[].sales, which are built from the sales_company aggregate. That
+   table's rule is sees_company_sales(): accounts, the owner, and the six
+   people on the sales-viewers list. Nobody else.
+
+   So for an ordinary consultant the aggregate never arrives, dept is empty,
+   the company reads as one that does not sell, and the gate says no — while
+   the database was perfectly willing to hand them their own eight commission
+   rows all along. The test for 'may I see my own figures' was being answered
+   with somebody else's permission.
+
+   Two questions now, because they are two questions:
+
+     hasOwnSales   — I have commission figures of my own. Anybody can answer
+                     this about themselves; the database sends them.
+     seesDeptSales — I can see the department's figures, which is what the
+                     team screens are made of and what still needs the
+                     aggregate.
+
+   My dashboard, My commission and My invoices ask the first. Team
+   performance, Team leaderboard and Department still ask the second, because
+   the roster they draw is other people's rows and no gate can conjure data
+   the database refuses to send.
+   ===================================================================== */
+app = swap(app,
+  `const inSales = u => !!DATA.dept[u] && companyOf(u).sales;`,
+  `/* The department's figures: the sales_company aggregate arrived, so this
+   person may read what the whole department did. */
+const seesDeptSales = u => !!DATA.dept[u] && companyOf(u).sales;
+/* Their own: commission rows of their own came back, which the database sends
+   to everybody about themselves. */
+const hasOwnSales = u => !!(DATA.engine || {})[u];
+const inSales = u => seesDeptSales(u) || hasOwnSales(u);`,
+  'seeing your own figures stops depending on being allowed to see everyone’s');
+
+app = swap(app,
+`  {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&inSales(u)},
+  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:inSales},
+  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:inSales},`,
+`  // These three are made of other people's rows, so they still ask whether the
+  // department's figures arrived at all.
+  {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&seesDeptSales(u)},
+  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:seesDeptSales},
+  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},`,
+  'and the team screens keep asking the question they actually need answered');
+
+/* The screens themselves read 'the aggregate did not arrive' as 'this company
+   has not uploaded any sales', which for a consultant with figures of their
+   own is simply false, and told them so on the three pages that are about
+   nobody but them. */
+app = swap(app,
+  `  if(!CON && SALESTABS.includes(state.tab) && !activeCo().sales){`,
+  `  /* My dashboard, My commission and My invoices are built from the person's
+     own rows. Whether the company aggregate arrived says nothing about
+     whether those exist, so it is not asked on those three. */
+  const MINE_ONLY = ['dashboard', 'commission', 'invoices'];
+  if(!CON && SALESTABS.includes(state.tab) && !activeCo().sales
+     && !(MINE_ONLY.includes(state.tab) && hasOwnSales(state.user))){`,
+  'and the three screens about you no longer claim there are no sales');
+
+/* =====================================================================
+   TWO SMALLER THINGS
+   ---------------------------------------------------------------------
+   'Leave & WFH - not applicable for Miraziz'
+
+   He does not book leave, so the page is not his. But the panel inside it
+   that says 'Waiting on you' is how a manager approves their team's leave,
+   and Miraziz manages people. Taking the tab away outright would have taken
+   their approvals with it, silently. So it goes when there is nothing waiting
+   and comes back when there is — the same shape Approve payments already
+   uses, and the notification still reaches him either way.
+
+   'Your advances - My name is not mentioned. I can take advances as well
+    right, approval system remains same'
+
+   Quite right. Accounts saw the ledger INSTEAD of their own advances, so
+   Avin's were in there among everybody's rather than anywhere he would look
+   for them. He gets both now: his own first, then the ledger. Nothing about
+   who approves what changes.
+   ===================================================================== */
+app = swap(app,
+  `  {id:'requests',    group:'hr',    label:'Leave & WFH',      title:'Leave and working from home'},`,
+  `  /* The owner does not book leave. He does approve it, so the page comes
+     back the moment something is waiting on him rather than stranding his
+     team's requests behind a tab he cannot open. */
+  {id:'requests',    group:'hr',    label:'Leave & WFH',      title:'Leave and working from home',
+   gate:u => roleOf(u) !== 'owner'
+     || (HR().requests || []).some(r => r.mgr === u && r.status === 'Pending')},`,
+  'Leave & WFH is not the owner’s page, except when a decision is waiting on him');
+
+app = swap(app,
+`  <section class="panel">
+    <header><h3>\${adm?'Advances ledger':'Your advances'}</h3>`,
+`  \${adm ? \`<section class="panel">
+    <header><h3>Your advances</h3>
+      <span class="hint">accounts take advances like anybody else &mdash; these are yours</span>
+      <span style="margin-left:auto;color:var(--ink3);font-size:12.5px">\${mine.length}</span></header>
+    <div class="tw"><table>
+      <thead><tr><th>Reference</th><th class="r">Amount</th><th class="r">Monthly</th><th>From</th>
+        <th class="r">Repaid</th><th class="r">Left</th><th>Reason</th><th>Status</th></tr></thead>
+      <tbody>\${mine.length ? mine.map(x => \`<tr>
+        <td class="n nw">\${esc(x.id)}</td><td class="n r">\${money(x.amount,2)}</td>
+        <td class="n r">\${money(x.monthly,2)}</td><td class="nw">\${esc(x.start||'\\u2014')}</td>
+        <td class="n r">\${money(x.paid||0,2)}</td>
+        <td class="n r netcol"\${loanLeft(x)>0?' style="color:var(--warn)"':''}>\${x.status==='Approved'?money(loanLeft(x),2):'\\u2014'}</td>
+        <td style="color:var(--ink2)">\${esc(x.why)}</td>
+        <td>\${stPill(x.status)}\${x.status==='Pending'
+          ? \` <button class="btn ghost sm" data-lnpull="\${esc(x.id)}" type="button"
+                style="padding:2px 9px;font-size:11.5px;margin-left:6px">Withdraw</button>\` : ''}</td></tr>\`).join('')
+        : '<tr><td colspan="8" style="color:var(--ink3)">Nothing yet.</td></tr>'}
+      </tbody></table></div>
+  </section>\` : ''}
+
+  <section class="panel">
+    <header><h3>\${adm?'Advances ledger':'Your advances'}</h3>`,
+  'and accounts sees their own advances as well as everybody’s');
+
+
+/* =====================================================================
+   THE YEAR ON A SALES SCREEN IS THE YEAR YOU ARE LOOKING AT
+   ---------------------------------------------------------------------
+     'just a question, 2025 data was updated. What happened to that?'
+
+   Nothing happened to it. It is all there and the year segment reaches it.
+   What went wrong is that every screen showing it said 2026 across the top.
+
+   Six labels had the year typed into them rather than read from the year
+   being viewed. Switch the segment to 2025 and the figures change to 2025's
+   while the words above them still read 2026 — a good way to make somebody
+   think their data has gone. They read state.year now.
+
+   And YTD only means something in a year that is still running. A finished
+   year is not 'to date'.
+   ===================================================================== */
+{
+  const yr = [
+    [`<span class="k">Invoiced 2026 YTD</span>`,
+     `<span class="k">Invoiced \${esc(state.year)}\${state.year === HDATE().slice(0,4) ? ' YTD' : ''}</span>`],
+    [`<span class="k">Total net sales · \${p==='FY'?'2026':p}</span>`,
+     `<span class="k">Total net sales · \${p==='FY'?esc(state.year):p}</span>`],
+    [`<span class="k">Eligible net sales · \${fy?'2026':p}</span>`,
+     `<span class="k">Eligible net sales · \${fy?esc(state.year):p}</span>`],
+    [`<span class="k">Your rank · \${state.period==='FY'?'2026':state.period}</span>`,
+     `<span class="k">Your rank · \${state.period==='FY'?esc(state.year):state.period}</span>`],
+    [`<span class="k">\${esc(DD.department)} net sales · \${p==='FY'?'2026':p}</span>`,
+     `<span class="k">\${esc(DD.department)} net sales · \${p==='FY'?esc(state.year):p}</span>`],
+    [`<th class="r">\${state.period==="FY"?"2026":state.period} net sales</th>`,
+     `<th class="r">\${state.period==="FY"?esc(state.year):state.period} net sales</th>`]
+  ];
+  yr.forEach(([from, to], i) => {
+    app = swap(app, from, to, `the year on a sales screen is the year being viewed (${i + 1} of ${yr.length})`);
+  });
+}
+
+/* The leaderboard ranks people, so it needs each person's figures and not
+   only the department's total. Once 0043 lets a consultant read their own
+   company's sales_company row, seesDeptSales becomes true for them — and the
+   leaderboard would have appeared with a roster of one. It asks for the
+   roster it actually draws. */
+app = swap(app,
+  `  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard', gate:seesDeptSales},`,
+  `  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
+   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+  'the leaderboard waits until there is more than one person to rank');
+
+/* =====================================================================
+   EVERY SALES EMPLOYEE GETS THE TEAM SCREENS
+   ---------------------------------------------------------------------
+     'I wanted every sales employee to get: Team performance page - without
+      commission part / Team leaderboard as well'
+
+   Both were gated on canSeeTeam — manager, accounts, owner, or a named sales
+   lead — and beneath that on data a consultant was never sent. Migration 0044
+   fixes the data half with a view that carries the eight figures these
+   screens draw and no commission column at all. This is the other half: the
+   gate stops asking what somebody's job title is and asks whether there is
+   more than one person to compare, which is the actual precondition.
+
+   The Commission, Paid and Balance columns stay accounts-and-owner, as they
+   already were. The difference is that they are now absent from what a
+   consultant's browser is sent as well as from what it draws.
+   ===================================================================== */
+app = swap(app,
+  `  {id:'team',        group:'wider', label:'Team performance', title:'Team performance', gate:u=>canSeeTeam(u)&&seesDeptSales(u)},`,
+  `  // Not a title: whether the department's figures arrived, and whether there
+  // is anybody in them besides you.
+  {id:'team',        group:'wider', label:'Team performance', title:'Team performance',
+   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+  'Team performance is for everybody the department’s figures reach');
+
+/* The invoice count and the balance outstanding came from reading each
+   person's invoice rows, which a consultant may not do and should not: those
+   rows carry the client, the invoice number and the amount. 0044 returns both
+   as totals instead. Real rows are still preferred where they are there. */
+app = swap(app,
+`    const rows = invRows(u.name,p);
+    const mo = mgrOf(u.name,p);
+    return {name:u.name, role:u.role, e, mo,
+      count:rows.length,`,
+`    const rows = invRows(u.name,p);
+    const mo = mgrOf(u.name,p);
+    /* Totals from the view, for somebody whose invoice rows are not ours to
+       read. A count of nought from no rows and a count of nought from no
+       invoices are different facts, and only the first should fall back. */
+    const ag = (((DATA.invAgg || {})[u.name] || {})[state.year] || {});
+    const agg = p === 'FY'
+      ? Object.values(ag).reduce((s, x) => ({count: s.count + x.count, out: s.out + x.out}), {count: 0, out: 0})
+      : (ag[p] || null);
+    const useAgg = !rows.length && agg;
+    return {name:u.name, role:u.role, e, mo,
+      count: useAgg ? agg.count : rows.length,`,
+  'the invoice count and the outstanding balance come as totals where the rows are not readable');
+
+app = swap(app,
+  `      out:rows.reduce((s,r)=>s+(r[IC.bal]||0),0)};`,
+  `      out: useAgg ? agg.out : rows.reduce((s,r)=>s+(r[IC.bal]||0),0)};`,
+  'and so does the balance');
+
+/* =====================================================================
+   THREE SCREENS THE OWNER DOES NOT USE
+   ---------------------------------------------------------------------
+     '1. remove My air ticket from Miraziz left bar - he has no air tickets
+      to apply
+      2. remove request an advance from Miraziz - he wont request but he
+      should be able to see the advance request below 3k as well
+      3. remove Letters tab as well, just keep advance as he has to view and
+      approve above 3k advances'
+
+   The pattern is the same one as Leave & WFH: the owner is not a claimant.
+   He does not take an air ticket, does not ask for an advance and does not
+   request a letter. What he does do is decide, and every one of those
+   decisions has to keep reaching him — so nothing here touches the queue.
+
+   The advances page keeps the whole ledger for him, which already holds
+   every advance including the ones under the limit that accounts approves
+   without him. 'He should be able to see the advance request below 3k as
+   well' was already true; what goes is the form, not the sight of them.
+   ===================================================================== */
+
+app = swap(app,
+  `  {id:'myticket',    group:'hr',    label:'My air ticket',    title:'My air ticket', gate:u=>!isPartner(u)},`,
+  `  // A partner is not on the scheme, and neither is the owner.
+  {id:'myticket',    group:'hr',    label:'My air ticket',    title:'My air ticket',
+   gate:u => !isPartner(u) && roleOf(u) !== 'owner'},`,
+  'the owner has no air ticket to apply for');
+
+/* Advances & letters becomes Advances for him, because that is all it holds. */
+app = swap(app,
+  `  {id:'loans',       group:'hr',    label:'Advances & letters', title:'Advances and letters'},`,
+  `  /* Letters is a thing a person asks for. The owner does not, so the page is
+     the advances ledger and the queue waiting on him — and the name in the
+     rail says what it now is rather than what it used to be. */
+  {id:'loans',       group:'hr',
+   label: roleOf(window.__ME) === 'owner' ? 'Advances' : 'Advances & letters',
+   title: roleOf(window.__ME) === 'owner' ? 'Advances' : 'Advances and letters'},`,
+  'and the page is called what it holds');
+
+app = swap(app,
+`  return \`
+  <div class="seg segbig" id="askSeg">
+    <button data-ask="loans" aria-pressed="\${sec==='loans'}" type="button">Advances\${badge(nLoan)}</button>
+    <button data-ask="letters" aria-pressed="\${sec==='letters'}" type="button">Letters\${badge(nLtr)}</button>
+  </div>
+  \${sec==='loans' ? vLoans() : vLetters()}\`;`,
+`  /* One section, no switcher: a row of tabs with one tab in it is furniture.
+     Except that Letters is not only a thing you ASK for — it is where a letter
+     ISSUED to you arrives, a salary revision above all, and My payslip links
+     straight to it. Taking the tab away outright would stand the owner's own
+     revision letter behind a door with no handle, and the link from his
+     payslip would land him on the advances ledger. So the tab is gone until
+     there is something in it for him, which is the same rule as Leave & WFH
+     and Approve payments. He is still never shown the request form. */
+  if(roleOf(u) === 'owner'
+     && !(HR().letters || []).some(x => x.who === u
+            && !(x.type === 'revision' && x.status !== 'Issued'))) return vLoans();
+  return \`
+  <div class="seg segbig" id="askSeg">
+    <button data-ask="loans" aria-pressed="\${sec==='loans'}" type="button">Advances\${badge(nLoan)}</button>
+    <button data-ask="letters" aria-pressed="\${sec==='letters'}" type="button">Letters\${badge(nLtr)}</button>
+  </div>
+  \${sec==='loans' ? vLoans() : vLetters()}\`;`,
+  'and Letters goes with it');
+
+/* The form, and the box of his own advances that would only ever say
+   'Nothing yet'. The ledger, the queue and How it works all stay. */
+app = swap(app,
+`  <div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>Request an advance</h3>`,
+`  \${roleOf(u) === 'owner' ? '' : \`<div class="grid g2 gtop">
+    <section class="panel">
+      <header><h3>Request an advance</h3>`,
+  'the owner is not asked to fill in a request');
+
+/* ...and closed again after How it works, which is the other half of the pair
+   and belongs with the form rather than with the ledger. */
+app = swap(app,
+`        <dt>Leaving</dt><dd>Anything still outstanding is taken out of your final settlement.</dd>
+      </dl></div>
+    </section>
+  </div>
+
+  \${adm ? \`<section class="panel">
+    <header><h3>Your advances</h3>`,
+`        <dt>Leaving</dt><dd>Anything still outstanding is taken out of your final settlement.</dd>
+      </dl></div>
+    </section>
+  </div>\`}
+
+  \${adm && roleOf(u) !== 'owner' ? \`<section class="panel">
+    <header><h3>Your advances</h3>`,
+  'and the owner is not offered a box of his own advances he will never have');
+
+/* ---------- one page for everything waiting on you ----------
+   Avin: 'do we have a page exclusively where me or Miraziz or the manager
+   will be able to see all the approvals?' We did not. The bell gathered them,
+   but a popover mixed with birthdays is not somewhere you work from, and it
+   never carried settlements at all. Payments are deliberately left out of
+   this page on his instruction: one is read with its invoice open beside it,
+   and that is a screen of its own. */
+
+/* Seven kinds, one colour each, in both themes. */
+shell = swap(shell,
+`  --c1:#1668A5; --c2:#E06100; --c3:#7A5AA8;
+  --good:#1F7A4D; --warn:#A8720C; --bad:#B0243C;`,
+`  --c1:#1668A5; --c2:#E06100; --c3:#7A5AA8;
+  --kLeave:#1668A5; --kWfh:#4C79CF; --kAdv:#A8720C; --kLtr:#7A5AA8;
+  --kAtt:#0F7A8E; --kPay:#B0243C; --kSet:#8A5A12;
+  --good:#1F7A4D; --warn:#A8720C; --bad:#B0243C;`,
+  'the kind colours, light');
+
+shell = swap(shell,
+`    --c1:#3A8CC9; --c2:#DC5A08; --c3:#9578CE;
+    --good:#4FB07A;`,
+`    --c1:#3A8CC9; --c2:#DC5A08; --c3:#9578CE;
+    --kLeave:#4A9BD8; --kWfh:#7FA6EC; --kAdv:#D19A2E; --kLtr:#9578CE;
+    --kAtt:#45B0C4; --kPay:#E0697F; --kSet:#C79A4E;
+    --good:#4FB07A;`,
+  'the kind colours, dark by preference');
+
+shell = swap(shell,
+`  --c1:#3A8CC9; --c2:#DC5A08; --c3:#9578CE;
+  --good:#4FB07A;`,
+`  --c1:#3A8CC9; --c2:#DC5A08; --c3:#9578CE;
+  --kLeave:#4A9BD8; --kWfh:#7FA6EC; --kAdv:#D19A2E; --kLtr:#9578CE;
+  --kAtt:#45B0C4; --kPay:#E0697F; --kSet:#C79A4E;
+  --good:#4FB07A;`,
+  'the kind colours, dark by choice');
+
+/* The chip, the filter row, and the count that rides on the rail. */
+shell = swap(shell,
+`.apxb{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.apxb .btn{padding:11px 10px;font-size:14px}`,
+`.apxb{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.apxb .btn{padding:11px 10px;font-size:14px}
+
+/* ---------- approvals ---------- */
+.apk{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;
+  white-space:nowrap;color:var(--t);background:color-mix(in srgb,var(--t) 13%,transparent);
+  border:1px solid color-mix(in srgb,var(--t) 30%,transparent)}
+.apfilter{display:flex;gap:8px;flex-wrap:wrap;padding:12px 18px 12px;border-bottom:1px solid var(--line)}
+.apf{border:1px solid var(--line);background:none;border-radius:999px;padding:4px 13px;
+  font:inherit;font-size:13px;color:var(--ink2);cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px}
+.apf:hover{border-color:var(--ink3);color:var(--ink)}
+.apf i{font-style:normal;font-size:11.5px;font-weight:700;color:var(--ink3)}
+.apf[aria-current="true"]{background:var(--ink);color:var(--panel);border-color:var(--ink)}
+.apf[aria-current="true"] i{color:var(--panel);opacity:.72}
+.rail button.nav .navcnt{margin-left:auto;font-style:normal;font-size:11px;font-weight:700;
+  min-width:18px;text-align:center;padding:1px 6px;border-radius:999px;
+  background:var(--accent);color:var(--accentInk)}
+.rail.tuck button.nav .navcnt{display:none}`,
+  'the approvals chip and filter row');
+
+/* The queue itself. It reads the same rules the six specialist screens read,
+   and emits the same data- attributes, so deciding here and deciding there
+   are one act rather than two that have to be kept in step. */
+app = swap(app,
+`// how many decisions are sitting with this person
+function waitingOn(u){`,
+`/* ---------- one page for everything waiting on you ----------
+ * The queues do not move: leave still belongs to Leave & WFH, an advance to
+ * Advances, a letter to Letters, a missed tap to Regularization. What was
+ * missing was somewhere to answer the only question an approver has — is
+ * anything sitting with me? — without opening six screens to find out.
+ *
+ * Payment requests are not here. One is read with its invoice open beside
+ * it, and that is a screen of its own.
+ */
+const AP_KIND = {
+  leave:   {label:'Leave',          tint:'--kLeave', tab:'requests'},
+  wfh:     {label:'Work from home', tint:'--kWfh',   tab:'requests'},
+  advance: {label:'Advance',        tint:'--kAdv',   tab:'loans'},
+  letter:  {label:'Letter',         tint:'--kLtr',   tab:'loans'},
+  attend:  {label:'Attendance',     tint:'--kAtt',   tab:'regular'},
+  payroll: {label:'Payroll',        tint:'--kPay',   tab:'payroll'},
+  settle:  {label:'Settlement',     tint:'--kSet',   tab:'exitapprove'}
+};
+const apDays = ds => { const b = new Date(String(ds || '') + 'T00:00:00');
+  if(isNaN(+b)) return 0;
+  return Math.max(0, Math.round((new Date(HDATE() + 'T00:00:00') - b) / 86400000)); };
+const apChip = k => \`<span class="apk" style="--t:var(\${AP_KIND[k].tint})">\${esc(AP_KIND[k].label)}</span>\`;
+const apAge = ds => { const d = apDays(ds);
+  return \`<span style="color:var(--\${d >= 7 ? 'bad' : d >= 3 ? 'warn' : 'ink2'})">\${
+    d === 0 ? 'today' : d === 1 ? '1 day' : d + ' days'}</span>\`; };
+
+function approvalsFor(u){
+  const H = HR(), out = [];
+
+  (H.requests || []).filter(r => r.mgr === u && r.status === 'Pending').forEach(r =>
+    out.push({k: r.type === 'WFH' ? 'wfh' : 'leave', who:r.who,
+      what: reqLabel(r.type) + ' \\u00b7 ' + r.days + ' day' + (r.days === 1 ? '' : 's'),
+      detail: dayText(r) + (r.reason ? ' \\u2014 ' + r.reason : ''),
+      on: r.sent || r.from, amt: null,
+      ok: 'data-approve-req="' + esc(r.id) + '"', no: 'data-decline-req="' + esc(r.id) + '"'}));
+
+  (H.loans || []).filter(x => x.status === 'Pending' && x.approver === u).forEach(x =>
+    out.push({k:'advance', who:x.who, what:'Salary advance',
+      detail: x.months + ' months at AED ' + money(x.monthly, 0) + ' \\u2014 ' + x.why,
+      on:x.asked, amt:x.amount,
+      ok: 'data-ln-ok="' + esc(x.id) + '"', no: 'data-ln-no="' + esc(x.id) + '"'}));
+
+  if(canUpload(u)) (H.letters || []).filter(x => x.status === 'Pending' && x.type !== 'revision').forEach(x =>
+    out.push({k:'letter', who:x.who, what: LTYPE(x.type).label,
+      detail: (x.to ? x.to + ' \\u00b7 ' : '') + x.why, on:x.asked, amt:null,
+      ok: 'data-lt-ok="' + esc(x.id) + '"', no: 'data-lt-no="' + esc(x.id) + '"'}));
+
+  /* The two-a-month cap travels with the decision rather than staying behind
+     on the screen it used to live on. Approving a third is the one thing this
+     page must not quietly let through. */
+  if(canAdmin(u)){ const R = REG();
+    (R.rows || []).filter(x => x.status === 'Pending').forEach(x => {
+      const left = Math.max(0, R.max - ((R.used || {})[x.who + '|' + x.d.slice(0,7)] || 0));
+      out.push({k:'attend', who:x.who, what:'Fix ' + dayLabel(x.d),
+        detail: (x.in || '\\u2014') + ' to ' + (x.out || '\\u2014') + ' \\u2014 ' + x.reason
+              + (left ? '' : ' \\u00b7 both fixes used this month'),
+        on: x.sent || x.d, amt:null,
+        ok: 'data-rgok="' + esc(x.uid) + '"' + (left ? '' : ' disabled title="both are used"'),
+        no: 'data-rgno="' + esc(x.uid) + '"'});
+    }); }
+
+  if(roleOf(u) === 'owner' && DATA.payroll && PAYST() === 'submitted')
+    out.push({k:'payroll', who:ADMIN, what: DATA.payroll.month + ' payroll run',
+      detail: DATA.payroll.rows.length + ' people \\u00b7 submitted for your approval',
+      on: DATA.payroll.submitted || '', amt: DATA.payroll.rows.reduce((s, r) => s + r.net, 0),
+      go:'payroll'});
+
+  exitsWaitingOn(u).forEach(x =>
+    out.push({k:'settle', who:x.who, what:'Final settlement',
+      detail: 'Last working day ' + dayLabel(x.lastDay)
+            + (x.status === 'mgr_ok' ? ' \\u00b7 the manager has confirmed it' : ''),
+      on: x.sent || '', amt: (exitOf(x).c || {}).net || null, go:'exitapprove'}));
+
+  return out.sort((a, b) => apDays(b.on) - apDays(a.on));
+}
+
+/* The other direction of the same question: what this person has asked for
+   that is sitting with somebody else. */
+function apMine(u){
+  const H = HR(), out = [];
+  (H.requests || []).filter(r => r.who === u && r.status === 'Pending').forEach(r =>
+    out.push({k: r.type === 'WFH' ? 'wfh' : 'leave',
+      what: reqLabel(r.type) + ' \\u00b7 ' + r.days + ' day' + (r.days === 1 ? '' : 's'),
+      detail: dayText(r), with: r.mgr || mgrName(u), on: r.sent || r.from}));
+  (H.loans || []).filter(x => x.who === myLoanName(u) && x.status === 'Pending').forEach(x =>
+    out.push({k:'advance', what:'Advance of AED ' + money(x.amount, 0),
+      detail:x.why, with:x.approver, on:x.asked}));
+  (H.letters || []).filter(x => x.who === u && x.status === 'Pending' && x.type !== 'revision').forEach(x =>
+    out.push({k:'letter', what: LTYPE(x.type).label, detail:x.why, with:ADMIN, on:x.asked}));
+  ((REG().mine) || []).filter(x => x.status === 'Pending').forEach(x =>
+    out.push({k:'attend', what:'Fix ' + dayLabel(x.d),
+      detail:(x.in || '\\u2014') + ' to ' + (x.out || '\\u2014'), with:ADMIN, on:x.sent || x.d}));
+  return out.sort((a, b) => apDays(b.on) - apDays(a.on));
+}
+
+/* Who gets the page: anybody a decision can reach. Accounts and the owner
+   always, a line manager because somebody reports to them. It stays in the
+   rail when the queue is empty — a page you only see when there is work is a
+   page nobody learns to look at. */
+const isApprover = u => canAdmin(u)
+  || Object.values(HR().managers || {}).includes(u);
+
+function vApprovals(){
+  const u = state.user;
+  const all = approvalsFor(u), mine = apMine(u);
+  const f = AP_KIND[state.apFilter] ? state.apFilter : 'all';
+  const list = f === 'all' ? all : all.filter(x => x.k === f);
+  const owed = all.filter(x => x.amt).reduce((s, x) => s + x.amt, 0);
+  const oldest = all[0];
+  const kinds = Object.keys(AP_KIND).filter(k => all.some(x => x.k === k));
+  const acts = x => x.go
+    ? \`<button class="btn ghost sm" data-go="\${esc(x.go)}" type="button">Open</button>\`
+    : \`<button class="btn sm" \${x.ok} type="button">Approve</button>
+       <button class="btn ghost sm" \${x.no} type="button">Decline</button>\`;
+
+  const strip = \`<div class="strip">
+    <div class="stat"><span class="k">Waiting on you</span>
+      <span class="v" style="color:var(--\${all.length ? 'warn' : 'good'})">\${all.length}</span>
+      <span class="n">\${kinds.length ? esc(kinds.map(k => AP_KIND[k].label.toLowerCase()).join(', ')) : 'nothing to decide'}</span></div>
+    <div class="stat"><span class="k">Longest wait</span>
+      \${oldest ? \`<span class="v" style="font-size:22px">\${apDays(oldest.on)}<span class="cur" style="margin-left:6px">days</span></span>
+      <span class="n">\${nm(oldest.who)} \\u00b7 \${esc(AP_KIND[oldest.k].label.toLowerCase())}</span>\`
+      : \`<span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">\\u2014</span>
+      <span class="n">the queue is empty</span>\`}</div>
+    <div class="stat"><span class="k">Money in the queue</span>
+      \${owed ? \`<span class="v"><span class="cur">AED</span>\${money(owed, 0)}</span>
+      <span class="n">\${all.filter(x => x.amt).length} of the \${all.length} carry a figure</span>\`
+      : \`<span class="v" style="font-size:17px;font-family:'IBM Plex Sans',sans-serif">Nothing to pay</span>
+      <span class="n">none of these carry a figure</span>\`}</div>
+    <div class="stat"><span class="k">Raised by you</span>
+      <span class="v" style="font-size:22px">\${mine.length}</span>
+      <span class="n">\${mine.length ? 'with ' + esc([...new Set(mine.map(x => NM(x.with).split(' ')[0]))].join(', '))
+        : 'nothing of yours is out'}</span></div>
+  </div>\`;
+
+  const chips = kinds.length > 1 ? \`<div class="apfilter">
+    <button class="apf" aria-current="\${f === 'all'}" data-apf="all" type="button">Everything <i>\${all.length}</i></button>
+    \${kinds.map(k => \`<button class="apf" aria-current="\${f === k}" data-apf="\${k}" type="button">\${esc(AP_KIND[k].label)} <i>\${all.filter(x => x.k === k).length}</i></button>\`).join('')}
+  </div>\` : '';
+
+  const queue = all.length ? \`<section class="panel">
+    <header><h3>Waiting on you</h3><span class="pill warn"><span class="dt"></span>\${list.length}</span>
+      <span class="hint">longest wait first \\u2014 they are told by email either way</span></header>
+    \${chips}
+    \${MOBILE() ? \`<div class="apxlist">\${list.map(x => \`
+      <div class="apx">
+        <div class="apxh">\${avatar(x.who)}<div><b>\${nm(x.who)}</b><span>\${esc(x.what)}</span></div></div>
+        <div class="apxd">\${apChip(x.k)}\${x.amt ? ' <span style="margin-left:6px">AED ' + money(x.amt, 2) + '</span>' : ''}
+          <span style="margin-left:6px;font-weight:400">\${apAge(x.on)}</span></div>
+        <p class="apxr">\${esc(x.detail)}</p>
+        <div class="apxb">\${acts(x)}</div>
+      </div>\`).join('')}</div>\` : \`
+    <div class="tw"><table>
+      <thead><tr><th style="width:4%"></th><th style="width:14%">Who</th><th style="width:11%">Kind</th>
+        <th style="width:17%">What</th><th style="width:22%">Details</th>
+        <th class="r" style="width:9%">Amount</th><th class="r" style="width:8%">Waiting</th>
+        <th class="r" style="width:15%"></th></tr></thead>
+      <tbody>\${list.map(x => \`<tr>
+        <td>\${avatar(x.who)}</td>
+        <td class="nw"><b>\${nm(x.who)}</b></td>
+        <td class="nw">\${apChip(x.k)}</td>
+        <td class="nw">\${esc(x.what)}</td>
+        <td style="color:var(--ink2);font-size:13px">\${esc(x.detail)}</td>
+        <td class="n r">\${x.amt ? money(x.amt, 2) : '\\u2014'}</td>
+        <td class="n r nw">\${apAge(x.on)}</td>
+        <td class="r nw">\${acts(x)}</td></tr>\`).join('')}
+      </tbody></table></div>\`}
+    <p class="cap">Leave, working from home, advances, letters and attendance fixes are decided here without leaving the page &mdash; it is the same decision as on their own screens, not a copy of it. A payroll run and a final settlement open their own screen instead, because there are figures to read before you sign either off. Payment requests are not on this page: one is read with its invoice open beside it, on <b>Payments</b>.</p>
+  </section>\` : \`<section class="panel"><div class="pad" style="text-align:center;padding:56px 24px">
+    <h3 style="font-size:21px;margin-bottom:8px">Nothing is waiting on you</h3>
+    <p style="color:var(--ink2);max-width:56ch;margin:0 auto">Leave, working from home, salary advances, letters, attendance fixes, the payroll run and final settlements all land here the moment somebody sends one your way. Payment requests have their own screen.</p>
+  </div></section>\`;
+
+  const out = mine.length ? \`<section class="panel">
+    <header><h3>Raised by you</h3><span class="hint">with somebody else \\u2014 nothing for you to do</span></header>
+    \${MOBILE() ? \`<div class="apxlist">\${mine.map(x => \`
+      <div class="apx">
+        <div class="apxd">\${apChip(x.k)} <span style="margin-left:6px">\${esc(x.what)}</span></div>
+        <p class="apxr" style="margin-bottom:0">\${esc(x.detail)} \\u00b7 with \${nm(x.with)} \\u00b7 \${apAge(x.on)}</p>
+      </div>\`).join('')}</div>\` : \`
+    <div class="tw"><table>
+      <thead><tr><th style="width:13%">Kind</th><th style="width:26%">What</th><th style="width:30%">Details</th>
+        <th style="width:19%">With</th><th class="r" style="width:12%">Waiting</th></tr></thead>
+      <tbody>\${mine.map(x => \`<tr>
+        <td class="nw">\${apChip(x.k)}</td>
+        <td class="nw">\${esc(x.what)}</td>
+        <td style="color:var(--ink2);font-size:13px">\${esc(x.detail)}</td>
+        <td class="nw">\${nm(x.with)}</td>
+        <td class="n r nw">\${apAge(x.on)}</td></tr>\`).join('')}
+      </tbody></table></div>\`}
+  </section>\` : '';
+
+  return strip + queue + out;
+}
+
+// how many decisions are sitting with this person
+function waitingOn(u){`,
+  'the approvals page itself');
+
+/* In the rail, above People — the place a manager already looks for their
+   team's things. */
+app = swap(app,
+`  {id:'people',      group:'hr',    label:'People',           title:'People'},`,
+`  /* Called, not passed: isApprover is declared further down the file, and a
+     bare reference here is read while TABS is being built. */
+  {id:'approvals',   group:'hr',    label:'Approvals',        title:'Approvals',
+   gate:u => isApprover(u)},
+  {id:'people',      group:'hr',    label:'People',           title:'People'},`,
+  'the approvals tab');
+
+app = swap(app,
+`  requests:    'M7 3v3M17 3v3M3.5 8.5h17M4 6h16v15H4zM8.5 14.5l2.2 2.2 4.5-4.6',`,
+`  requests:    'M7 3v3M17 3v3M3.5 8.5h17M4 6h16v15H4zM8.5 14.5l2.2 2.2 4.5-4.6',
+  approvals:   'M3 13h5l1.6 3h4.8l1.6-3h5M3 13 6.2 4.5h11.6L21 13v6.5H3z',`,
+  'an icon for approvals');
+
+app = swap(app, `PAGEVIEW.onpay = () => vOnPayroll();`,
+`PAGEVIEW.onpay = () => vOnPayroll();
+PAGEVIEW.approvals = () => vApprovals();`,
+  'the approvals view is routable');
+
+/* The count rides on the rail, because the reason for the page is that
+   nobody should have to open it to find out whether it is empty. */
+app = swap(app,
+`  function btn(t){ return \`<button class="nav" data-tab="\${t.id}" aria-current="\${state.tab===t.id}" type="button" title="\${esc(t.label)}">\${navIcon(t.id)}<span>\${esc(t.label)}</span></button>\`; }`,
+`  function btn(t){
+    const n = t.id === 'approvals' ? approvalsFor(state.user).length : 0;
+    return \`<button class="nav" data-tab="\${t.id}" aria-current="\${state.tab===t.id}" type="button" title="\${esc(t.label)}">\${navIcon(t.id)}<span>\${esc(t.label)}</span>\${n ? \`<i class="navcnt">\${n}</i>\` : ''}</button>\`; }`,
+  'the waiting count on the rail');
+
+app = swap(app,
+`  document.querySelectorAll('#docSeg button').forEach(b=>b.onclick=()=>{ state.docFilter=b.dataset.df; render(); });`,
+`  document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
+  document.querySelectorAll('#docSeg button').forEach(b=>b.onclick=()=>{ state.docFilter=b.dataset.df; render(); });`,
+  'the approvals filter chips');
+
+/* =====================================================================
+   THE MONTH THE SELECTOR SAYS
+   ---------------------------------------------------------------------
+     'Not able view August payroll that is closed. when clicked it shows
+      september payroll'   — Miraziz, through Avin
+
+   He was right, and the bug was mine and written down in a comment. The
+   payroll screen pinned itself to DATA.payroll.monthKey — the newest run —
+   'because the mapper only works out gross, deductions and net for the newest
+   run'. That stopped being true when every run started carrying its own rows
+   through lineOf(), which is a superset of the newest-run mapping. The belief
+   outlived the reason for it, so clicking August redrew September's figures
+   under August's name.
+
+   Three things follow from fixing it, and all three have to be done together
+   or the screen lies in a new way:
+     1. the figures come from the selected run,
+     2. so does the status, which decides which buttons are drawn,
+     3. so does the key those buttons act on — otherwise Approve, drawn from
+        August's status, would submit September.
+   ===================================================================== */
+/* One answer to 'which month am I looking at', shared by the two screens that
+   have a month selector, so they cannot disagree about where you started. */
+app = swap(app,
+`  const here = state.payRun || (runs[0] && runs[0].key);`,
+`  /* The same answer the screen itself used, or the selector highlights a
+     month the page is not showing. */
+  const here = state.payRun || startRunKey(state.user, runs);`,
+  'and the selector highlights the month actually on the screen');
+
+
+app = swap(app,
+`// The newest run's status, read from the database every time rather than
+// from a copy kept on the page. See the note in mkweb.mjs.
+const PAYST = () =>`,
+`/* Where a screen starts when nobody has picked a month yet. Accounts starts
+   on the month they are working on, which is the draft. The owner has nothing
+   to do with a draft \u2014 it is not his screen, and there is nothing to approve
+   until it is submitted \u2014 so he starts on the newest month that has left
+   accounts' hands. */
+const startRunKey = (u, runs) => !runs.length ? ''
+  : (roleOf(u) === 'owner'
+      ? (runs.find(r => r.status !== 'draft') || runs[0])
+      : (runs.find(r => r.status === 'draft') || runs[0])).key;
+
+// The newest run's status, read from the database every time rather than
+// from a copy kept on the page. See the note in mkweb.mjs.
+const PAYST = () =>`,
+  'one answer to which month you are on');
+
+app = swap(app,
+`  const here = runs.find(r => r.key === state.payRun) || runs[0] || null;`,
+`  const here = runs.find(r => r.key === state.payRun)
+             || runs.find(r => r.key === startRunKey(state.user, runs))
+             || runs[0] || null;`,
+  'and the payslip screen starts on the same month the payroll screen would');
+
+app = swap(app,
+`function vPayroll(){
+  const runs = DATA.payroll.runs || [];
+  if(runs.length){
+    if(!state.payRun || !runs.some(r=>r.key===state.payRun))
+      state.payRun = (runs.find(r=>r.status==='draft') || runs[0]).key;
+    const here = runs.find(r=>r.key===state.payRun);
+    if(here && here.status === 'draft' && canAdmin(state.user)) return vPayrollDraft(here);
+  }
+  const P = DATA.payroll, co = state.payCompany, me = state.user;
+  const isPrep = canUpload(me), isApprover = roleOf(me)==='owner';
+  const staff = P.rows.filter(r=>!r.dummy);
+  const coRows = co==='all' ? staff : staff.filter(r=>r.company===co);
+  let rows = coRows.slice();
+  const chRows = id => P.rows.filter(r=>channelOf(r)===id);`,
+`function vPayroll(){
+  const runs = DATA.payroll.runs || [];
+  if(runs.length && (!state.payRun || !runs.some(r => r.key === state.payRun)))
+    state.payRun = startRunKey(state.user, runs);
+  /* The month this screen is about. The selector decides it — every run
+     carries its own rows, so there is nothing left that only the newest one
+     can show. */
+  const HERE = runs.find(r => r.key === state.payRun) || runs[0] || null;
+  /* The draft screen is accounts' workspace: the box you type a figure into,
+     the button that rebuilds the month. Anybody else who lands on a draft
+     reads it on the ordinary screen instead of being handed the tools. */
+  if(HERE && HERE.status === 'draft' && canUpload(state.user)) return vPayrollDraft(HERE);
+
+  const P = DATA.payroll, co = state.payCompany, me = state.user;
+  const isPrep = canUpload(me), isApprover = roleOf(me)==='owner';
+  const ROWS = HERE ? HERE.rows : P.rows;
+  const MONTH = HERE ? HERE.label : P.month;
+  const staff = ROWS.filter(r=>!r.dummy);
+  const coRows = co==='all' ? staff : staff.filter(r=>r.company===co);
+  let rows = coRows.slice();
+  const chRows = id => ROWS.filter(r=>channelOf(r)===id);`,
+  'the payroll screen follows its own selector');
+
+app = swap(app,
+`  // The run whose figures are on this screen. Not the one the selector says:
+  // the mapper only works out gross, deductions and net for the newest run, so
+  // this panel always describes that one, and the status it shows has to be
+  // that run's or the buttons would act on a different month from the totals.
+  const HERE = (DATA.payroll.runs || []).find(r => r.key === DATA.payroll.monthKey)
+             || (DATA.payroll.runs || [])[0] || null;
+  const st = HERE ? HERE.status : PAYST();`,
+`  const st = HERE ? HERE.status : PAYST();`,
+  'and the old pinned-to-newest run is gone');
+
+app = swap(app,
+`    <div class="stat"><span class="k">\${esc(P.month)} &middot; \${esc(co==='all'?'all companies':L(co))}</span>`,
+`    <div class="stat"><span class="k">\${esc(MONTH)} &middot; \${esc(co==='all'?'all companies':L(co))}</span>`,
+  'the headline figure names the month it is about');
+
+app = swap(app,
+`      <span class="n">prepared by \${esc(P.preparedBy)}</span></div>`,
+`      <span class="n">prepared by \${esc((HERE && HERE.preparedBy) || P.preparedBy)}</span></div>`,
+  'and so does the person who prepared it');
+
+app = swap(app, `  \${staleNote(P.monthKey)}`, `  \${staleNote(HERE ? HERE.key : P.monthKey)}`,
+  'the out-of-date mark belongs to the month being looked at');
+
+app = swap(app,
+`      <span class="pill mute">\${esc(P.month)}</span>
+      \${(() => { const b = EXITS().filter(x => x.month === (HERE ? HERE.key : P.monthKey)`,
+`      <span class="pill mute">\${esc(MONTH)}</span>
+      \${(() => { const b = EXITS().filter(x => x.month === (HERE ? HERE.key : P.monthKey)`,
+  'the register is headed with its own month');
+
+app = swap(app,
+`    <header><h3>How the money goes out</h3><span class="hint">\${esc(P.month)} &middot; net amounts</span></header>`,
+`    <header><h3>How the money goes out</h3><span class="hint">\${esc(MONTH)} &middot; net amounts</span></header>`,
+  'and so is the transfer list');
+
+/* The buttons act on the month whose status drew them. This one would have
+   been the expensive half: Approve, offered because August says 'submitted',
+   calling approveRun on September. */
+app = swap(app,
+`    const RUNKEY = () => DATA.payroll.monthKey;`,
+`    const RUNKEY = () => state.payRun || DATA.payroll.monthKey;`,
+  'a payroll button acts on the month it was drawn for');
+
+app = swap(app,
+`        await window.__db.generateRun(DATA.payroll.monthKey); render(); }; }`,
+`        await window.__db.generateRun(RUNKEY()); render(); }; }`,
+  'and so does Refresh from the records');
+
+/* =====================================================================
+   THE EXIT TAB, AND THE DRAFT THAT COULD NOT BE THROWN AWAY
+   ---------------------------------------------------------------------
+     'Not able to view the settlements in Exit tab - get this back. Work out
+      a settlement is not required.'                    — Miraziz, through Avin
+     'I had tried the exit process for Abdulkhamid, now i cannot remove it
+      from draft stage. Add an option to withdraw it.'  — Avin
+
+   Two faults with one cause: the settlements list and the tools for making
+   one were the same screen, gated together. So the owner lost the list along
+   with the calculator, and a draft — which has no Open button, only Edit and
+   Initiate — could never be opened, which is where the only Discard button
+   lived.
+   ===================================================================== */
+app = swap(app,
+`  {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canUpload, con:true},`,
+`  {id:'exits',      group:'con', sec:'pay',    label:'Exits',          title:'Exit & final settlement', gate:canAdmin, con:true},`,
+  'the owner can see the settlements again');
+
+/* The calculator is accounts' — 'work out a settlement is not required'. */
+app = swap(app,
+`  return \`
+  <section class="panel">
+    <header><h3>\${state.exitId ? 'Change this settlement' : 'Work out a settlement'}</h3>
+      <span class="hint">nothing is written down until you save it</span></header>`,
+`  /* Working one out is accounts' job, and the owner asked not to be given the
+     form. He gets the list, which is what he came for. */
+  if(!canUpload(state.user)) return vExitList(list);
+  return \`
+  <section class="panel">
+    <header><h3>\${state.exitId ? 'Change this settlement' : 'Work out a settlement'}</h3>
+      <span class="hint">nothing is written down until you save it</span></header>`,
+  'the settlement calculator is accounts only');
+
+/* One list, drawn for whoever is looking at it. Accounts gets the buttons;
+   everybody else gets the column and no drafts, because a draft is a figure
+   still being worked out and has not been sent to anybody. */
+app = swap(app,
+`  <section class="panel">
+    <header><h3>Settlements</h3>`,
+`  \${vExitList(list)}\`;
+}
+
+function vExitList(all){
+  const acc = canUpload(state.user);
+  /* A draft is accounts working something out. It has been sent to nobody, and
+     showing a half-finished figure to the owner as though it were a decision
+     waiting on him is how a number gets quoted before it is real. */
+  const list = acc ? all : all.filter(x => x.status !== 'draft');
+  const hidden = all.length - list.length;
+  return \`
+  <section class="panel">
+    <header><h3>Settlements</h3>`,
+  'the settlements list becomes a thing on its own');
+
+app = swap(app,
+`        <td class="r nw">\${x.status === 'draft'
+          ? \`<button class="btn ghost sm" data-exedit="\${esc(x.id)}" type="button">Edit</button>
+             <button class="btn sm" data-exgo="\${esc(x.id)}" type="button">Initiate exit process</button>\`
+          : \`<button class="btn ghost sm" data-exopen="\${esc(x.id)}" type="button">Open</button>\`}</td></tr>\`;}).join('')}`,
+`        <td class="r nw">\${!acc ? \`<button class="btn ghost sm" data-exopen="\${esc(x.id)}" type="button">Open</button>\`
+          : x.status === 'draft'
+          /* Discard lives here now. It was only ever on the settlement's own
+             screen, and a draft has no way of reaching that screen — so the
+             one state you would most want to throw away was the one state
+             with nothing to throw it away with. */
+          ? \`<button class="btn ghost sm" data-exedit="\${esc(x.id)}" type="button">Edit</button>
+             <button class="btn sm" data-exgo="\${esc(x.id)}" type="button">Initiate exit process</button>
+             <button class="btn ghost sm bad" data-exkill="\${esc(x.id)}" type="button" title="Throw this draft away">Discard</button>\`
+          : \`<button class="btn ghost sm" data-exopen="\${esc(x.id)}" type="button">Open</button>\`}</td></tr>\`;}).join('')}`,
+  'a draft can be thrown away from the list it is on');
+
+app = swap(app,
+`'<div class="pad"><p style="margin:0;color:var(--ink3)">Nothing saved yet. Work one out above and save it as a draft.</p></div>'}`,
+`\`<div class="pad"><p style="margin:0;color:var(--ink3)">\${acc
+      ? 'Nothing saved yet. Work one out above and save it as a draft.'
+      : 'Nobody is leaving. A settlement appears here once accounts has initiated one.'}</p></div>\`}`,
+  'and the empty list says the right thing to whoever is reading it');
+
+/* A settlement whose person is no longer on the run has no live figure to
+   work out, and one null took the whole list down with it. The frozen figure
+   is the real one for anything past draft anyway; a draft with nobody to
+   calculate against gets a dash rather than a blank screen. */
+app = swap(app,
+`        const cc = exitOf(x).c;`,
+`        const cc = exitOf(x).c;
+        const amt = x.net === null ? (cc ? cc.net : null) : x.net;`,
+  'the settlements list survives a person who is off the run');
+
+app = swap(app,
+`        <td class="n r netcol">\${money(x.net === null ? cc.net : x.net, 2)}</td>`,
+`        <td class="n r netcol">\${amt === null || amt === undefined ? '\\u2014' : money(amt, 2)}</td>`,
+  'and prints a dash instead of throwing');
+
+/* 'none yet' beside a caption saying one is being worked out is a small lie.
+   The count is of what this reader is shown. */
+app = swap(app,
+`      <span class="hint">\${list.length ? list.filter(x=>x.status!=='paid').length + ' open' : 'none yet'}</span></header>`,
+`      <span class="hint">\${list.length ? list.filter(x=>x.status!=='paid').length + ' open'
+        : hidden ? 'none initiated yet' : 'none yet'}</span></header>`,
+  'the settlements count matches what is on the page');
+
+/* And the caption underneath says what this reader can actually do. */
+app = swap(app,
+`    <p class="cap">A draft is yours to change as often as you need to, right up to the day.
+      <b>Initiate</b> writes the figures down, posts the settlement to the month of the last working day, and takes
+      the person off that month's payroll and off the staff list &mdash; every record they have is kept. After that
+      it goes to their reporting manager and to \${nm((USERS.find(u=>u.role==='owner')||{}).name||'the owner')} to approve.</p>`,
+`    <p class="cap">\${acc
+      ? \`A draft is yours to change as often as you need to, right up to the day, and <b>Discard</b> throws one
+      away &mdash; nothing was sent to anybody, so nothing is undone.
+      <b>Initiate</b> writes the figures down, posts the settlement to the month of the last working day, and takes
+      the person off that month's payroll and off the staff list &mdash; every record they have is kept. After that
+      it goes to their reporting manager and to \${nm((USERS.find(u=>u.role==='owner')||{}).name||'the owner')} to approve.\`
+      : \`Every settlement accounts has initiated, and where each one has got to. Open one to read what was owed and
+      to approve it when it reaches you.\${hidden ? \` \${hidden} \${hidden === 1 ? 'settlement is' : 'settlements are'} still
+      being worked out and \${hidden === 1 ? 'is' : 'are'} not shown &mdash; a draft has been sent to nobody.\` : ''}\`}</p>`,
+  'and the caption says what this reader can do');
+
+/* =====================================================================
+   ONE COUNTRY LIST, AND IT MEANS SOMETHING
+   ---------------------------------------------------------------------
+     'The country cell is to be filled and there is no picker to select
+      country'
+     'If the country of new employee is different from the list currently we
+      have, how is air ticket price fixed?'
+     'Instead of the big table in Air ticket - Country rates, change it to an
+      editable table to add per country. The employee country should be picked
+      from this table. Just show 10 countries and a scroller and a search box'
+     'Add all the countries in the world. For now rates are fixed for few
+      countries, if someone joins from a different country, i will edit and add
+      the rate manually.'                                            -- Avin
+
+   The answer to his second question was: it isn't. The joiner form had two
+   free text boxes, a country and a number, and nothing checked one against the
+   other. The Country rates panel was a display copy in settings that no code
+   path consulted and nothing could write to. What gets paid is the rate copied
+   onto the person's own row when they joined.
+
+   So: every country in the world is on one list, with a rate where one has
+   been agreed. The list is the picker on the joiner form and on a person's own
+   profile, it is editable, and changing a rate carries the people on that
+   country with it.
+   ===================================================================== */
+
+/* The picker's options, and the rate behind a country. */
+app = swap(app,
+`const PICKS = {gender:['Female','Male'], marital:['Single','Married']};`,
+`/* Every country, in one place, read by three screens: the rates table, the
+   joiner form and a person's own profile. A getter rather than a value
+   because the list is data now — it arrives with everything else. */
+const COUNTRIES = () => (DATA.tickets.rates || []).map(r => r.country);
+const rateFor = c => { const r = (DATA.tickets.rates || []).find(x => x.country === c);
+  return r && r.rate !== null && r.rate !== undefined ? +r.rate : null; };
+const onCountry = c => (DATA.tickets.employees || [])
+  .filter(e => e.country === c && !e.lwd).length;
+const PICKS = {gender:['Female','Male'], marital:['Single','Married'],
+  get country(){ return COUNTRIES(); }};`,
+  'one country list, and what a ticket from there costs');
+
+/* The employee fills this in themselves, and typed it free-hand until now —
+   which is how 'India (South)', a rate band, ended up in a field that asks a
+   person where they are from. */
+app = swap(app,
+`  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  ph:'Country', row:1},`,
+`  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  pick:'country', row:1},`,
+  'a person picks their home country rather than spelling it');
+
+/* An editable table: search the world, see the priced ones, change a rate.
+   Ten rows and a scroller, because 238 countries in a page-length table is not
+   a table anybody reads. */
+app = swap(app,
+`    <section class="panel">
+      <header><h3>Country rates</h3><span class="hint">fixed allowance from June 2026</span></header>
+      <div class="tw"><table>
+        <thead><tr><th>Country</th><th class="r">Rate</th><th class="r">Staff</th><th class="r">Annual cost</th></tr></thead>
+        <tbody>\${T.rates.map(([c,v])=>{const k=active.filter(r=>r.country===c).length;
+          return \`<tr\${k?'':' style="color:var(--ink3)"'}><td>\${esc(c)}</td><td class="n r">\${money(v,0)}</td>
+            <td class="n r">\${k||'—'}</td><td class="n r">\${k?money(k*v,0):'—'}</td></tr>\`;}).join('')}
+          <tr class="tot"><td>Total</td><td></td><td class="n r">\${active.length}</td><td class="n r netcol">\${money(annual,0)}</td></tr>
+        </tbody></table></div>
+      <p class="cap">The country rate is the fixed allowance paid regardless of what the ticket actually costs.</p>
+    </section>`,
+`    \${vCountryRates(active, annual)}`,
+  'the country rates panel becomes its own screen');
+
+app = swap(app,
+`function vTickets(){`,
+`/* Which countries to draw. The ones with a rate and the ones somebody is
+   from, because those are the rows that mean anything; the other two hundred
+   are one search box away and appear the moment you type. */
+function rateRows(){
+  const all = DATA.tickets.rates || [];
+  const q = (state.rateFind || '').trim().toLowerCase();
+  if(q) return all.filter(r => r.country.toLowerCase().includes(q));
+  return all.filter(r => r.rate !== null || onCountry(r.country));
+}
+
+function vCountryRates(active, annual){
+  const rows = rateRows();
+  const q = (state.rateFind || '').trim();
+  const all = DATA.tickets.rates || [];
+  const priced = all.filter(r => r.rate !== null).length;
+  /* Somebody is from there and no figure has been agreed. Until now this was
+     invisible: they simply were not on the list, and the total under it did
+     not add up to the rows above it. */
+  const unpriced = [...new Set((DATA.tickets.employees || [])
+    .filter(e => !e.lwd && e.country && rateFor(e.country) === null)
+    .map(e => e.country))];
+  const upl = canUpload(state.user);
+  return \`
+    <section class="panel">
+      <header><h3>Country rates</h3>
+        <span class="pill \${unpriced.length ? 'warn' : 'mute'}">\${priced} priced</span>
+        <span class="hint">fixed allowance from June 2026</span>
+        \${upl ? edBar('rates') : ''}</header>
+      \${edSaved('rates')}\${edConfirm('rates')}
+      <div class="ratefind">
+        <input id="rateFind" type="search" placeholder="Search \${all.length} countries" value="\${esc(q)}"
+          aria-label="Search countries">
+        <span>\${q ? rows.length + (rows.length === 1 ? ' match' : ' matches')
+          : 'priced countries and countries somebody is from'}</span>
+      </div>
+      \${unpriced.length ? \`<div class="note" style="margin:12px 18px 0;border-left-color:var(--warn)">
+        <b>\${esc(unpriced.join(', '))}</b> \${unpriced.length === 1 ? 'has' : 'have'} nobody's rate agreed yet,
+        and somebody is from \${unpriced.length === 1 ? 'there' : 'those'}. Their ticket is worth nothing until a
+        figure is set here.</div>\` : ''}
+      <div class="ratescroll"><div class="tw"><table>
+        \${colsOf([44, 18, 12, 18, 8])}
+        <thead><tr><th>Country</th><th class="r">Rate</th><th class="r">Staff</th><th class="r">Annual cost</th><th></th></tr></thead>
+        <tbody>\${rows.map(r => { const k = onCountry(r.country);
+          const v = r.rate;
+          return \`<tr\${k ? '' : ' style="color:var(--ink3)"'}>
+            <td class="nw">\${esc(r.country)}\${k ? '' : v === null ? ' <span class="pill mute">no rate</span>' : ''}</td>
+            <td class="n r">\${upl ? edCell('rates', r.country,
+                x => \`<input class="rateIn" type="number" step="1" min="0" value="\${esc(x)}" placeholder="\\u2014"\${
+                  edAttr('rates', r.country)} aria-label="Ticket rate for \${esc(r.country)}">\`,
+                x => String(x).trim() === '' ? '<span class="edread none">\\u2014</span>'
+                   : '<span class="edread">' + money(+x, 0) + '</span>')
+              : (v === null ? '\\u2014' : money(v, 0))}</td>
+            <td class="n r">\${k || '\\u2014'}</td>
+            <td class="n r">\${k && v !== null ? money(k * v, 0) : '\\u2014'}</td>
+            <td class="r nw">\${upl && !r.standard && v === null && !k
+              ? \`<button class="btn ghost sm" data-ratedrop="\${esc(r.country)}" type="button" title="Take this off the list">Remove</button>\`
+              : ''}</td></tr>\`; }).join('')}
+          \${rows.length ? '' : \`<tr><td colspan="5" style="color:var(--ink3);padding:18px">
+            No country matches \\u201c\${esc(q)}\\u201d.\${upl ? \` <button class="btn ghost sm" id="rateAdd" type="button">Add \\u201c\${esc(q)}\\u201d to the list</button>\` : ''}</td></tr>\`}
+        </tbody></table></div></div>
+      <div class="tw"><table>\${colsOf([44, 18, 12, 18, 8])}<tbody>
+        <tr class="tot"><td>Everybody on the scheme</td><td></td>
+          <td class="n r">\${active.length}</td><td class="n r netcol">\${money(annual, 0)}</td><td></td></tr>
+      </tbody></table></div>
+      <p class="cap">The country rate is the fixed allowance paid regardless of what the ticket actually costs.
+        \${upl ? \`Changing one changes it for <b>everybody from that country</b> \\u2014 you are shown who, and by how much,
+        before it is saved. Tickets already paid keep the figure they were paid at. A country with no rate can still be
+        picked when somebody joins; the rate is asked for then.\` : ''}</p>
+    </section>\`;
+}
+
+function vTickets(){`,
+  'the country rates table itself');
+
+/* Its own EDTABLE, so a rate change goes through the same
+   Edit -> change -> here is what will happen -> Save as every other table. */
+app = swap(app,
+`  shifts: {
+    title: 'Shifts and reporting lines',`,
+`  rates: {
+    title: 'Ticket rates by country',
+    now:  k => { const r = rateFor(k); return r === null ? '' : String(r); },
+    /* The headcount belongs in the confirm list, not beside the box: what a
+       rate change actually does is move those people. */
+    name: k => { const n = onCountry(k);
+      return k + ' \\u2014 ticket allowance' + (n ? ' (' + n + ' ' + (n === 1 ? 'person' : 'people') + ')' : ''); },
+    fmt:  v => String(v).trim() === '' ? 'no rate set' : 'AED ' + money(+v || 0, 0),
+    same: (a, b) => (String(a).trim() === '') === (String(b).trim() === '')
+            && (String(a).trim() === '' || (+a || 0) === (+b || 0)),
+    save: d => window.__db.saveTicketRates(d)
+  },
+  shifts: {
+    title: 'Shifts and reporting lines',`,
+  'a rate is changed the way every other figure is changed');
+
+app = swap(app,
+`  document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });`,
+`  document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });
+  { const rf = document.getElementById('rateFind');
+    if(rf){ let tm; rf.oninput = () => { clearTimeout(tm); tm = setTimeout(() => {
+      state.rateFind = rf.value; render();
+      const e2 = document.getElementById('rateFind');
+      if(e2){ e2.focus(); try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} }
+    }, 220); }; } }
+  /* The fade is a hint that there is more below, so it goes once there is not. */
+  { const rs = document.querySelector('.ratescroll');
+    if(rs){ const mark = () => rs.classList.toggle('atend',
+        rs.scrollTop + rs.clientHeight >= rs.scrollHeight - 2);
+      rs.onscroll = mark; mark(); } }
+  { const ra = document.getElementById('rateAdd');
+    if(ra) ra.onclick = async () => { ra.disabled = true;
+      await window.__db.setTicketRate((state.rateFind || '').trim(), null); render(); }; }
+  document.querySelectorAll('[data-ratedrop]').forEach(b => b.onclick = async () => {
+    b.disabled = true; await window.__db.dropTicketRate(b.dataset.ratedrop); render(); });`,
+  'the search box, adding a country and taking one off');
+
+/* The joiner form. Country is picked; the rate follows it and is not typed —
+   unless the country has no rate yet, which is the Australia case, and then
+   the box is the place the rate is agreed. */
+app = swap(app,
+`        <label><span>Home country &mdash; for the air ticket</span>
+          <input id="jCountry" value="\${esc(JF().country)}"\${JF().noTicket?' disabled':''} placeholder="India"></label>
+        <label><span>Ticket allowance (AED)</span>
+          <input id="jRate" inputmode="decimal" value="\${esc(JF().rate)}"\${JF().noTicket?' disabled':''}></label>
+        <label class="wide tick"><input id="jNoTicket" type="checkbox"\${JF().noTicket?' checked':''}>
+          <span>No air ticket entitlement</span></label>
+        <p class="jnote wide">Leave the country blank without ticking that and no entitlement is ever created
+          &mdash; not in eleven months, not ever. The first ticket falls due eleven months after joining.</p>`,
+`        \${jCountryFields()}`,
+  'the joiner picks a country and the rate follows it');
+
+/* Written as a function rather than inline, because it is three nested
+   templates deep otherwise and that is how escaping mistakes get shipped. */
+app = swap(app,
+`function jWhy(){`,
+`/* The country is picked and the rate follows it. The one case where the rate
+   is typed is a country nobody has joined from before — Avin's own example was
+   Australia — and then what he types becomes that country's rate, not a
+   private number on one person's record. */
+function jCountryFields(){
+  const f = JF();
+  const co = JF().country, known = co ? rateFor(co) : null;
+  const fresh = !!co && known === null;
+  const off = JF().noTicket;
+  const opt = c => '<option value="' + esc(c) + '"' + (c === co ? ' selected' : '') + '>'
+    + esc(c) + (rateFor(c) === null ? ' \\u2014 no rate yet' : ' \\u2014 ' + money(rateFor(c), 0))
+    + '</option>';
+  const note = fresh
+    ? '<p class="jnote wide" style="border-left-color:var(--warn)">Nobody from <b>' + esc(co)
+      + '</b> has joined before, so there is no rate for it yet. What you type here becomes the rate for '
+      + esc(co) + ' on the country list, not just for this person.</p>'
+    : '<p class="jnote wide">' + (co
+        ? 'The rate comes from the country list, where ' + esc(co) + ' is AED ' + money(known, 0)
+          + '. Change it on the <b>Air ticket</b> screen and it changes for everybody from there.'
+        : 'Pick a country and its rate fills in. Leave it unchosen without ticking the box below and no '
+          + 'entitlement is ever created &mdash; not in eleven months, not ever.')
+      + ' The first ticket falls due eleven months after joining.</p>';
+  return '<label><span>Home country &mdash; for the air ticket</span>'
+    + '<select id="jCountry"' + (off ? ' disabled' : '') + '>'
+    + '<option value="">Choose a country</option>' + COUNTRIES().map(opt).join('')
+    + '</select></label>'
+    + '<label><span>Ticket allowance (AED)</span>'
+    + '<input id="jRate" inputmode="decimal" value="'
+    + esc(fresh ? JF().rate : (known === null ? '' : String(known))) + '"'
+    + (off || !fresh ? ' disabled' : '') + '></label>'
+    + '<label class="wide tick"><input id="jNoTicket" type="checkbox"' + (off ? ' checked' : '')
+    + '><span>No air ticket entitlement</span></label>'
+    + note;
+}
+
+function jWhy(){`,
+  'and the country fields are built where they can be read');
+
+/* Saving. The rate is not read off the form any more — it comes from the
+   country, because that is the only place it lives. The exception is the
+   country nobody has joined from before: what was typed becomes that
+   country's rate first, and then the joiner takes it like everybody else. */
+app = swap(app,
+`      country: f.noTicket ? null : (f.country.trim() || null),
+      rate: f.noTicket ? null : (+f.rate || 0),`,
+`      country: f.noTicket ? null : (f.country.trim() || null),
+      rate: f.noTicket ? null : jTicketRate(f),`,
+  'the joiner takes the country rate, not a typed one');
+
+app = swap(app,
+`  const jsv = document.getElementById('jSave');
+  if(jsv) jsv.onclick = async ()=>{
+    const f = JF(); jsv.disabled = true; jsv.textContent = 'Adding\\u2026';`,
+`  const jsv = document.getElementById('jSave');
+  if(jsv) jsv.onclick = async ()=>{
+    const f = JF(); jsv.disabled = true; jsv.textContent = 'Adding\\u2026';
+    /* A country nobody has joined from before. The figure goes on the country
+       list first, so the next person from there is not asked again. */
+    if(!f.noTicket && f.country.trim() && rateFor(f.country.trim()) === null){
+      const put = await window.__db.setTicketRate(f.country.trim(), +f.rate || 0);
+      if(!put){ jsv.disabled = false; jsv.textContent = 'Add them'; return; }
+    }`,
+  'and a new country is priced before the person is added');
+
+app = swap(app,
+`function jWhy(){`,
+`/* What this joiner's ticket is worth: the country's rate, or — for a country
+   with none yet — the figure being agreed on this form. */
+function jTicketRate(f){
+  const c = (f.country || '').trim();
+  if(!c) return 0;
+  const known = rateFor(c);
+  return known === null ? (+f.rate || 0) : known;
+}
+
+function jWhy(){`,
+  'one place that answers what the ticket is worth');
+
+app = swap(app,
+`  if(!f.noTicket && !f.country.trim())     return 'Home country, or tick that there is no ticket entitlement.';`,
+`  if(!f.noTicket && !f.country.trim())     return 'Home country, or tick that there is no ticket entitlement.';
+  if(!f.noTicket && f.country.trim() && rateFor(f.country.trim()) === null && !(+f.rate > 0))
+    return 'A ticket allowance for ' + f.country.trim() + ' — nobody from there has joined before.';`,
+  'a country with no rate cannot be waved through at nought');
+
+/* Ten rows and a scroller, and a search box over them. */
+shell = swap(shell,
+`/* ---------- payslip ---------- */`,
+`/* ---------- country rates ---------- */
+.ratefind{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line)}
+.ratefind input{flex:0 1 300px;padding:7px 11px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px}
+.ratefind input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.ratefind span{font-size:12.5px;color:var(--ink3)}
+/* Ten rows, then it scrolls. The row at the boundary fades rather than being
+   sliced in half: a scroll hint should not look like clipped text. */
+.ratescroll{max-height:433px;overflow-y:auto;overscroll-behavior:contain;
+  -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent);
+          mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent)}
+.ratescroll.atend{-webkit-mask-image:none;mask-image:none}
+.ratescroll thead th{position:sticky;top:0;z-index:1;background:var(--panel2)}
+.rateIn{width:100%;max-width:110px;text-align:right;padding:4px 7px;border:1px solid var(--line);
+  border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px;
+  font-variant-numeric:tabular-nums}
+.rateIn:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+
+/* ---------- payslip ---------- */`,
+  'the country rates search box and scroller');
+
+/* It is a working table now, not a reference column: a search box, ten rows
+   and a scroller do not fit in half a page beside another table. */
+app = swap(app,
+`      <p class="cap">Valued at the current fixed rate, since what an untaken ticket would have cost cannot be known.</p>
+    </section>
+
+    \${vCountryRates(active, annual)}
+  </div>`,
+`      <p class="cap">Valued at the current fixed rate, since what an untaken ticket would have cost cannot be known.</p>
+    </section>
+  </div>
+
+  \${vCountryRates(active, annual)}`,
+  'the country rates table gets the width of the page');
+
+/* =====================================================================
+   CONSOLE -> PEOPLE
+   ---------------------------------------------------------------------
+     'Rename other balances to leave balance'
+     'In the other balances tab, while hovering i get option to copy. I dont
+      think its required'                                            -- Avin
+   ===================================================================== */
+
+/* The tab, the page title, the panel heading and the line PAGE matches the
+   panel by all carry this name, and a rename that misses the last one renders
+   an empty screen with nothing to say why. */
+app = swap(app,
+`  {id:'leaveother', group:'con', sec:'people', label:'Other balances', title:'Other leave balances', gate:canAdmin, con:true},`,
+`  {id:'leaveother', group:'con', sec:'people', label:'Leave balance',  title:'Leave balances', gate:canAdmin, con:true},`,
+  'Other balances becomes Leave balance');
+
+app = swap(app,
+`    <header><h3>Other leave balances</h3>`,
+`    <header><h3>Leave balances</h3>`,
+  'and so does the panel it names');
+
+app = swap(app,
+`  leaveother: ['hradmin', ['Other leave balances'], true],`,
+`  leaveother: ['hradmin', ['Leave balances'], true],`,
+  'and the line that finds that panel by its heading');
+
+/* The hover card carries a Copy button, which earns its place on a payment
+   remark or a reference number. Here the card holds a sentence explaining why
+   somebody has no entitlement — nothing anybody would paste anywhere. So the
+   cell says it wants the words without the button. */
+app = swap(app,
+`function full(v){ const t = String(v || '').trim(); return t ? \` data-full="\${esc(t)}"\` : ''; }`,
+`function full(v, plain){ const t = String(v || '').trim();
+  return t ? \` data-full="\${esc(t)}"\${plain ? ' data-plain="1"' : ''}\` : ''; }`,
+  'a cell can ask for the hover card without the Copy button');
+
+app = swap(app,
+`    current = td.dataset.full;
+    txt.textContent = current;
+    cpy.textContent = 'Copy';`,
+`    current = td.dataset.full;
+    txt.textContent = current;
+    cpy.textContent = 'Copy';
+    cpy.style.display = td.hasAttribute('data-plain') ? 'none' : '';`,
+  'and the card honours it');
+
+app = swap(app,
+`      const cell = (n, t) => { const b = otherBal(n, t.id);
+        return \`<td class="n r\${b.off ? ' obdash' : ''}"\${full(b.why)}\${`,
+`      const cell = (n, t) => { const b = otherBal(n, t.id);
+        return \`<td class="n r\${b.off ? ' obdash' : ''}"\${full(b.why, true)}\${`,
+  'the balance cells explain themselves without offering a copy');
+
+app = swap(app,
+`          <tr><th>Employee</th>\${KINDS.map(t =>
+            \`<th class="r"\${full(t.note || '')}>\${esc(t.label.replace(/ leave$/i, ''))}</th>\`).join('')}</tr>`,
+`          <tr><th>Employee</th>\${KINDS.map(t =>
+            \`<th class="r"\${full(t.note || '', true)}>\${esc(t.label.replace(/ leave$/i, ''))}</th>\`).join('')}</tr>`,
+  'and neither do the column headings');
+
+app = swap(app,
+`        row: n => \`<tr><td\${full(NM(n) === n ? '' : n)}>\${nm(n)}</td>\${KINDS.map(t => cell(n, t)).join('')}</tr>\`,
+        empty: 'Nobody is on the leave scheme yet.'`,
+`        row: n => \`<tr><td\${full(NM(n) === n ? '' : n, true)}>\${nm(n)}</td>\${KINDS.map(t => cell(n, t)).join('')}</tr>\`,
+        empty: 'Nobody is on the leave scheme yet.'`,
+  'nor the name column');
+
+/* =====================================================================
+   MY PROFILE -> THE FOUR NUMBERS
+   ---------------------------------------------------------------------
+     'There is no option to add document number. I have it in the console, but
+      if employee, themselves fill it, then there should be a cell to enter the
+      number'                                                         -- Avin
+
+   The page said these were 'accounts' to type, off the documents themselves'
+   and printed them read-only. The database never agreed: write_own_private is
+   FOR ALL with employee_id = me(), so anybody could already have set their own
+   Emirates ID through the API. The rule was presentation, not enforcement.
+
+   0022 puts the rule in the database, where it holds: a blank number is the
+   person's to fill, and one accounts has already recorded is refused. This is
+   the screen that matches it — a cell where there is nothing, and the masked
+   read-only value where there is.
+   ===================================================================== */
+
+/* The Employment panel goes back to listing them read-only. Avin: 'currently
+   where you have added, i dont want you to make that table an editable
+   field.' It reads the one list of kinds rather than a second copy of it. */
+app = swap(app,
+`          const REFS = [['eid','Emirates ID'],['passport','Passport'],['visa','Residence visa'],['labour','Labour card']];`,
+`          const REFS = REFKINDS.map(t => [t.k, t.label]);`,
+  'the Employment panel reads the one list of document kinds');
+
+/* One list of the four, and the cell that draws one of them in the documents
+   table: a box where nothing is on file, the masked number where there is. */
+app = swap(app,
+`const REFOF = (n, k) => ((HR().ref || {})[n] || {})[k] || '';`,
+`const REFOF = (n, k) => ((HR().ref || {})[n] || {})[k] || '';
+/* The four, in the order the documents table lists them. */
+const REFKINDS = [
+  {k:'passport', label:'Passport',       ph:'as printed'},
+  {k:'visa',     label:'Residence visa', ph:'on the visa'},
+  {k:'eid',      label:'Emirates ID',    ph:'784-0000-0000000-0'},
+  {k:'labour',   label:'Labour card',    ph:'the MOHRE number'}
+];
+const refPh = k => (REFKINDS.find(t => t.k === k) || {}).ph || '';
+/* A number accounts holds is theirs to correct \u2014 they typed it off the
+   document itself, and it goes onto the MOHRE filings. A blank one is a box.
+   The database enforces that, not this. The masked value carries .refval, so
+   the one Show numbers button in Employment above uncovers these too. */
+function refCell(u, k){
+  const v = REFOF(u, k);
+  if(v) return \`<span class="refval" data-full="\${esc(v)}">\${esc(maskRef(v))}</span>\`;
+  if(u !== state.user) return '<span style="color:var(--ink3)">\u2014</span>';
+  return \`<input class="refin" data-pf="\${esc(k)}" value="\${esc((state.pfDirty || {})[k] || '')}"
+    placeholder="\${esc(refPh(k))}" aria-label="Number on the \${esc((REFKINDS.find(t => t.k === k) || {}).label || k)}">\`;
+}`,
+  'and the cell that draws a number, or a box for one');
+
+/* The column he asked for, in the table he asked for it in. */
+app = swap(app,
+`      <thead><tr><th>Document</th><th>Copy</th><th>Expires</th><th>When</th><th>Status</th></tr></thead>`,
+`      <thead><tr><th>Document</th><th>Copy</th><th>Number</th><th>Expires</th><th>When</th><th>Status</th></tr></thead>`,
+  'the documents table gains a Number column');
+
+app = swap(app,
+`          <td><input class="ff pfdate" type="date" data-docexp="\${esc(t.k)}" value="\${esc(exp)}"></td>`,
+`          <td class="nw refnum">\${refCell(u, t.k)}</td>
+          <td><input class="ff pfdate" type="date" data-docexp="\${esc(t.k)}" value="\${esc(exp)}"></td>`,
+  'and each row carries its own');
+
+/* The caption said the opposite of what the page now does. */
+app = swap(app,
+`They are accounts&rsquo; to type, off the documents themselves; if one of them is wrong or missing here, tell accounts.`,
+`A missing one is yours to type in, on <b>Your documents</b> below, off the document itself; once it is on file it becomes accounts&rsquo; to correct, so if one shown here is wrong, tell them rather than us both holding a different number.`,
+  'and the caption sends them to the table the box is in');
+
+/* And the documents caption, which said the numbers were accounts' alone. */
+app = swap(app,
+`<b>The number on each of these is held too</b>, by accounts, off the copy you upload &mdash; that changed in September 2026, and the four are listed under Employment above.`,
+`<b>Type the number off each document</b> in the column beside it. Once a number is on file it becomes accounts&rsquo; to correct, because they check it against the copy you upload; the four are listed under Employment above as well.`,
+  'and the documents caption asks for the number');
+
+/* Completeness counts them, so the nudge that already exists does the asking.
+   The labour card is not required of everybody, and the list that has always
+   said so is the one being read. */
+app = swap(app,
+`  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  pick:'country', row:1},`,
+`  {k:'eid',         label:'Emirates ID',            group:'ref',   req:true,  ref:true},
+  {k:'passport',    label:'Passport',               group:'ref',   req:true,  ref:true},
+  {k:'visa',        label:'Residence visa',         group:'ref',   req:true,  ref:true},
+  {k:'labour',      label:'Labour card',            group:'ref',   req:false, ref:true},
+  {k:'homeCountry', label:'Home country',           group:'home',  req:true,  pick:'country', row:1},`,
+  'the four numbers count towards a complete profile');
+
+/* They are drawn by refRows, in the Employment panel, so grp() must not draw
+   them a second time under a heading of their own. */
+app = swap(app,
+`  const grp = g => {
+    const fs = PFIELDS.filter(f=>f.group===g);`,
+`  const grp = g => {
+    const fs = PFIELDS.filter(f=>f.group===g && !f.ref);`,
+  'and are not drawn twice');
+
+shell = swap(shell,
+`/* ---------- country rates ---------- */`,
+`.refin{width:100%;max-width:230px;padding:5px 9px;border:1px solid var(--line);border-radius:7px;
+  background:var(--panel);color:var(--ink);font:inherit;font-size:13.5px;
+  font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.refin:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+
+/* ---------- country rates ---------- */`,
+  'a box for a document number');
+
+/* =====================================================================
+   TYPING A YEAR INTO A DATE BOX
+   ---------------------------------------------------------------------
+     'While typing dates manually, it does not allow to type year. If i start
+      with 2, it ends up as 0002 and just remains static. This remains
+      everywhere specially next to documents'                         -- Avin
+
+   Reproduced: on My profile, typing 12 / 31 / 2026 into a document expiry.
+   The moment the first digit of the year lands, the box holds 0002-12-31 —
+   which is a complete, valid date as far as the browser is concerned — so it
+   fires `change`. The handler saved it (saveDocDate('passport','0002-12-31'),
+   a wrong date written to the database on the way past) and called render(),
+   which replaced the input. Focus went with it, the remaining 0, 2 and 6 fell
+   on the floor, and the box sat there reading 0002 for ever.
+
+   The fix is one listener rather than seventeen: a year is not a year until
+   all four digits are in, and until then the event does not reach anybody. It
+   is in the capture phase so it holds for every date box on every screen,
+   including ones added later — which matters, because this was never about
+   the documents page. It was about every date box in the portal.
+   ===================================================================== */
+app = swap(app,
+`function cellHover(){`,
+`/* A part-typed year is not a date yet.
+ *
+ * A date input fires `+'`change`'+` as soon as its three segments make a valid
+ * date, and typing a year one digit at a time makes four of them: 0002, 0020,
+ * 0202, 2026. Every handler in the portal treated the first as the answer.
+ *
+ * So nothing may act on a date until its year has four digits. Blank still
+ * counts — clearing a date is a real thing to do. The listener sits on the
+ * document in the capture phase, so it runs before the input's own handler
+ * and stops the event dead; no save, no render, no lost focus, and the person
+ * carries on typing.
+ */
+const dateReady = v => v === '' || (/^\\d{4}-\\d{2}-\\d{2}$/.test(v) && +v.slice(0, 4) >= 1000);
+function dateGuard(){
+  if(window.__dateGuard) return;
+  window.__dateGuard = true;
+  const isDate = el => el && el.tagName === 'INPUT' && el.type === 'date';
+  const hold = e => { if(isDate(e.target) && !dateReady(e.target.value)) e.stopImmediatePropagation(); };
+  document.addEventListener('input', hold, true);
+  document.addEventListener('change', hold, true);
+  /* Walked away from a half-typed one: put back what was there rather than
+     leaving 0002 on the screen pretending to be a date. */
+  document.addEventListener('blur', e => {
+    if(isDate(e.target) && !dateReady(e.target.value)) e.target.value = e.target.defaultValue || '';
+  }, true);
+}
+
+function cellHover(){`,
+  'a part-typed year is not a date yet');
+
+app = swap(app, `  cellHover();`, `  cellHover();\n  dateGuard();`,
+  'and the guard goes on once, like the hover card');
+
+/* =====================================================================
+   PAYMENTS -> A THIRD TAB
+   ---------------------------------------------------------------------
+     'As a approver, i need three tabs: Request for payment / Approve payments
+      / Past payments. I dont want to view the approved payments on the approve
+      payments tab. Just move the already decided table to past payments'
+                                                                      -- Avin
+   The two tables were stacked on one screen and their columns were lined up
+   with each other on purpose, so that they read as one sheet. They are two
+   screens now, and the column stops stay as they were: the queue still has to
+   line up with the decided table when you move between them, which is a
+   weaker version of the same reason.
+   ===================================================================== */
+
+app = swap(app,
+`/* The two tabs of the payment page. Only accounts sees the second one, so for
+ * everybody else there is nothing to draw and the bar does not appear. */
+function payBar(){
+  if(!canUpload(state.user)) return '';
+  const tabs = [['payment','Request for payment'], ['payapprove','Approve payments']];
+  const waiting = reqs().filter(r=>r.status==='Pending').length;
+  return \`<div class="subbar"><div class="subtabs">\${tabs.map(([id,label])=>
+    \`<button data-paytab="\${id}" aria-current="\${state.tab===id}" type="button">\${esc(label)}\${
+      id==='payapprove' && waiting ? \` <i class="cnt">\${waiting}</i>\` : ''}</button>\`).join('')}</div></div>\`;
+}`,
+`/* The three tabs of the payment page. Only accounts sees the last two, so for
+ * everybody else there is nothing to draw and the bar does not appear. */
+const PAYTABS = [['payment','Request for payment'], ['payapprove','Approve payments'],
+                 ['paypast','Past payments']];
+function payBar(){
+  if(!canUpload(state.user)) return '';
+  const waiting = reqs().filter(r=>r.status==='Pending').length;
+  const past = reqs().filter(r=>r.status!=='Pending' && r.status!=='Withdrawn').length;
+  return \`<div class="subbar"><div class="subtabs">\${PAYTABS.map(([id,label])=>
+    \`<button data-paytab="\${id}" aria-current="\${state.tab===id}" type="button">\${esc(label)}\${
+      id==='payapprove' && waiting ? \` <i class="cnt">\${waiting}</i>\` : ''}\${
+      id==='paypast' && past ? \` <i class="cnt mute">\${past}</i>\` : ''}</button>\`).join('')}</div></div>\`;
+}`,
+  'a third tab on the payment page');
+
+/* One function still builds both, because the row, the two heads and the
+   column stops are shared and a second copy of them is a second thing to keep
+   in step. Which of the two it returns is the tab you are on. */
+app = swap(app,
+`  return \`
+  \${vDocPop()}\${vWaPop()}\${vPayEdit()}\${vExport()}
+  \${payBar()}
+  \${state.approve.ref ? vApprovePanel() : ''}
+  <section class="panel">
+    <header><h3>Requests waiting on you</h3>`,
+`  const past = state.tab === 'paypast';
+
+  return \`
+  \${vDocPop()}\${vWaPop()}\${vPayEdit()}\${vExport()}
+  \${payBar()}
+  \${past ? '' : \`
+  \${state.approve.ref ? vApprovePanel() : ''}
+  <section class="panel">
+    <header><h3>Requests waiting on you</h3>`,
+  'the waiting half belongs to Approve payments');
+
+app = swap(app,
+`    <p class="cap"><b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.</p>
+  </section>
+
+  <section class="panel">
+    <header><h3>Already decided</h3>`,
+`    <p class="cap"><b>&times;</b> turns one down &mdash; it asks for a reason, and the person who raised it reads it on their own screen.
+      A request that has been decided moves to <b>Past payments</b>.</p>
+  </section>\`}
+
+  \${!past ? '' : \`
+  <section class="panel">
+    <header><h3>Already decided</h3>`,
+  'and the decided half is Past payments');
+
+app = swap(app,
+`      A cell that is cut off says the rest when you hover it, with a Copy beside it.
+      The pencil at the end corrects a request.</p>
+  </section>\`;
+}`,
+`      A cell that is cut off says the rest when you hover it, with a Copy beside it.
+      The pencil at the end corrects a request.</p>
+  </section>\`}\`;
+}`,
+  'and the two halves close where they opened');
+
+/* The tab itself. Hidden from the rail like Approve payments — you reach it
+   from the bar on the payment page, which is where you are when you want it. */
+app = swap(app,
+`  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
+   gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},`,
+`  {id:'payapprove',  group:'other', label:'Approve payments', title:'Requests waiting on you',
+   gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},
+  {id:'paypast',     group:'other', label:'Past payments', title:'Past payments',
+   gate:u=>coInView(u)==='corplex' && canUpload(u), hide:true},`,
+  'Past payments is a tab');
+
+app = swap(app, `payapprove:vPayApprove,`, `payapprove:vPayApprove, paypast:vPayApprove,`,
+  'and is drawn by the same function');
+
+app = swap(app,
+`  const ttl = state.tab === 'payapprove' ? 'Payment request'`,
+`  const ttl = (state.tab === 'payapprove' || state.tab === 'paypast') ? 'Payment request'`,
+  'the page is still headed Payment request');
+
+app = swap(app,
+`  if(state.tab==='payment' || state.tab==='payapprove'){`,
+`  if(state.tab==='payment' || state.tab==='payapprove' || state.tab==='paypast'){`,
+  'and its handlers are bound on all three tabs');
+
+app = swap(app,
+`    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove'].includes(state.tab));`,
+`    || ['home','payroll','tickets','payslips','hradmin','people','docsadmin','loans','profile','payment','payapprove','paypast'].includes(state.tab));`,
+  'Past payments gets the width the decided table needs');
+
+app = swap(app,
+`const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company',
+                 'tools','payment','payapprove'];`,
+`const MOBHIDE = ['dashboard','commission','invoices','team','leaderboard','company',
+                 'tools','payment','payapprove','paypast'];`,
+  'and stays a laptop job, like the other two');
+
+/* The count on Past payments is not a thing waiting on anybody, so it does not
+   wear the colour that means one is. */
+shell = swap(shell,
+`  .subtabs button[aria-current="true"] .cnt{background:var(--accentInk);color:var(--accent)}`,
+`  .subtabs .cnt.mute{background:var(--sunk);color:var(--ink3)}
+  .subtabs button[aria-current="true"] .cnt{background:var(--accentInk);color:var(--accent)}
+  .subtabs button[aria-current="true"] .cnt.mute{background:rgba(255,255,255,.22);color:#fff}`,
+  'a count that is not waiting on you looks like it');
+
+/* =====================================================================
+   THE SHAPE OF A DOCUMENT NUMBER
+   ---------------------------------------------------------------------
+     Avin gave the two shapes: the residence visa is three digits, four, one
+     and six, separated by slashes; the Emirates ID is three, four, seven and
+     one, separated by dashes.
+
+   Two of the four have a shape. So the box knows it: the separators appear as
+   the digits are typed, the placeholder shows the pattern rather than a vague
+   'as printed', and a number that is only half typed cannot be saved — which
+   matters more here than anywhere, because these are what the MOHRE filings
+   and the insurance schedule are made from.
+
+   Passport and labour card are left free: a passport number's shape depends
+   on the country that issued it, and a rule that rejects a real one is worse
+   than no rule, because the person cannot correct it from their side.
+   ===================================================================== */
+app = swap(app,
+`const refPh = k => (REFKINDS.find(t => t.k === k) || {}).ph || '';`,
+`/* Group sizes and the separator between them. The Emirates ID is always
+   784-YYYY-NNNNNNN-N; the residence visa is three, the year, one and six. */
+const REFMASK = {
+  eid:  {sep:'-', groups:[3, 4, 7, 1]},
+  visa: {sep:'/', groups:[3, 4, 1, 6]}
+};
+const refDigits = k => (REFMASK[k] ? REFMASK[k].groups.reduce((a, b) => a + b, 0) : 0);
+/* Digits in, shape out. Anything that is not a digit is dropped, so pasting a
+   number that already carries its separators works, and so does typing one
+   that does not. */
+function refFormat(k, raw){
+  const m = REFMASK[k]; if(!m) return String(raw || '');
+  const d = String(raw || '').replace(/\\D/g, '').slice(0, refDigits(k));
+  const out = []; let at = 0;
+  for(const n of m.groups){
+    if(at >= d.length) break;
+    out.push(d.slice(at, at + n)); at += n;
+  }
+  return out.join(m.sep);
+}
+const refWhole = (k, v) => !REFMASK[k] || String(v || '').replace(/\\D/g, '').length === refDigits(k);
+/* The pattern itself, as the placeholder, rather than a description of it. */
+const refPh = k => REFMASK[k]
+  ? REFMASK[k].groups.map(n => (k === 'eid' && n === 3 ? '784' : '0'.repeat(n))).join(REFMASK[k].sep)
+  : (REFKINDS.find(t => t.k === k) || {}).ph || '';
+/* A number half typed. Named, because the Save button has to say which. */
+const refPart = () => Object.entries(state.pfDirty || {})
+  .filter(([k, v]) => REFMASK[k] && String(v).trim() !== '' && !refWhole(k, v))
+  .map(([k]) => (REFKINDS.find(t => t.k === k) || {}).label || k);`,
+  'a document number that has a shape');
+
+/* The box wears the shape too: the right width for it, and a mark when what
+   is in it is not one yet. Built by concatenation rather than another nested
+   template, because three levels of backtick is how escaping mistakes ship. */
+app = swap(app,
+`  return \`<input class="refin" data-pf="\${esc(k)}" value="\${esc((state.pfDirty || {})[k] || '')}"
+    placeholder="\${esc(refPh(k))}" aria-label="Number on the \${esc((REFKINDS.find(t => t.k === k) || {}).label || k)}">\`;`,
+`  const typed = (state.pfDirty || {})[k] || '';
+  const part = REFMASK[k] && String(typed).trim() !== '' && !refWhole(k, typed);
+  const label = (REFKINDS.find(t => t.k === k) || {}).label || k;
+  return '<input class="refin' + (REFMASK[k] ? ' masked' : '') + (part ? ' part' : '') + '"'
+    + ' data-pf="' + esc(k) + '" value="' + esc(typed) + '"'
+    + ' placeholder="' + esc(refPh(k)) + '"'
+    + ' inputmode="' + (REFMASK[k] ? 'numeric' : 'text') + '"'
+    + ' aria-label="Number on the ' + esc(label) + '">';`,
+  'and the box shows when it is not finished');
+
+/* Save waits for it. A part-typed Emirates ID reaching the MOHRE filings is
+   the thing this is for. */
+app = swap(app,
+`    <div class="pfsave\${state.pfDirty ? ' on' : state.pfSaved ? ' just' : ''}">
+      <span>\${state.pfDirty
+        ? Object.keys(state.pfDirty).length + ' change' + (Object.keys(state.pfDirty).length===1?'':'s') + ' not saved yet'
+        : 'Your changes are saved'}</span>
+      <button class="btn" id="pfSave" type="button"\${state.pfDirty ? '' : ' disabled'}>Save changes</button>
+    </div>`,
+`    \${pfSaveBar()}`,
+  'and Save waits for a number to be finished');
+
+app = swap(app,
+`function refCell(u, k){`,
+`/* What the save bar says, and whether it can be pressed. A number that is
+   only half typed is named, with the shape it is missing. */
+function pfSaveBar(){
+  const half = refPart();
+  const n = Object.keys(state.pfDirty || {}).length;
+  const shape = half.length
+    ? refPh((REFKINDS.find(t => t.label === half[0]) || {}).k || 'eid') : '';
+  const say = half.length
+    ? esc(half.join(' and ')) + (half.length === 1 ? ' is' : ' are') + ' not finished \\u2014 ' + esc(shape)
+    : n ? n + ' change' + (n === 1 ? '' : 's') + ' not saved yet'
+        : 'Your changes are saved';
+  return '<div class="pfsave' + (n ? ' on' : state.pfSaved ? ' just' : '') + '">'
+    + '<span' + (half.length ? ' style="color:var(--bad)"' : '') + '>' + say + '</span>'
+    + '<button class="btn" id="pfSave" type="button"'
+    + (n && !half.length ? '' : ' disabled') + '>Save changes</button></div>';
+}
+
+function refCell(u, k){`,
+  'and one place that decides both');
+
+/* The separators appear as the digits go in. Immediately, not on the debounce
+   the rest of the profile uses, because a separator that turns up a third of
+   a second after the digit reads as the box fighting you. */
+app = swap(app,
+`  { const rf = document.getElementById('rateFind');`,
+`  document.querySelectorAll('.refin.masked').forEach(el => {
+    const k = el.dataset.pf;
+    el.addEventListener('input', () => {
+      const shaped = refFormat(k, el.value);
+      if(shaped === el.value) return;
+      el.value = shaped;
+      try{ el.setSelectionRange(shaped.length, shaped.length); }catch(_){}
+    });
+  });
+  { const rf = document.getElementById('rateFind');`,
+  'the shape appears as it is typed');
+
+shell = swap(shell,
+`.refin:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}`,
+`.refin:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.refin.masked{max-width:190px;letter-spacing:.04em}
+.refin.part{border-color:var(--bad)}
+.refin.part:focus{outline-color:var(--bad);border-color:var(--bad)}`,
+  'a box that knows its own shape');
+
+/* =====================================================================
+     'Show numbers is at a wrong place. find a right place'          -- Avin
+
+   It was glued to whichever of the four happened to be listed first, so it
+   sat against the passport for one person and against the Emirates ID for the
+   next, and it broke the right edge the numbers line up on. It is a control
+   over the whole panel — it uncovers every masked number on the page,
+   including the ones in the documents table below — so it belongs in the
+   panel's header, at the end, where the other panel-level controls are.
+   ===================================================================== */
+app = swap(app,
+`          return have.map(([k, l], i) => \`<dt>\${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
+            <span class="refval" data-full="\${esc(REFOF(u, k))}">\${esc(maskRef(REFOF(u, k)))}</span>\${i ? '' :
+            \` <button class="btn ghost" id="eidShow" type="button" style="padding:1px 8px;font-size:11.5px;margin-left:8px;font-weight:500">Show numbers</button>\`}</dd>\`).join('')`,
+`          return have.map(([k, l]) => \`<dt>\${esc(l)}</dt><dd style="font-family:inherit;font-weight:600">
+            <span class="refval" data-full="\${esc(REFOF(u, k))}">\${esc(maskRef(REFOF(u, k)))}</span></dd>\`).join('')`,
+  'the numbers keep the right edge to themselves');
+
+app = swap(app,
+`      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span></header>`,
+`      <header><h3>Employment</h3><span class="hint">accounts holds these &mdash; ask them to change one</span>
+        \${REFKINDS.some(t => REFOF(u, t.k))
+          ? \`<button class="btn ghost sm" id="eidShow" type="button">Show numbers</button>\` : ''}</header>`,
+  'and Show numbers goes where a panel control goes');
+
+/* =====================================================================
+   STAFF RECORDS, AND THE REGISTER SECTION
+   ---------------------------------------------------------------------
+     'But where do we have add or edit option for the following? Name,
+      Employee ID, Company, Visa, Paid from, Designation, Department, Shift,
+      Reports to, Work email, Work Phone, Sales. I feel this is all over the
+      place. Why not we have a proper tab to maintain all this?'      -- Avin
+
+   Seven of the twelve could only ever be set on the Add somebody form and
+   never changed again. The work phone had no box anywhere in the portal. And
+   correct_joining() — which takes exactly those seven — has been in the
+   database the whole time with nothing calling it.
+   ===================================================================== */
+
+app = swap(app, `function vAdmin(){`,
+`/* ---------- Staff Records ----------
+ *
+ *   'But where do we have add or edit option for the following? ... I feel
+ *    this is all over the place. Why not we have a proper tab to maintain all
+ *    this?'                                                          -- Avin
+ *
+ * He was right. Seven of these twelve could only ever be typed on the Add
+ * somebody form and never changed again; the work phone had no box anywhere in
+ * the portal; and the sales tick did not exist. correct_joining() has been in
+ * the database the whole time, taking exactly the frozen seven, with nothing
+ * calling it.
+ *
+ * One person at a time rather than a grid, because half of these move money —
+ * Company and Paid from decide which run pays them and out of whose account,
+ * and Work email is their sign-in. The confirm list says what a change DOES,
+ * not just what it was, and that needs room.
+ */
+const SRF = () => state.sr || (state.sr = {who:'', draft:{}, confirm:false, busy:false, done:'', newDept:false});
+const srCo = () => Object.keys(DATA.companies);
+
+/* What the record says now, before anything is typed. One place, so the
+   confirm list and the boxes cannot disagree about what is changing. */
+function srNow(n){
+  const id = (HR().ids || {})[n] || '';
+  const t = (DATA.tickets.employees || []).find(e => e.portalName === n || e.name === n) || {};
+  const x = SALESEXTRA(n);
+  return {
+    id, name: n,
+    staffNo: (HR().staffNo || {})[n] || '',
+    company: ((HR().orgCo || {})[n]) || companyOf(n).key,
+    visa: (HR().visaCo || {})[n] || '',
+    paidBy: (HR().paidBy || {})[n] || '',
+    title: titleOf(n) || '',
+    department: orgDeptOf(n) || '',
+    shift: (shiftOf(n) || {}).id || '',
+    remote: isRemote(n) ? 'yes' : 'no',
+    manager: mgrName(n) || '',
+    email: emailOf(n) || '',
+    phone: phoneOf(n) || '',
+    sales: !!x, salesCo: x ? x.co : (((HR().orgCo || {})[n]) || companyOf(n).key),
+    salesDept: x ? x.dept : ''
+  };
+}
+const srVal = (k, now) => k in SRF().draft ? SRF().draft[k] : now[k];
+const srSet = (k, v, now) => {
+  const d = SRF().draft;
+  if(String(v) === String(now[k])) delete d[k]; else d[k] = v;
+  SRF().confirm = false;
+};
+
+/* Not what it was and what it is — what it will do. This is the reason the
+   screen is one person wide. */
+function srSays(k, was, now, who){
+  const co = c => (DATA.companies[c] || {}).name || c;
+  const earns = (c, d) => REVDEPT(c).includes(d);
+  switch(k){
+    case 'name': return 'Payslips and letters already issued keep the old name; everything from here on carries the new one.';
+    case 'staffNo': return 'Runs already closed keep the old ID. The next payroll and every payslip after it carry the new one.';
+    case 'company': return nm(who) + ' comes off the ' + co(was) + ' run and onto the ' + co(now)
+      + ' one, from the next month built. Closed months are not touched.';
+    case 'visa': return 'Their payslip, salary certificate and letters carry ' + co(now) + '’s letterhead from now on.';
+    case 'paidBy': return 'Their net pay is transferred out of ' + co(now) + '’s account instead of ' + co(was) + '’s.';
+    case 'department': {
+      const c = srVal('company', srNow(who));
+      return earns(c, was) === earns(c, now)
+        ? 'They move on the organisation chart and on People.'
+        : (earns(c, now)
+            ? 'This <b>puts them into</b> the sales tables, the leaderboard and the commission run.'
+            : 'This <b>takes them out of</b> the sales tables, the leaderboard and the commission run.');
+    }
+    case 'manager': return 'Their leave and working-from-home requests go to '
+      + (now ? nm(now) : 'nobody') + ' from now on, including any waiting right now.';
+    case 'email': return 'This is what they sign in with. The database refuses the change if they have already signed in once — that has to be moved in Supabase Auth first.';
+    case 'shift': return 'Their working hours change, which is what the late-arrival nudge and the attendance day are measured against.';
+    case 'remote': return now === 'yes'
+      ? 'This <b>stops their air ticket</b> from today. Anything already earned and not taken stays owed '
+        + 'and is settled when they take it or when they leave.'
+      : 'This <b>starts an air ticket</b> again, counted from today rather than from their joining date '
+        + '&mdash; so the first one falls due in eleven months.';
+    case 'sales': return now === 'yes'
+      ? 'Team performance, the leaderboard and Department open for them, and their figures count towards the company they are set to.'
+      : 'Those three pages close for them again, and their figures stop being counted.';
+    default: return '';
+  }
+}
+const SRFIELDS = [
+  {k:'name',       label:'Name'},
+  {k:'staffNo',    label:'Employee ID'},
+  {k:'company',    label:'Company',    pick:'co'},
+  {k:'visa',       label:'Visa',       pick:'co'},
+  {k:'paidBy',     label:'Paid from',  pick:'co'},
+  {k:'title',      label:'Designation'},
+  {k:'department', label:'Department'},
+  {k:'shift',      label:'Shift',      pick:'shift'},
+  {k:'remote',     label:'Based',      pick:'based'},
+  {k:'manager',    label:'Reports to', pick:'people'},
+  {k:'email',      label:'Work email'},
+  {k:'phone',      label:'Work phone'}
+];
+const srLabel = k => (SRFIELDS.find(f => f.k === k) || {label:k}).label;
+const srShow = (k, v) => {
+  if(k === 'sales') return v === 'yes' ? 'on the sales scheme' : 'not on the sales scheme';
+  if(!String(v || '').trim()) return 'nothing';
+  if(['company','visa','paidBy','salesCo'].includes(k)) return (DATA.companies[v] || {}).name || v;
+  if(k === 'shift'){ const s = SHIFTS().find(x => x.id === v);
+    return s ? s.label + ' · ' + s.start + '–' + s.end : v; }
+  if(k === 'remote') return v === 'yes' ? 'working remotely' : 'in the office';
+  if(k === 'manager') return NM(v);
+  return String(v);
+};
+
+function vStaffRec(){
+  const F = SRF(), who = F.who;
+  const roll = USERS.map(x => x.name).slice().sort((a, b) => NM(a).localeCompare(NM(b)));
+  const now = who ? srNow(who) : null;
+  const changed = Object.keys(F.draft);
+  const depts = [...new Set(roll.map(orgDeptOf).filter(Boolean)
+    .concat(Object.values(HR().revDept || {}).flat()))].sort();
+  const signedIn = who ? !!(HR().signedIn || {})[who] : false;
+
+  const box = f => {
+    const v = srVal(f.k, now);
+    const off = f.k === 'email' && signedIn;
+    /* Department is a picker of the ones that exist, because typing it was how
+     * 'Corporate and Legal' became a department of one.
+     *
+     *   'There is no picker for department as well'                   -- Avin
+     *
+     * But a genuinely new department is a real thing, so the list ends in an
+     * escape rather than making it impossible. Choosing it turns the row into
+     * a box, and Cancel puts the list back. */
+    const c = f.k === 'department'
+      ? (F.newDept
+        ? '<span class="srnew"><input data-sr="department" value="' + esc(v || '') + '" '
+          + 'placeholder="the new department\\u2019s name" autofocus>'
+          + '<button type="button" id="srDeptBack" class="btn ghost sm">Cancel</button></span>'
+        : '<select data-sr="department">'
+          + (depts.includes(v) || !v ? '' :
+              '<option value="' + esc(v) + '" selected>' + esc(v) + '</option>')
+          + (v ? '' : '<option value="" selected>No department</option>')
+          + depts.map(d => '<option value="' + esc(d) + '"' + (d === v ? ' selected' : '') + '>'
+              + esc(d) + '</option>').join('')
+          + '<option value="__new">\\u2795 a department that is not on this list\\u2026</option></select>')
+      : f.pick === 'co'
+      ? '<select data-sr="' + f.k + '">' + srCo().map(k =>
+          '<option value="' + esc(k) + '"' + (k === v ? ' selected' : '') + '>'
+          + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select>'
+      : f.pick === 'based'
+      ? '<select data-sr="' + f.k + '">'
+          + '<option value="no"' + (v === 'no' ? ' selected' : '') + '>In the office</option>'
+          + '<option value="yes"' + (v === 'yes' ? ' selected' : '') + '>Works remotely</option></select>'
+      : f.pick === 'shift'
+      ? '<select data-sr="' + f.k + '">' + SHIFTS().map(s =>
+          '<option value="' + esc(s.id) + '"' + (s.id === v ? ' selected' : '') + '>'
+          + esc(s.label + ' · ' + s.start + '–' + s.end) + '</option>').join('') + '</select>'
+      : f.pick === 'people'
+      ? '<select data-sr="' + f.k + '"><option value="">Nobody</option>' + roll.filter(n => n !== who).map(n =>
+          '<option value="' + esc(n) + '"' + (n === v ? ' selected' : '') + '>'
+          + esc(NM(n)) + '</option>').join('') + '</select>'
+      : '<input data-sr="' + f.k + '" value="' + esc(v || '') + '"'
+          + (f.list ? ' list="' + f.list + '"' : '')
+          + (off ? ' disabled title="They have signed in with this. Change it in Supabase Auth first."' : '') + '>';
+    /* The note about a sign-in goes under the box, not inside the label — a
+       label is uppercased here, and 'WORK EMAIL THEIR SIGN-IN' reads as one
+       field name. */
+    return '<label' + (f.k in F.draft ? ' class="srchg"' : '') + '><span>' + esc(f.label) + '</span>' + c
+      + (off ? '<span class="pfhint">They have signed in with this. It has to be moved in Supabase Auth first.</span>' : '')
+      + '</label>';
+  };
+
+  const tick = !who ? '' : (() => {
+    const isOn = String(srVal('sales', now)) === 'true' || srVal('sales', now) === true || srVal('sales', now) === 'yes';
+    const co = srVal('salesCo', now), dept = srVal('salesDept', now);
+    /* Only the departments that actually earn revenue for THAT company.
+     *
+     *   'What is "on which leaderboard"?'                             -- Avin
+     *
+     * It was a free text box offering every department in the group, and a
+     * value that is not one of these does not fail — scopeOf() falls through
+     * and quietly shows the person the Corporate & Legal table instead. So it
+     * is a picker of the real ones, and it follows the company above it. */
+    const boards = REVDEPT(co);
+
+    /* Whether they are ALREADY on the sales scheme through their department.
+     *
+     *   'there is no tick on Zhavokhir (i never put one). I can still see his
+     *    sales from his login'                                        -- Avin
+     *
+     * Which is right: he is a consultant in Corporate & Legal, and that is one
+     * of the departments that earns revenue for CorpLex, so his department has
+     * always let him in. The tick is the EXCEPTION — for somebody whose
+     * department is not one of those. An empty tick beside somebody who plainly
+     * has sales access reads as a bug, so the screen has to say which of the
+     * two is carrying them. */
+    const theirCo = srVal('company', now), theirDept = srVal('department', now);
+    const already = REVDEPT(theirCo).includes(theirDept);
+    const coName = k => esc((DATA.companies[k] || {}).name || k);
+
+    return '<div class="srsales">'
+      + '<label class="srtick"><input type="checkbox" id="srSales"' + (isOn ? ' checked' : '') + '>'
+      + '<b>On the sales scheme</b>'
+      + '<em>Their own figures, and Team performance, the leaderboard and Department, open for them '
+      + 'whatever department they sit in.</em></label>'
+      + (already
+        ? '<p class="cap" style="padding:9px 0 0">' + (isOn
+            ? 'They would be on the scheme anyway: <b>' + esc(theirDept) + '</b> earns revenue for <b>'
+              + coName(theirCo) + '</b>. The tick is only changing where they are counted.'
+            : '<b>' + nm(who) + '</b> is already on the scheme without this tick, because <b>'
+              + esc(theirDept) + '</b> is one of the departments that earns revenue for <b>'
+              + coName(theirCo) + '</b>. The tick is for somebody whose department is not &mdash; '
+              + 'an accountant who also sells. Use it here only to count them under a different '
+              + 'company or leaderboard.') + '</p>'
+        : '')
+      + (isOn
+        ? '<div class="jform" style="margin-top:12px">'
+          + '<label><span>Counted under</span><select data-sr="salesCo">' + srCo().map(k =>
+              '<option value="' + esc(k) + '"' + (k === co ? ' selected' : '') + '>'
+              + esc((DATA.companies[k] || {}).name || k) + '</option>').join('') + '</select></label>'
+          + '<label><span>On which leaderboard</span>'
+          + (boards.length
+            ? '<select data-sr="salesDept">' + boards.map(d =>
+                '<option value="' + esc(d) + '"' + (d === dept ? ' selected' : '') + '>'
+                + esc(d) + '</option>').join('') + '</select>'
+            : '<select data-sr="salesDept" disabled><option>nothing to join</option></select>')
+          + '</label></div>'
+          + (boards.length
+            ? '<p class="cap" style="padding:10px 0 0">This is the team they are ranked inside &mdash; whose '
+              + 'figures they see on Team performance and Department, and which leaderboard they appear on. '
+              + 'It does not have to be the department they sit in on the chart; that is the point of the tick. '
+              + '<b>' + esc((DATA.companies[co] || {}).name || co) + '</b> earns revenue through '
+              + boards.map(d => '<b>' + esc(d) + '</b>').join(' and ') + ', so those are the choices.</p>'
+            : '<p class="cap" style="padding:10px 0 0"><b>' + esc((DATA.companies[co] || {}).name || co)
+              + '</b> has no department set as earning revenue, so there is no leaderboard to put anybody on. '
+              + 'Set one on <b>Sales &rarr; Staff accounts</b> first, or count them under another company.</p>')
+        : '')
+      + '</div>';
+  })();
+
+  /* Same box every other edit-then-confirm screen uses (.edconf / .edconfb), so
+     this one is not a stranger. The list underneath is wider than a table row
+     because each line has to say what the change DOES. */
+  const confirmList = () => '<div class="edconf"><h4>This is what will change.</h4>'
+    + '<ul class="srlist">' + changed.map(k => {
+        const was = srShow(k, now[k]), is = srShow(k, F.draft[k]);
+        const says = srSays(k, now[k], F.draft[k], who);
+        return '<li><b>' + esc(srLabel(k) || (k === 'sales' ? 'Sales' : k)) + '</b> '
+          + '<span class="edwas">' + esc(was) + '</span> &rarr; '
+          + '<span class="ednow">' + esc(is) + '</span>'
+          + (says ? '<em>' + says + '</em>' : '') + '</li>';
+      }).join('') + '</ul>'
+    + '<div class="edconfb"><button class="btn" id="srGo" type="button"' + (F.busy ? ' disabled' : '')
+    + '>' + (F.busy ? 'Saving\\u2026' : 'Yes, save ' + changed.length + (changed.length === 1 ? ' change' : ' changes')) + '</button>'
+    + '<button class="btn ghost" id="srNo" type="button">Back</button>'
+    + '<span>Nothing has been written yet.</span></div></div>';
+
+  return \`
+  <section class="panel">
+    <header><h3>Staff record</h3>
+      <span class="hint">everything the portal knows about somebody's employment, in one place</span></header>
+    <div class="pad">
+      <div class="jform">
+        <label><span>Who</span><select id="srWho">
+          <option value="">Choose somebody</option>
+          \${roll.map(n => \`<option value="\${esc(n)}"\${who === n ? ' selected' : ''}>\${esc(NM(n))}\${
+            titleOf(n) ? ' — ' + esc(titleOf(n)) : ''}</option>\`).join('')}
+        </select></label>
+      </div>
+      \${!who ? \`<p class="cap" style="padding:14px 0 0">Pick somebody. Every field here can be corrected
+        &mdash; a name, an employee ID, which company pays them &mdash; and you are shown what each change
+        does before it is written.</p>\` : ''}
+    </div>
+  </section>
+
+  \${!who ? '' : \`
+  <section class="panel">
+    <header><h3>\${nm(who)}</h3>
+      <span class="pill mute">\${esc(now.staffNo || 'no ID')}</span>
+      <span class="hint">\${changed.length
+        ? changed.length + ' change' + (changed.length === 1 ? '' : 's') + ' not saved yet'
+        : 'nothing changed'}</span>
+      <button class="btn" id="srSave" type="button"\${changed.length && !F.busy ? '' : ' disabled'}>Save changes</button>
+      <button class="btn ghost" id="srReset" type="button"\${changed.length ? '' : ' disabled'}>Undo</button></header>
+    \${F.confirm ? confirmList() : ''}
+    \${F.done ? \`<div class="edok">\${esc(F.done)}</div>\` : ''}
+    <div class="pad">
+      <div class="jform">\${SRFIELDS.map(box).join('')}</div>
+      <div class="srelse">
+        <span><b>Paid how</b> \${esc(BASIS[BASISOF(who)] || BASISOF(who))}</span>
+        <span><b>Air ticket</b> \${(() => { const why = tkReason(who);
+          return why ? esc(why) + ' \u2014 not on the scheme' : 'on the scheme'; })()}</span>
+        <span><b>Gratuity</b> \${noGratuity(who) ? 'none \u2014 no basic on file' : 'accruing on the basic'}</span>
+        <button class="btn ghost sm" data-go="onpay" data-mode="console" type="button">Change how they are paid</button>
+      </div>
+      <p class="cap" style="padding:14px 0 0">Nothing is written until you press Save and agree to the list of
+        changes. A joining date, a salary and the air ticket are not here: those are
+        <b>Payroll</b>, <b>Revisions</b> and <b>Air ticket</b>, because each of them writes more than a field.
+        The air ticket and the gratuity above are not settings either &mdash; they are worked out from
+        <b>Based</b> and from how somebody is paid, so they follow the record rather than a list.</p>
+    </div>
+  </section>
+
+  <!-- The sales scheme is its own panel, in its own colour: it is not part of
+       the employment record, it is a decision about what this person can SEE.
+       Same Save, because it is still one person. -->
+  <section class="panel srpanel">
+    <header><h3>Sales scheme</h3>
+      <span class="hint">\${'sales' in F.draft || 'salesCo' in F.draft || 'salesDept' in F.draft
+        ? 'changed &mdash; press Save changes above' : 'what they can see, not what they are paid'}</span></header>
+    <div class="pad">\${tick}</div>
+  </section>\`}\`;
+}
+
+
+function vAdmin(){`,
+  'the staff record screen');
+
+/* The section is Register now, and it opens with the record. */
+app = swap(app,
+`                  ['docs','Documents'], ['notif','Notifications']];`,
+`                  ['docs','Register'], ['notif','Notifications']];`,
+  'Documents becomes Register');
+
+app = swap(app,
+`  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:isAccounts, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:isAccounts, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profiles',       title:'Profile completeness', gate:isAccounts, con:true},
+  {id:'staffreg',   group:'con', sec:'docs',   label:'Register',       title:'Staff register', gate:isAccounts, con:true},`,
+`  {id:'staffrec',   group:'con', sec:'docs',   label:'Staff Records',  title:'Staff records', gate:isAccounts, con:true},
+  {id:'docdates',   group:'con', sec:'docs',   label:'Staff Documents', title:'Staff Documents', gate:isAccounts, con:true},
+  {id:'staffreg',   group:'con', sec:'docs',   label:'Staff Personal', title:'Staff personal details', gate:isAccounts, con:true},
+  {id:'profiles',   group:'con', sec:'docs',   label:'Profile completion', title:'Profile completeness', gate:isAccounts, con:true},
+  {id:'docsadmin',  group:'con', sec:'docs',   label:'Expiry',         title:'Document expiry', gate:isAccounts, con:true},`,
+  'the five tabs of Register, in his order');
+
+app = swap(app, `PAGEVIEW.approvals = () => vApprovals();`,
+`PAGEVIEW.approvals = () => vApprovals();
+PAGEVIEW.staffrec  = () => vStaffRec();`,
+  'and the record is routable');
+
+/* The handlers. Typing changes a draft and nothing else; Save shows the list;
+   agreeing to the list writes it. */
+app = swap(app,
+`  document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });`,
+`  { const sw = document.getElementById('srWho');
+    if(sw) sw.onchange = () => { state.sr = {who: sw.value, draft:{}, confirm:false, busy:false, done:'', newDept:false}; render(); }; }
+  /* The leaderboard a person is put on has to be one of the departments that
+     earn revenue for the company they are counted under, so changing the
+     company can strand the board. Rather than leave a value that silently
+     resolves to the wrong table, it is moved to that company's first board. */
+  function srFixBoard(now){
+    const d = SRF().draft;
+    const co = 'salesCo' in d ? d.salesCo : now.salesCo;
+    const boards = REVDEPT(co);
+    const cur = 'salesDept' in d ? d.salesDept : now.salesDept;
+    if(boards.includes(cur)) return;
+    srSet('salesDept', boards[0] || '', now);
+  }
+  { const b = document.getElementById('srDeptBack');
+    if(b) b.onclick = () => { const now = srNow(SRF().who);
+      SRF().newDept = false; srSet('department', now.department, now); render(); }; }
+  document.querySelectorAll('[data-sr]').forEach(el => {
+    const k = el.dataset.sr, now = srNow(SRF().who);
+    const h = () => {
+      /* the escape at the foot of the department list */
+      if(k === 'department' && el.value === '__new'){
+        SRF().newDept = true; srSet('department', '', now); SRF().done = ''; render();
+        const nb = document.querySelector('input[data-sr="department"]'); if(nb) nb.focus();
+        return;
+      }
+      srSet(k, el.value, now);
+      if(k === 'salesCo') srFixBoard(now);
+      SRF().done = ''; render();
+      const e2 = document.querySelector('[data-sr="' + k + '"]');
+      if(e2 && e2.tagName === 'INPUT'){ e2.focus();
+        try{ e2.setSelectionRange(e2.value.length, e2.value.length); }catch(_){} } };
+    if(el.tagName === 'SELECT') el.onchange = h;
+    else { let tm; el.oninput = () => { clearTimeout(tm); tm = setTimeout(h, 300); }; }
+  });
+  { const st = document.getElementById('srSales');
+    if(st) st.onchange = () => { const now = srNow(SRF().who);
+      srSet('sales', st.checked ? 'yes' : 'no', Object.assign({}, now, {sales: now.sales ? 'yes' : 'no'}));
+      /* Ticking somebody on for the first time leaves the board empty, and an
+         empty board is refused by the database. Fill it with the company's
+         first, which is the only choice for POA and Lex anyway. */
+      if(st.checked) srFixBoard(now);
+      SRF().done = ''; render(); }; }
+  { const b = document.getElementById('srSave');
+    if(b) b.onclick = () => { SRF().confirm = true; render(); window.scrollTo({top:0}); }; }
+  { const b = document.getElementById('srNo');
+    if(b) b.onclick = () => { SRF().confirm = false; render(); }; }
+  { const b = document.getElementById('srReset');
+    if(b) b.onclick = () => { state.sr = {who: SRF().who, draft:{}, confirm:false, busy:false, done:'', newDept:false}; render(); }; }
+  { const b = document.getElementById('srGo');
+    if(b) b.onclick = async () => {
+      const F = SRF(), who = F.who, d = F.draft, now = srNow(who);
+      F.busy = true; render();
+      /* The tick is its own function, because it is its own table. Order
+         matters: the record first, so a rename lands before anything keyed to
+         the person is written beside it. */
+      const rec = ['name','staffNo','company','visa','paidBy','title','department','shift','email','phone','remote']
+        .some(k => k in d) || ('manager' in d);
+      let ok = true;
+      if(rec) ok = !!await window.__db.saveStaffRecord({
+        emp: now.id,
+        name: d.name, staffNo: d.staffNo, company: d.company, visa: d.visa,
+        paidBy: d.paidBy, title: d.title, department: d.department, shift: d.shift,
+        email: d.email, phone: d.phone,
+        remote: 'remote' in d ? d.remote === 'yes' : null,
+        manager: 'manager' in d ? ((HR().ids || {})[d.manager] || null) : null});
+      if(ok && ('sales' in d || 'salesCo' in d || 'salesDept' in d)){
+        const on = 'sales' in d ? d.sales === 'yes' : now.sales;
+        ok = !!await window.__db.setSalesMember(now.id, on,
+          'salesCo' in d ? d.salesCo : now.salesCo,
+          'salesDept' in d ? d.salesDept : now.salesDept);
+      }
+      /* The name may have changed, so the person this screen is about is
+         looked up again by the id rather than by what it used to be called. */
+      const still = ok ? (Object.keys(HR().ids || {}).find(n => (HR().ids || {})[n] === now.id) || who) : who;
+      state.sr = {who: still, draft: ok ? {} : d, confirm: !ok, busy:false, newDept: ok ? false : F.newDept,
+                  done: ok ? 'Saved.' : ''};
+      render(); }; }
+  document.querySelectorAll('[data-apf]').forEach(b=>b.onclick=()=>{ state.apFilter=b.dataset.apf; render(); });`,
+  'and typing, confirming and saving a staff record');
+
+/* Move somebody between departments retires into it: department had two homes,
+   and one of them was under Sales. */
+app = cutout(app,
+`    <section class="panel">
+      <header><h3>Move somebody between departments</h3>`,
+`      \${(() => { const x = state.mvDone; return x ? \`<p class="cap"><b>\${esc(x)}</b> has been moved.</p>\` : ''; })()}
+    </section>`,
+`    <section class="panel">
+      <header><h3>Moving somebody between departments</h3>
+        <span class="hint" style="margin-left:auto">this moved</span></header>
+      <div class="pad"><p style="margin:0;color:var(--ink2);font-size:14.5px">Department lives on
+        <b>Register &rarr; Staff Records</b> now, with everything else about a person's employment, and the
+        sales tick beside it. It was in two places, and one of them was here.
+        <button class="btn ghost sm" data-go="staffrec" data-mode="console" type="button"
+          style="margin-left:8px">Go to Staff Records</button></p></div>
+    </section>`,
+  'department stops living in two places');
+
+/* The page assembler picks panels off vAdmin() by matching the text of their
+   h3, so renaming the heading without this line silently drops the panel from
+   Staff accounts and leaves no pointer at all. Caught by checkstaffrec. */
+app = swap(app,
+  `  salesstaff: ['admin',   ['Staff accounts', 'Move somebody between departments']],`,
+  `  salesstaff: ['admin',   ['Staff accounts', 'Moving somebody between departments']],`,
+  'and the page still carries it under its new name');
+
+/* The handlers, and the state they kept, for the boxes that are gone. They bind
+   to element ids nothing renders any more, so they were doing nothing — but
+   dead code that names removed controls is how the next person concludes the
+   control still exists. */
+app = swap(app,
+  `  deptView: null, company: null, mvWho: '', mvDept: null, mvBusy: false, mvDone: '',`,
+  `  deptView: null, company: null,`,
+  'and the state it kept');
+
+app = cutout(app,
+`  const mvw=document.getElementById('mvWho'); if(mvw) mvw.onchange=()=>{`,
+`  const exw=document.getElementById('exWho');`,
+`  const exw=document.getElementById('exWho');`,
+  'and the handlers for the boxes that are gone');
+
+/* and the caption above it stopped being true the moment the form went. */
+app = swap(app,
+  `        company \\u2014 use the panel below to move somebody in or out \\u2014 \${Object.entries(HR().revDept||{}).map(([k,v])=>`,
+  `        company \\u2014 department is set on Register \\u2192 Staff Records \\u2014 \${Object.entries(HR().revDept||{}).map(([k,v])=>`,
+  'and the caption points at the same place');
+
+shell = swap(shell,
+`/* ---------- country rates ---------- */`,
+`/* ---------- staff records ---------- */
+.jform label.srchg span{color:var(--accent2);font-weight:600}
+.jform label.srchg input,.jform label.srchg select{border-color:var(--accent)}
+/* A bare label{} up the sheet uppercases every label on the page, and
+   text-transform inherits — so a sentence written inside one is shouted at the
+   reader unless it says otherwise. Both of these are sentences. */
+.jform label .pfhint{text-transform:none;letter-spacing:0}
+/* Its own colour, so the sales decision does not read as one more employment
+   field. The tint is the third chart hue rather than the accent, because the
+   accent means 'press me' everywhere else in the portal. */
+.srpanel{border-color:color-mix(in srgb, var(--c3) 34%, var(--line));
+  background:color-mix(in srgb, var(--c3) 4%, var(--panel))}
+.srpanel > header{background:color-mix(in srgb, var(--c3) 9%, var(--panel));
+  border-bottom-color:color-mix(in srgb, var(--c3) 22%, var(--line2));
+  border-radius:var(--r) var(--r) 0 0}
+.srpanel > header h3{color:var(--c3)}
+.srpanel .srsales{margin-top:0;padding-top:0;border-top:0}
+.srelse{display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-top:4px;
+  padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--panel2)}
+.srelse span{font-size:13px;color:var(--ink2)}
+.srelse span b{color:var(--ink);font-weight:600;margin-right:5px}
+.srelse .btn{margin-left:auto}
+/* The fresh record sits inside the settlement panel, so it needs an edge of its
+   own or it reads as one more row of the exit. Marked out rather than tinted:
+   the colour on this screen already means a status. */
+.frbox{margin-top:16px;padding:15px 16px 17px;border:1px solid var(--line);
+  border-radius:11px;background:var(--panel2)}
+.frbox h4{margin:0 0 4px;font-family:var(--serif);font-size:16.5px;font-weight:600;color:var(--ink)}
+.frbox > .cap{margin:0 0 6px}
+.frbox .jform{margin-bottom:0}
+.frbox .edconf{margin-bottom:0}
+.frbox .edtab td:first-child{white-space:nowrap;color:var(--ink2);width:1%;padding-right:18px}
+/* The by-month table is read down a column, so the month is the anchor and the
+   figures want to line up under one another rather than be scanned across. */
+.gmon td.s1{white-space:nowrap;font-weight:600}
+.gmon tbody tr.on td{background:color-mix(in srgb, var(--accent) 7%, transparent)}
+/* A sentence, and .grp elsewhere is a label — so it inherits the capitals and
+   the tracking that a label wants and a sentence does not. */
+.gmon tbody tr.grp td{font-size:12.5px;font-weight:600;color:var(--ink2);
+  text-transform:none;letter-spacing:0;
+  background:var(--panel2);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.gmon tbody tr.sub td{border-top:1px solid var(--line);font-weight:600}
+/* Letter templates: a list you click into, and the one you clicked over the
+   page. The overlay is drawn by the view rather than pushed into the modal box
+   by hand, so a redraw redraws it instead of wiping what has been typed. */
+/* The bar carried the page name at one end and two controls at the other with
+   the width of the screen between them. The name now has a line under it, and
+   the controls are one group rather than two things adrift. */
+.topbar .ttl{line-height:1.2}
+.topbar .ttl small{margin-top:2px}
+.topbar .tbend{display:flex;align-items:center;gap:8px;margin-left:auto}
+.topbar .bell{margin-left:0}
+@media screen and (max-width:900px){.topbar .ttl small{display:none}}
+/* My commission: three panels in one row. Not a plain third each — the band
+   table carries five columns and the line-by-line four, while the not-counted
+   panel is a short list of pairs. Widths set to what is in them, so the two
+   tables are not squeezed to make room for a column of prose. */
+.grid.commrow{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1.25fr) minmax(0,1fr);
+  gap:var(--gap, 18px);align-items:start}
+.grid.commrow > .panel{min-width:0}
+.grid.commrow table{table-layout:auto;width:100%}
+.grid.commrow th,.grid.commrow td{padding-left:9px;padding-right:9px}
+.grid.commrow th:first-child,.grid.commrow td:first-child{padding-left:14px}
+.grid.commrow th:last-child,.grid.commrow td:last-child{padding-right:14px}
+@media screen and (max-width:1450px){
+  .grid.commrow{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .grid.commrow > .panel:last-child{grid-column:1 / -1}}
+@media screen and (max-width:900px){.grid.commrow{grid-template-columns:minmax(0,1fr)}
+  .grid.commrow > .panel:last-child{grid-column:auto}}
+/* The forfeited tile says something has gone wrong only when it has. */
+.strip .stat.bad .v{color:var(--bad)}
+.lttab2 tbody tr{cursor:pointer}
+.lttab2 tbody tr:hover td{background:color-mix(in srgb, var(--accent) 5%, transparent)}
+.lttab2 td.ltsay{color:var(--ink2);font-size:13px}
+.lookwrap.ltmodal{position:fixed;inset:0;z-index:80}
+/* Sized to what is in it. .look is a document viewer and fills the screen on
+   purpose; a form that does the same leaves half a page of white under the
+   buttons. */
+.ltmodal .ltlook{inset:auto 0 auto 0;top:56px;height:auto;margin:0 auto;
+  max-width:820px;max-height:calc(100vh - 112px)}
+.ltmodal .ltbody{flex:0 1 auto;overflow:auto}
+.ltmodal .ltbody{display:block;align-items:stretch;padding:18px 20px 20px;background:var(--panel)}
+.ltform{display:grid;grid-template-columns:1fr 240px;gap:14px 16px}
+.ltform label{display:flex;flex-direction:column;gap:5px;margin:0;min-width:0}
+.ltform label.wide{grid-column:1 / -1}
+.ltform label span{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3)}
+.ltform textarea{width:100%;box-sizing:border-box;resize:vertical;line-height:1.55}
+.ltfields{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0 0}
+.ltchip{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;font-size:12px;
+  color:var(--ink2);background:var(--panel2);border:1px solid var(--line);
+  border-radius:7px;cursor:pointer;font-family:inherit}
+.ltchip:hover{border-color:var(--accent);color:var(--ink)}
+.ltchip code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--ink)}
+.ltpreview{margin-top:16px;padding:12px 14px;border-left:2px solid var(--line2);background:var(--panel2);
+  border-radius:0 8px 8px 0}
+.ltpreview .ltpk{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink3);margin-bottom:5px}
+.ltpreview p{margin:0;font-size:13.5px;line-height:1.6;color:var(--ink)}
+.ltmodal .edconf{margin:0}
+.ltmodal .edtab td:first-child{white-space:nowrap;color:var(--ink2);width:1%;padding-right:16px}
+@media screen and (max-width:820px){.ltform{grid-template-columns:1fr}
+  .ltmodal .ltlook{inset:16px;max-height:calc(100vh - 32px)}}
+.srnew{display:flex;gap:7px;align-items:center}
+.srnew input{min-width:0}
+.srnew .btn{flex:none;white-space:nowrap}
+.srsales{margin-top:18px;padding-top:16px;border-top:1px solid var(--line2)}
+.srtick{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 11px;align-items:start;
+  cursor:pointer;text-transform:none;letter-spacing:0;margin-bottom:0}
+.srtick input{margin-top:3px;width:auto}
+.srtick b{font-size:14.5px;font-weight:600;color:var(--ink);line-height:1.4}
+.srtick em{grid-column:2;font-style:normal;font-size:12.5px;color:var(--ink2);line-height:1.5}
+.srlist{margin:0;padding:13px 16px 14px 34px;display:flex;flex-direction:column;gap:11px}
+.srlist li{font-size:13.5px;color:var(--ink)}
+.srlist li b{margin-right:5px}
+.srlist li em{display:block;font-style:normal;font-size:12.5px;color:var(--ink2);
+  margin-top:3px;line-height:1.5;max-width:86ch}
+
+/* ---------- country rates ---------- */`,
+  'the staff record screen has a look');
+
+/* The tick opens the sales section. Until now that was decided by whether the
+   uploaded workbook happened to name you — so somebody who joins mid-quarter
+   sees nothing at all until the next upload, whatever their department says. */
+app = swap(app,
+`const seesDeptSales = u => !!DATA.dept[u] && companyOf(u).sales;`,
+`const seesDeptSales = u => (!!DATA.dept[u] || !!SALESEXTRA(u)) && companyOf(u).sales;`,
+  'the sales tick opens the sales section');
+
+/* ---------- leaving a screen puts it back as you would find it ----------
+ *
+ *   'If any employee opens to check some colleague profile, and then click on
+ *    some other tab for some time, and again return to People, they should be
+ *    on people page and not land on that same employee profile which is
+ *    happening currently'                                             -- Avin
+ *
+ * The mobile tab bar and the People sub-tabs both cleared the opened colleague;
+ * the sidebar did not. So the same act of leaving behaved differently depending
+ * on which of the two you used, which is exactly the sort of thing that reads
+ * as the portal remembering something it should not. One function now, and
+ * every way of leaving goes through it — including the console section buttons,
+ * which were clearing the open payslip and nothing else.
+ *
+ * Opening a colleague FROM somewhere else still works: that path sets who after
+ * the tab, and does not come through here.
+ */
+app = swap(app,
+`function readHash(){`,
+`function goTab(id, mode){
+  state.tab = id;
+  if(mode) state.mode = mode;
+  state.who = null;       // the colleague whose profile was open on People
+  state.askOnly = null;   // the one request kind a phone had drilled into
+  state.slipOpen = null;  // the payslip that was unfolded
+  state.deptView = null;  // the department drilled into on the org chart
+}
+function readHash(){`,
+  'one way of leaving a screen');
+
+app = swap(app,
+`  nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{ if(b.dataset.tab!=='payment') state.pqConfirm='';
+    state.mode='staff'; state.tab=b.dataset.tab; render(); });`,
+`  nav.querySelectorAll('button').forEach(b=>b.onclick=()=>{ if(b.dataset.tab!=='payment') state.pqConfirm='';
+    goTab(b.dataset.tab, 'staff'); render(); });`,
+  'the sidebar leaves the screen behind');
+
+app = swap(app,
+`    state.tab = b.dataset.mtab; state.who = null; state.askOnly = null; closeSheet(); render(); window.scrollTo({top:0}); });`,
+`    goTab(b.dataset.mtab); closeSheet(); render(); window.scrollTo({top:0}); });`,
+  'and so does the phone tab bar');
+
+app = swap(app,
+`    state.tab = b.dataset.mtab; state.who = null; closeSheet(); render(); window.scrollTo({top:0}); });`,
+`    goTab(b.dataset.mtab); closeSheet(); render(); window.scrollTo({top:0}); });`,
+  'and the More sheet');
+
+app = swap(app,
+`  document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
+    const first = secTabs(b.dataset.csec)[0];
+    if(first){ state.tab = first.id; state.slipOpen = null; render(); } });`,
+`  document.querySelectorAll('[data-csec]').forEach(b=>b.onclick=()=>{
+    const first = secTabs(b.dataset.csec)[0];
+    if(first){ goTab(first.id); render(); } });`,
+  'and the console sections');
+
+/* And the sentence at the foot of a colleague's card, which lists what is not
+   on it — now that one more thing is not on it. */
+app = swap(app,
+`mobiles are not on it either: colleagues get the work number.`,
+`mobiles are not on it either: colleagues get the work number. Nor is the time somebody
+         checked in or out &mdash; only whether they are at work today. The working hours above are
+         the shift they are on, which is how you know when to reach them.`,
+  'and the card says so');
+
+/* Based, on the joiner form. It was the one fact on the record with no way in
+   at all, and a joiner is where it first matters: a remote or commission
+   starter used to be given an air ticket and have it taken away again. */
+app = swap(app,
+`        <label><span>Paid how</span><select id="jBasis">`,
+`        <label><span>Based</span><select id="jBased">
+          <option value="office"\${JF().remote?'':' selected'}>In the office</option>
+          <option value="remote"\${JF().remote?' selected':''}>Works remotely</option>
+        </select></label>
+        <label><span>Paid how</span><select id="jBasis">`,
+  'a joiner is in the office or is not');
+
+app = swap(app,
+  `   ['jTitle','title'],['jDept','dept'],['jMgr','manager'],['jBasis','basis'],`,
+  `   ['jTitle','title'],['jDept','dept'],['jMgr','manager'],['jBasis','basis'],['jBased','remote'],`,
+  'and the form remembers which');
+
+/* And the air ticket note on the joiner form says what it will actually do. */
+app = swap(app,
+`      + ' The first ticket falls due eleven months after joining.</p>';`,
+`      + ' The first ticket falls due eleven months after joining.'
+      + (f.remote === 'remote' || f.basis === 'commission'
+          ? ' <b>This joiner is ' + (f.remote === 'remote' ? 'working remotely' : 'on commission only')
+            + ', so no entitlement is created whatever is chosen here.</b>' : '')
+      + '</p>';`,
+  'and it says when none will be created at all');
+
+/* ============ who is on a scheme is worked out, not listed ============
+ *
+ *   'Mukhamad and Fakriddin has no air ticket as well'
+ *   'Its commission basis - so no air ticket'
+ *   'Janine - remote working / Sayyora - remote working'
+ *   'Yes, its same, if commission then no gratuity'                   -- Avin
+ *
+ * Two settings entries held lists of staff BY NAME — who gets no gratuity and
+ * who gets no air ticket. They were not facts but conclusions somebody had
+ * written down, and a written conclusion drifts away from the fact it came
+ * from: three people were still carrying live entitlements, due in January,
+ * February and March.
+ *
+ * Migration 0026 empties both lists and derives them. This is the same rule on
+ * this side of the wire, so a screen and the database cannot disagree.
+ */
+app = swap(app,
+`const noGratuity = u => (HR().noGratuity||[]).includes(u);`,
+`/* Gratuity accrues on the basic, so no basic is no gratuity — it is the
+   arithmetic rather than a rule, which is why the list was decoration. This
+   reads the salary actually on file, not the figure inferred from a payroll
+   line, so it answers the same as the database. */
+const noGratuity = u => !(((DATA.master || {}).parts || {})[u] || {}).basic;
+/* Why somebody is off the air ticket scheme, or '' if they are on it. The same
+   four tests as ticket_reason() in the database, in the same order, so the
+   screen and the record cannot give different answers. */
+const tkReason = u => {
+  const e = USERS.find(x => x.name === u);
+  if(e && e.left) return 'Left the firm';
+  if(isRemote(u)) return 'Works remotely';
+  const b = BASISOF(u);
+  return b === 'commission' ? 'Commission only'
+       : b === 'director'   ? 'Director'
+       : b === 'off'        ? 'Not on payroll' : '';
+};`,
+  'no gratuity means no basic, and one place says why there is no ticket');
+
+/* One status for everybody off the air ticket scheme, with the reason written
+   beside it — 'Remote — not eligible' named one reason out of the four. */
+app = swap(app,
+  `  const active = all.filter(r=>!r.lwd && r.status!=='Remote — not eligible');`,
+  `  const active = all.filter(r=>!r.lwd && r.status!=='Not in the scheme');`,
+  'the annual figure counts the people on the scheme');
+
+app = swap(app,
+  `['Remote — not eligible','Not eligible']`,
+  `['Not in the scheme','Not in the scheme']`,
+  'and the filter says so');
+
+app = swap(app,
+  `    : me.status==='Remote — not eligible' ? (me.note||'Not currently accruing.')`,
+  `    : me.status==='Not in the scheme' ? (me.note ? me.note + ' \\u2014 no air ticket is accruing.' : 'No air ticket is accruing.')`,
+  'and their own page tells them why');
+
+/* The panel already listed everybody carrying a reason on their own record.
+   The settings list was a second source for the same table, so it goes. */
+app = swap(app,
+`        <tbody>\${(T.excluded||[]).map(e=>\`<tr><td class="nw">\${nm(e.name)}</td>
+          <td style="color:var(--ink2)">\${esc(e.why)}</td></tr>\`).join('')}
+          \${all.filter(r=>r.note).map(r=>\`<tr><td class="nw">\${nm(r.name)}</td>`,
+`        <tbody>\${all.filter(r=>r.note).map(r=>\`<tr><td class="nw">\${nm(r.name)}</td>`,
+  'and the table has one source');
+
+/* ---------- a colleague's day, without a clock on it ----------
+ *
+ *   'No way - This should not be allowed, employees should just know if their
+ *    colleague is at work or away. Timings are not needed'            -- Avin
+ *
+ * Migration 0025 closes the attendance table to everybody but the person, their
+ * manager and accounts, and puts the status on a view with no times on it. The
+ * rows that arrive through that view carry `shown` — how many segments there
+ * were — in place of the segments themselves, so the fortnight strip on People
+ * and the who-is-working-from-home count on Home still draw exactly as before
+ * while nothing on screen can reach a time it is not entitled to.
+ *
+ * The person card on People needs no change at all: it reads the last segment
+ * to print "since 08:34", finds none for a colleague, and simply stops printing
+ * it — which is the whole of what he asked for.
+ */
+app = swap(app,
+`  if(a && a.segs.length) return {k:'Office', label:'In the office'};`,
+`  if(a && (a.segs.length || a.shown)) return {k:'Office', label:'In the office'};`,
+  'a day counts as worked without the times being visible');
+
+/* ---------- what you type is not smaller than its own label ----------
+ *
+ *   'Increase the font size in the staff records page - its bad to the eyes'
+ *                                                                     -- Avin
+ *
+ * Every input and select in the portal was rendering at 11px — smaller than the
+ * label above it, smaller than a table cell, smaller than anything else on the
+ * screen. Not deliberately: `input,select{font:inherit}` inherits from the
+ * nearest styled ancestor, and that is the bare `label{font-size:11px}` rule
+ * meant for the label's own text. So the small-caps treatment of the label was
+ * being applied to the value you typed into it.
+ *
+ * This is every form in the portal, not only Staff Records, because it is one
+ * line and the same complaint is true everywhere: Add somebody, a revision, a
+ * payment request, the joiner form. 14px matches the table cells beside them.
+ */
+shell = swap(shell,
+`input,select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);font:inherit}`,
+`input,select,textarea{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel2);color:var(--ink);font:inherit;
+  /* after the shorthand, which would otherwise pull 11px down from label{} */
+  font-size:14px;letter-spacing:normal;text-transform:none}`,
+  'what you type is the size of what you read');
+
+/* And the labels themselves, which were the palest of the three greys. */
+shell = swap(shell,
+`  .jform span{font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink3)}`,
+`  .jform span{font-size:12.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink2)}`,
+  'and the label above it is readable');
+
+/* ================================ the type Avin chose ================= */
+/*
+ *   'The font used for the table headers is not readable and received a lot of
+ *    complaints - Find the best one'  ... 'B and 2'                   -- Avin
+ *
+ * Two faults, and he picked the answer to each off the comparison sheet.
+ *
+ * B — the table headers. They were 10.5px, in capitals, letter-spaced, and in
+ * the palest of the three greys: four things that each cost a little
+ * legibility, stacked. Now 13px, sentence case, no tracking, full-strength ink.
+ * The header still separates from the rows because it is bolder and sits on a
+ * tinted band, so nothing was carrying the capitals but habit.
+ *
+ * 2 — the serif. Bodoni Moda is a Didone: thick stems, hairline joins. That is
+ * the whole idea of it, and it works on a magazine cover at 60px and against
+ * you at 16.5px on a dark screen. Newsreader is a newspaper serif drawn to be
+ * read small, so the thin strokes survive.
+ *
+ * The logotype keeps Bodoni. A wordmark is not UI type — it is the mark he
+ * chose — and changing it is his call, not a side effect of this one.
+ */
+
+/* --- B --- */
+shell = swap(shell,
+`th{text-align:left;font-weight:500;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3);
+  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel2);position:sticky;top:0}`,
+`th{text-align:left;font-weight:600;font-size:13px;letter-spacing:0;text-transform:none;color:var(--ink);
+  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;background:var(--panel2);position:sticky;top:0}`,
+  'table headers you can read');
+
+/* the confirm-list tables have their own, and the same disease */
+shell = swap(shell,
+`.edtab th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink3);
+  padding:9px 16px 7px;border-bottom:1px solid var(--line)}`,
+`.edtab th{text-align:left;font-weight:600;font-size:13px;letter-spacing:0;text-transform:none;color:var(--ink);
+  padding:9px 16px 7px;border-bottom:1px solid var(--line)}`,
+  'and so do the ones on a confirm list');
+
+/* the band that spans a group of columns sits above those, so it stays a
+   quieter label rather than competing with them */
+shell = swap(shell,
+`.obtab thead .obgrp th{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);`,
+`.obtab thead .obgrp th{font-size:11.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink2);`,
+  'and the band above them stays a band');
+
+/* The payroll register keeps its own copy of the old treatment, and it is the
+   table Avin is in most. Slightly under the base size because it carries the
+   most columns of any screen, but words rather than tracked capitals. */
+shell = swap(shell,
+`.invtable th{padding:0 9px;height:36px;line-height:36px;vertical-align:middle;white-space:nowrap;
+  font-size:10.5px;font-weight:500;letter-spacing:.07em;text-transform:uppercase;color:var(--ink3)}`,
+`.invtable th{padding:0 9px;height:36px;line-height:36px;vertical-align:middle;white-space:nowrap;
+  font-size:12.5px;font-weight:600;letter-spacing:0;text-transform:none;color:var(--ink)}`,
+  'and so does the payroll register');
+
+/* The little label above a figure in the leave grid — a sub-heading, so it
+   stays quieter than a column head, but not at ten pixels. */
+shell = swap(shell,
+`.availtable th.r span{display:block;font-size:10px;letter-spacing:.05em;color:var(--ink3);text-transform:uppercase}`,
+`.availtable th.r span{display:block;font-size:11.5px;letter-spacing:0;color:var(--ink2);text-transform:none}`,
+  'and the label above a leave figure');
+
+/* --- 2 --- */
+shell = shell.split("'Bodoni Moda','Didot',Georgia,serif").join("'Newsreader','Bodoni Moda',Georgia,serif");
+/* except the wordmark, which is the mark he chose */
+shell = swap(shell,
+`.appmark .one{position:relative;padding-left:9px;font-family:'Newsreader','Bodoni Moda',Georgia,serif;`,
+`.appmark .one{position:relative;padding-left:9px;font-family:'Bodoni Moda','Didot',Georgia,serif;`,
+  'the wordmark keeps the face he chose for it');
+shell = swap(shell,
+`@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500;6..96,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`,
+`@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');`,
+  'and the two faces are fetched');
+
+/* The boot screen and the print header are written separately. */
+
+/* ---------- the first paint happens last ----------
+ *
+ * Found while checking that a link somebody is GIVEN still opens where it
+ * points: opening #c/payroll threw "Cannot access 'MKEY' before
+ * initialization" and the portal came up blank.
+ *
+ * readHash() and the first render() sat two thirds of the way down this file,
+ * and a `const` is not usable until the line that declares it has run. So the
+ * first paint could reach any function it liked, but not the consts declared
+ * below it — MKEY among them, which vPayroll calls. It never showed up because
+ * with no fragment the first screen is Home, and vHome touches none of them.
+ * Anybody sent a link to a console screen, or reloaded onto one, got nothing.
+ *
+ * Nothing needed rewriting: the paint simply has to be the last thing the file
+ * does. Every later render is triggered by a click or a hashchange, long after
+ * this file has finished, which is why only the first one was ever at risk.
+ */
+app = app.trimEnd() + `
+
+/* The whole file is now defined, so the portal can be drawn. This has to stay
+   the last thing here: anything below it is a const the first paint cannot
+   see. */
+readHash();
+render();
+`;
+
+/* ------------------------------------------------------------------ output */
+
+fs.mkdirSync(OUT, {recursive: true});
+const build = new Date().toISOString().slice(0,16).replace(/[-:T]/g,'');
+
+/* ===================================== starting again on new terms ==========
+ *
+ *   'If someone changes like that, i will add them as a new employee'
+ *   'Old gratuity will be paid, the question is only if someone starts on
+ *    salary from commission'
+ *   'Past is past, no access.'                                        -- Avin
+ *
+ * It goes here, on the settlement, and nowhere else — because the settlement
+ * is the thing that has to have happened first. Reading down the rail, the
+ * flow is: worked out, approved, paid, and then, if they are staying on new
+ * terms, started again. Putting it on Staff Records instead would have offered
+ * it to somebody whose gratuity had not been worked out, which is the one
+ * order it must not be possible to do this in.
+ */
+app = swap(app,
+`      \${isAcc && st==='paid' ? '<p class="cap" style="padding:14px 0 0">Paid and closed. Nothing further to do.</p>' : ''}`,
+`      \${isAcc && st==='paid' ? freshBox(x) : ''}`,
+'the paid settlement offers a fresh record');
+
+app = swap(app,
+`function exitNote(u){`,
+`/* The panel under a paid settlement. Plain concatenation rather than nested
+   templates: three levels deep is where the escaping stops being readable. */
+function freshBox(x){
+  const open = state.frOpen === x.id;
+  const was  = (HR().joined || {})[x.who] || '';
+  const wasB = (HR().payBasis || {})[x.who] || 'salaried';
+  const BAS  = {salaried:'a fixed salary', commission:'commission only',
+                off:'not on the payroll', director:'a director'};
+  if(!open) return '<p class="cap" style="padding:14px 0 0">Paid and closed.'
+    + ' If ' + nm(x.who) + ' is staying on new terms &mdash; moving onto a salary, say &mdash;'
+    + ' their record can be started again from here.</p>'
+    + '<div class="btns" style="margin-top:12px">'
+    + '<button class="btn ghost" data-frnew="' + esc(x.id) + '" type="button">Start a fresh record</button></div>';
+
+  const doj  = state.frDoj || addDay(x.lastDay);
+  const bas  = state.frBasis || 'salaried';
+  const sal  = bas === 'salaried' || bas === 'director';
+  const bsc  = state.frBasic === undefined ? '' : state.frBasic;
+  const alw  = state.frAll   === undefined ? '' : state.frAll;
+  const rem  = state.frRemote === 'yes' ? 'yes' : 'no';
+  const ready = doj > x.lastDay && (!sal || +bsc > 0);
+
+  const opt = (v, t) => '<option value="' + v + '"' + (bas === v ? ' selected' : '') + '>' + t + '</option>';
+  const form = '<div class="jform g3" style="margin-top:6px">'
+    + '<label><span>Starts on</span><input type="date" id="frDoj" value="' + esc(doj) + '"></label>'
+    + '<label><span>How they are paid</span><select id="frBasis">'
+      + opt('salaried', 'A fixed salary') + opt('commission', 'Commission only, no fixed salary')
+      + opt('director', 'A director') + opt('off', 'Not on the payroll') + '</select></label>'
+    + '<label><span>Based</span><select id="frRem">'
+      + '<option value="no"' + (rem === 'no' ? ' selected' : '') + '>In the office</option>'
+      + '<option value="yes"' + (rem === 'yes' ? ' selected' : '') + '>Works remotely</option></select></label>'
+    + '<label><span>Basic (AED)</span><input id="frBasic" inputmode="decimal" value="' + esc(bsc) + '"'
+      + (sal ? '' : ' disabled') + '></label>'
+    + '<label><span>Other allowance</span><input id="frAll" inputmode="decimal" value="' + esc(alw) + '"'
+      + (sal ? '' : ' disabled') + '></label>'
+    + '<label><span>Note (optional)</span><input id="frNote" placeholder="why the terms changed" value="'
+      + esc(state.frNote || '') + '"></label>'
+    + '</div>';
+
+  const rows = [
+    ['What closes', (was ? dayLabel(was) + ' ' + was.slice(0,4) : 'their joining date')
+      + ' to ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4)
+      + ', on ' + (BAS[wasB] || wasB) + ' &mdash; settled and paid'
+      + (x.paidOn ? ' on ' + dayLabel(x.paidOn) + ' ' + x.paidOn.slice(0,4) : '')],
+    ['What opens', dayLabel(doj) + ' ' + doj.slice(0,4) + ', on ' + (BAS[bas] || bas)
+      + (sal && +bsc > 0 ? ' &mdash; basic ' + money(+bsc, 2)
+          + (+alw > 0 ? ', allowance ' + money(+alw, 2) : '') : '')
+      + (rem === 'yes' ? ', working remotely' : '')],
+    /* What the old spell accrued is not the same question as what the new one
+       will: somebody coming off commission had no basic, so there was nothing
+       to accrue on and the settlement rightly paid nought. Saying 'it has been
+       paid' there would read as though something had been. */
+    ['Gratuity', (sal && +bsc > 0
+      ? 'starts accruing again from ' + dayLabel(doj) + ' ' + doj.slice(0,4) + '. '
+      : 'none accrues on the new terms &mdash; there is no basic to accrue on. ')
+      + (wasB === 'salaried' || wasB === 'director'
+         ? 'What was owed for the spell that closed was paid on the settlement.'
+         : 'Nothing accrued on the spell that closed either, because there was no basic on it.')],
+    ['Air ticket', rem === 'yes' || bas === 'commission' || bas === 'off' || bas === 'director'
+      ? 'not on the scheme on these terms.'
+      : 'starts again from ' + dayLabel(doj) + ' ' + doj.slice(0,4)
+        + ', so the first one falls due in eleven months.'],
+    ['Leave', 'starts at nothing on ' + dayLabel(doj) + ' ' + doj.slice(0,4)
+      + '. Whatever was left was encashed on the settlement.'],
+    ['Payslips to ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4),
+      'stay with accounts. ' + nm(x.who) + ' will not see them on My payslip.'],
+    ['What does not move', 'their sign-in and password, anybody reporting to them, '
+      + 'their documents, their attendance and their sales history.']
+  ];
+  const list = '<div class="edconf" style="margin-top:16px"><h4>Starting '
+    + esc(nm(x.who)) + '&rsquo;s record again does this</h4>'
+    + '<table class="edtab"><tbody>'
+    + rows.map(r => '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>').join('')
+    + '</tbody></table>'
+    + '<div class="edconfb">'
+    + '<button class="btn" data-frgo="' + esc(x.id) + '" type="button"'
+      + (ready ? '' : ' disabled') + '>Start the record</button>'
+    + '<button class="btn ghost" data-frback="1" type="button">Back to the form</button>'
+    + '<span>Nothing has been written yet. <b>Back to the form</b> returns you to it '
+    + 'with what you typed still on it.</span>'
+    + '</div></div>';
+
+  const bad = doj <= x.lastDay
+    ? 'It has to start after ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4) + '.'
+    : (sal && !(+bsc > 0) ? 'A salaried record needs a basic \\u2014 nothing accrues for the gratuity without one.' : '');
+
+  return '<div class="frbox">'
+    + '<h4>Start a fresh record</h4>'
+    + '<p class="cap">The spell that has just been settled is filed as it stands, and a new one'
+    + ' opens on the terms below. ' + nm(x.who) + ' keeps their sign-in, and everything that points'
+    + ' at them &mdash; reports, documents, invoices &mdash; stays where it is.</p>'
+    + form
+    + '<p class="cap frbad" id="frBad" style="color:var(--bad)"' + (bad ? '' : ' hidden') + '>'
+      + (bad || '') + '</p>'
+    + (state.frOK ? list : '<div class="btns" style="margin-top:14px">'
+        + '<button class="btn" data-frsee="' + esc(x.id) + '" type="button"'
+          + (ready ? '' : ' disabled') + '>Review it</button>'
+        + '<button class="btn ghost" data-frno="1" type="button">Cancel</button></div>')
+    + '</div>';
+}
+
+function exitNote(u){`,
+'freshBox');
+
+/* ------------------------------------------- the fresh record's own handlers
+ *
+ * The form keeps its typing in state rather than in the DOM, so a re-render —
+ * which any other click can cause — does not throw away half-typed figures.
+ * Nothing is written until the list of what it does has been read and the
+ * second button pressed, which is the same shape as every editable table.
+ */
+app = swap(app,
+`  document.querySelectorAll('[data-exdone]').forEach(b=>b.onclick=async ()=>{`,
+`  document.querySelectorAll('[data-frnew]').forEach(b=>b.onclick=()=>{
+    state.frOpen = b.dataset.frnew; state.frOK = false;
+    state.frDoj = ''; state.frBasis = 'salaried'; state.frBasic = undefined;
+    state.frAll = undefined; state.frRemote = 'no'; state.frNote = '';
+    render(); });
+  document.querySelectorAll('[data-frno]').forEach(b=>b.onclick=()=>{
+    state.frOpen = null; state.frOK = false; render(); });
+  document.querySelectorAll('[data-frback]').forEach(b=>b.onclick=()=>{
+    state.frOK = false; render(); });
+  document.querySelectorAll('[data-frsee]').forEach(b=>b.onclick=()=>{
+    state.frOK = true; render(); });
+  /* Typing keeps the values in state, and re-enables the button in place. A
+     full re-render on every keystroke would be simpler and would take the
+     cursor out of the box you are typing in, so the one thing the form has to
+     change as you type is changed directly. */
+  const frKeep = () => {
+    const g = i => { const el = document.getElementById(i); return el ? el.value : undefined; };
+    const d = g('frDoj'); if(d !== undefined) state.frDoj = d;
+    const b = g('frBasis'); if(b !== undefined) state.frBasis = b;
+    const r = g('frRem'); if(r !== undefined) state.frRemote = r;
+    const k = g('frBasic'); if(k !== undefined) state.frBasic = k;
+    const a = g('frAll'); if(a !== undefined) state.frAll = a;
+    const n = g('frNote'); if(n !== undefined) state.frNote = n;
+    const x = (HR().exits||[]).find(y=>y.id===state.frOpen); if(!x) return;
+    const sal = (state.frBasis||'salaried') === 'salaried' || state.frBasis === 'director';
+    const doj = state.frDoj || addDay(x.lastDay);
+    const ready = doj > x.lastDay && (!sal || +(state.frBasic||0) > 0);
+    document.querySelectorAll('[data-frsee],[data-frgo]').forEach(el=>{ el.disabled = !ready; });
+    /* The reason it is not ready has to go the moment it stops being true, or
+       the form sits there telling somebody off for a box they have just filled. */
+    const w = document.getElementById('frBad'); if(!w) return;
+    const why = doj <= x.lastDay
+      ? 'It has to start after ' + dayLabel(x.lastDay) + ' ' + x.lastDay.slice(0,4) + '.'
+      : (sal && !(+(state.frBasic||0) > 0)
+         ? 'A salaried record needs a basic \u2014 nothing accrues for the gratuity without one.' : '');
+    w.innerHTML = why; w.hidden = !why;
+  };
+  ['frDoj','frBasis','frRem','frBasic','frAll','frNote'].forEach(i=>{
+    const el = document.getElementById(i); if(!el) return;
+    el.oninput = () => { frKeep(); if(i === 'frBasis' || i === 'frRem') render(); };
+    el.onchange = () => { frKeep(); render(); };
+  });
+  document.querySelectorAll('[data-frgo]').forEach(b=>b.onclick=async ()=>{
+    const x = (HR().exits||[]).find(y=>y.id===b.dataset.frgo); if(!x) return;
+    b.disabled = true;
+    const sal = state.frBasis === 'salaried' || state.frBasis === 'director';
+    const out = await window.__db.restartRecord({
+      who: x.who,
+      doj: state.frDoj || addDay(x.lastDay),
+      basis: state.frBasis || 'salaried',
+      basic: sal ? state.frBasic : null,
+      allowance: sal ? state.frAll : null,
+      remote: state.frRemote === 'yes',
+      note: state.frNote || ''});
+    if(out){ state.frOpen = null; state.frOK = false; state.exitOpen = null; }
+    render(); });
+  document.querySelectorAll('[data-exdone]').forEach(b=>b.onclick=async ()=>{`,
+'fresh record handlers');
+
+/* ============================== the provision, month by month =============
+ *
+ *   'So you are telling me you would give me a total monthy table to view
+ *    gratuity provisioning?'
+ *   'From Sep 2026, you calculate on your basis and I continue with my work
+ *    book. Lets see if any difference arise'                        -- Avin
+ *
+ * The screen showed one month at a time, which answers 'what is held now' and
+ * not 'what did the year do'. This is the same figures read down instead of
+ * across, so the provisioning year can be handed to the accounts in one piece
+ * — and so the parallel run against his sheet is a column comparison rather
+ * than twenty-four visits to a month picker.
+ *
+ * The handover is drawn on it, because a total from the workbook and a total
+ * the portal worked out are different kinds of number and the table should not
+ * pretend otherwise.
+ */
+app = swap(app,
+`function gratAt(row, monthEnd){`,
+`/* One row per month: what each company holds, the group total, and what moved.
+   Plain concatenation rather than nested templates. */
+function gByMonth(){
+  const months = gMonths();
+  if(!months.length) return '';
+  const cos = ['CorpLex', 'POA', 'Lex'];
+  const wbTo = String((GRAT() || {}).workbookTo || '');
+  const at = ym => { const me = gMonthEnd(ym);
+    const per = cos.map(c => GRAT().rows.filter(r => r.co === c)
+      .reduce((t, r) => t + gratAt(r, me).v, 0));
+    const heads = GRAT().rows.filter(r => gratAt(r, me).v > 0).length;
+    return {per, tot: per.reduce((t, v) => t + v, 0), heads}; };
+
+  const seen = months.map(at);
+  const rows = months.map((ym, i) => {
+    const now = seen[i], was = i ? seen[i - 1] : null;
+    const mv = was ? now.tot - was.tot : 0;
+    const first = wbTo && ym > wbTo && !(months[i - 1] > wbTo);
+    const head = first
+      ? '<tr class="grp"><td class="s1" colspan="7">Worked out by the portal from here'
+        + ' &mdash; the workbook is the authority above</td></tr>'
+      : '';
+    return head + '<tr' + (ym === (state.gratMonth || '') ? ' class="on"' : '') + '>'
+      + '<td class="s1 nw">' + esc(MONTHNAME[+ym.slice(5) - 1]) + ' ' + ym.slice(0,4) + '</td>'
+      + now.per.map(v => '<td class="n r">' + (v ? money(v, 0) : '&mdash;') + '</td>').join('')
+      + '<td class="n r netcol">' + money(now.tot, 0) + '</td>'
+      + '<td class="n r"' + (mv < 0 ? ' style="color:var(--good)"' : '') + '>'
+        + (was ? (mv ? (mv < 0 ? '(' : '') + money(Math.abs(mv), 0) + (mv < 0 ? ')' : '') : '&mdash;')
+               : '<span style="color:var(--ink3)">opening</span>') + '</td>'
+      + '<td class="n r">' + now.heads + '</td></tr>';
+  }).join('');
+
+  /* What a year charged is its closing provision less the CLOSING OF THE YEAR
+     BEFORE — not less its own January, which leaves out January's own charge
+     and understates every year after the first. The earliest year on file has
+     no year before it, so it gets no figure rather than a wrong one. */
+  const year = ym => ym.slice(0,4);
+  const yrs = [...new Set(months.map(year))];
+  const closeOf = {};
+  yrs.forEach(y => { const ix = months.map((m, i) => year(m) === y ? i : -1).filter(i => i >= 0);
+    closeOf[y] = seen[ix[ix.length - 1]].tot; });
+  const foot = yrs.map(y => {
+    const before = closeOf[String(+y - 1)];
+    const charged = before === undefined ? null : closeOf[y] - before;
+    return '<tr class="sub"><td class="s1">' + y + ' &mdash; charged over the year</td>'
+      + '<td colspan="3"></td><td class="n r">' + money(closeOf[y], 0) + '</td>'
+      + '<td class="n r"' + (charged !== null && charged < 0 ? ' style="color:var(--good)"' : '') + '>'
+        + (charged === null
+           ? '<span style="color:var(--ink3)">no opening on file</span>'
+           : (charged < 0 ? '(' : '') + money(Math.abs(charged), 0) + (charged < 0 ? ')' : ''))
+      + '</td><td></td></tr>';
+  }).join('');
+
+  return '<section class="panel">'
+    + '<header><h3>By month</h3><span class="hint">what each company holds at every month end</span></header>'
+    + '<div class="tw"><table class="invtable gtable gmon">'
+    + '<colgroup><col style="width:18%"><col style="width:14%"><col style="width:14%">'
+      + '<col style="width:14%"><col style="width:16%"><col style="width:14%"><col style="width:10%"></colgroup>'
+    + '<thead><tr><th class="s1">Month</th><th class="r">CorpLex</th><th class="r">POA</th>'
+      + '<th class="r">Lex Estates</th><th class="r">Group</th><th class="r">Movement</th>'
+      + '<th class="r">People</th></tr></thead>'
+    + '<tbody>' + rows + foot + '</tbody></table></div>'
+    + '<p class="cap">Every figure is worked out here from the basic held for that month, not'
+    + ' copied from anywhere. Above the line those basics are Avin&rsquo;s workbook, exactly as'
+    + ' the sheet has them. Below it they are the salary chart &mdash; the same figure the final'
+    + ' settlement uses &mdash; so a revision letter moves the provision by itself and there is'
+    + ' nothing to upload. <b>Movement</b> is against the month before: a charge to the P&amp;L'
+    + ' where it rises, a release where it falls.</p>'
+    + '</section>';
+}
+
+function gratAt(row, monthEnd){`,
+'the by-month table');
+
+/* The caption on the provision panel said the figures came straight from the
+ * workbook. From September that is only true of the months above the handover,
+ * and the 'payroll says' flag no longer means one of two figures is out of
+ * date — below the handover there is only one figure. Rewritten, and the
+ * by-month table put on the screen under it. */
+app = swap(app,
+`    <p class="cap">Straight from your workbook and recalculated here, not copied &mdash; every figure in the 2025 and 2026 sheets reproduces to the dirham. Service runs in calendar days from the joining date; a leaver is held to their last working day and released the following month. The POA table is split by <b>visa entity</b>, because the end-of-service liability sits with the company that sponsors the visa, not the one the person works for. A <b>payroll says</b> flag means the basic on the payroll file differs from the one in the workbook &mdash; one of the two is out of date.</p>
+  </section>`,
+`    <p class="cap">\${GRAT().workbookTo && ym > GRAT().workbookTo
+      ? 'The basic for this month comes from the <b>salary chart</b> &mdash; the same figure the final settlement uses &mdash; so a revision letter moves the provision with it and there is nothing to upload. Avin&rsquo;s workbook is the authority up to ' + esc(MONTHNAME[+GRAT().workbookTo.slice(5)-1]) + ' ' + GRAT().workbookTo.slice(0,4) + ', and those months are untouched.'
+      : 'Straight from your workbook and recalculated here, not copied &mdash; every figure in the 2025 and 2026 sheets reproduces to the dirham.'}
+      Service runs in calendar days from the joining date; a leaver is held to their last working day and released the following month.
+      The POA table is split by <b>visa entity</b>, because the end-of-service liability sits with the company that sponsors the visa, not the one the person works for.\${
+      GRAT().workbookTo && ym > GRAT().workbookTo ? '' : ' A <b>payroll says</b> flag means the basic on the payroll file differs from the one in the workbook &mdash; one of the two is out of date.'}</p>
+  </section>
+
+  \${gByMonth()}`,
+'the caption tells the truth on both sides of the handover');
+
+/* ======================== the account number comes off the paper ===========
+ *
+ *   'MOL ID and Account number are not required'
+ *   'Sorry, please keep MOL ID - its linked to the labour number in our
+ *    document list'                                                  -- Avin
+ *
+ * So the account number only. It was on the payslip and on the final
+ * settlement and nowhere else in the portal, which makes taking it off the two
+ * documents the same as taking it off entirely. The stored digits stay where
+ * they are: nothing is deleted, and putting it back is a line of template
+ * rather than a migration.
+ *
+ * MOL ID stays on both. It ties a person to their labour card in the document
+ * list, which is a reason to print it that has nothing to do with pay.
+ */
+app = swap(app,
+`            \${kv('Pay Date', esc(s.payDate))}
+            \${kv('Account No', s.acct4?('&bull;&bull;&bull;&bull;&nbsp;&bull;&bull;&bull;&bull;&nbsp;'+esc(s.acct4)):'<i class="slmiss">from employee master</i>')}`,
+`            \${kv('Pay Date', esc(s.payDate))}`,
+'the account number off the payslip');
+
+app = swap(app,
+`        \${kv('Date of Joining', esc(r.doj)||'\\u2014')}
+        \${kv('Account No', s.acct4?('&bull;&bull;&bull;&bull;&nbsp;&bull;&bull;&bull;&bull;&nbsp;'+esc(s.acct4)):'<i class="slmiss">from employee master</i>')}`,
+`        \${kv('Date of Joining', esc(r.doj)||'\\u2014')}`,
+'and off the settlement');
+
+/* The nag stays, because MOL ID still prints and a missing one still shows as
+   a gap on the paper — but it stops asking for a number nothing draws. */
+app = swap(app,
+`  const noMaster = staff.filter(r=>!((DATA.master.people||{})[r.id]||{}).mol).length;`,
+`  const noMol = staff.filter(r=>!((DATA.master.people||{})[r.id]||{}).mol).length;`,
+'count the missing MOL ids');
+
+app = swap(app,
+`      \${(pending.length||noMaster)?\`<div class="note" style="margin-top:14px;border-left-color:var(--warn)">`,
+`      \${(pending.length||noMol)?\`<div class="note" style="margin-top:14px;border-left-color:var(--warn)">`,
+'and open the box on that');
+
+app = swap(app,
+`        \${noMaster?\`<b>MOL ID and account number are missing for \${noMaster} of \${staff.length} people.</b> Upload the employee master once and both fill in on every payslip from then on.\`:''}`,
+`        \${noMol?\`<b>No MOL ID on file for \${noMol} of \${staff.length} \${noMol===1?'person':'people'}.</b> Their payslip and settlement show a gap where it should be. Upload the employee master once and it fills in from then on.\`:''}`,
+'saying what is actually missing');
+
+/* ============================ letters he can add himself ==================
+ *
+ *   'There are currently 4 letters, need an option to add if any other'
+ *   'Yes, i dont want to type them'                                  -- Avin
+ *
+ * The wording was already filled in from the record — that half he has and
+ * wants kept. What he did not have was any way to add a fifth letter: the four
+ * lived in a settings blob with no screen behind them, so an experience
+ * certificate meant asking me and waiting for a migration.
+ *
+ * It goes on the letters page rather than in a settings screen somewhere,
+ * because that is where he already is when he thinks about letters, and
+ * because the Register section's five tabs are in the order he set and adding
+ * a sixth would disturb it.
+ *
+ * Written as a named function rather than inline: this is the third level of
+ * template nesting on that page and the escaping stops being readable there.
+ */
+app = swap(app,
+`      <span class="pill mute" style="margin-left:auto">A4</span>
+      <button class="btn" id="slPrint" type="button" style="padding:6px 14px;font-size:13px">Print or save as PDF</button></header>
+    <div class="slwrap">\${letterHTML(open)}</div>
+  </section>\`:''}\`;
+}`,
+`      <span class="pill mute" style="margin-left:auto">A4</span>
+      <button class="btn" id="slPrint" type="button" style="padding:6px 14px;font-size:13px">Print or save as PDF</button></header>
+    <div class="slwrap">\${letterHTML(open)}</div>
+  </section>\`:''}
+
+  \${adm ? ltTemplates() : ''}\`;
+}
+
+/* The placeholders a letter may carry, and what each one puts on the page.
+   Shown beside the box rather than documented elsewhere, because a template
+   language nobody can see is a template language nobody uses. */
+const LTFIELDS = [
+  ['{name}',   'their name as it appears on their passport'],
+  ['{legal}',  'the registered name of the company on their visa'],
+  ['{title}',  'their designation'],
+  ['{doj}',    'the day they joined'],
+  ['{salary}', 'monthly salary, all of it'],
+  ['{basic}',  'the basic part'],
+  ['{allow}',  'the other allowance']
+];
+
+function ltTemplates(){
+  const live = (HR().letterTypes || []).filter(t => !t.issueOnly);
+  const used = {};
+  (HR().letters || []).forEach(l => { used[l.type] = (used[l.type] || 0) + 1; });
+  const open = state.ltWho;                       // an id, '__new', or null
+
+  const row = t => {
+    const n = used[t.id] || 0;
+    return '<tr data-lt-open="' + esc(t.id) + '">'
+      + '<td class="s1 nw"><b>' + esc(t.label) + '</b></td>'
+      + '<td class="ltsay">' + esc((t.body || '').replace(/\\s+/g, ' ').slice(0, 96))
+        + ((t.body || '').length > 96 ? '&hellip;' : '') + '</td>'
+      + '<td class="nw" style="color:var(--ink2)">'
+        + (t.needsAddressee ? 'Asks who it is for' : 'To whom it may concern') + '</td>'
+      + '<td class="n r" style="color:var(--ink3)">' + (n || '&mdash;') + '</td>'
+      + '<td class="r"><button class="btn ghost" data-lt-open="' + esc(t.id) + '" type="button"'
+        + ' style="padding:3px 10px;font-size:12.5px">Edit</button></td></tr>';
+  };
+
+  return '<section class="panel">'
+    + '<header><h3>Letter templates</h3>'
+      + '<span class="hint">what each letter says, and which letters can be asked for</span>'
+      + '<button class="btn ghost" id="ltNew" type="button" style="margin-left:auto">Add a letter</button>'
+      + '</header>'
+    + '<div class="pad">'
+    + '<p class="cap" style="padding-top:0">A letter is written once here and filled in from the record'
+      + ' every time it is issued &mdash; nobody types a name or a salary into a letter. Click one to change'
+      + ' its wording. The salary revision letter is not on this list: its wording comes from the revision'
+      + ' that raises it.</p>'
+    + '<div class="tw"><table class="invtable lttab2">'
+    + '<colgroup><col style="width:22%"><col style="width:44%"><col style="width:18%">'
+      + '<col style="width:8%"><col style="width:8%"></colgroup>'
+    + '<thead><tr><th class="s1">Letter</th><th>What it says</th><th>Addressed to</th>'
+      + '<th class="r">Issued</th><th></th></tr></thead>'
+    + '<tbody>' + (live.length ? live.map(row).join('')
+        : '<tr><td colspan="5" style="color:var(--ink3)">No letters yet.</td></tr>') + '</tbody>'
+    + '</table></div></div></section>'
+    + (open ? ltEditor(open) : '');
+}
+
+/* The one being edited, over the page.
+ *
+ *   'Let me click on each letter and then i get a pop up where I can edit it
+ *    rather than what we have now'                                   -- Avin
+ *
+ * Drawn as part of the view rather than pushed into the modal box by hand, so
+ * a re-render redraws it where it is instead of wiping a half-written letter
+ * off the screen. Everything typed lives in state for the same reason. */
+function ltEditor(id){
+  const isNew = id === '__new';
+  const live = (HR().letterTypes || []).filter(t => !t.issueOnly);
+  const was = isNew ? null : live.find(t => t.id === id);
+  if(!isNew && !was) return '';
+  const d = state.ltD || {id: isNew ? '' : was.id, label: isNew ? '' : was.label,
+                          body: isNew ? '' : was.body, needsAddressee: isNew ? false : !!was.needsAddressee};
+  const n = isNew ? 0 : ((HR().letters || []).filter(l => l.type === id).length);
+
+  const changes = [];
+  if(isNew){ changes.push(['New letter', d.label || '(no name)', 'staff can ask for it from today']); }
+  else {
+    if(d.label !== was.label) changes.push(['Renamed', was.label, 'now &ldquo;' + esc(d.label) + '&rdquo;']);
+    if(d.body !== was.body) changes.push(['Reworded', d.label, 'the text of the letter changes']);
+    if(!!d.needsAddressee !== !!was.needsAddressee)
+      changes.push(['Addressed to', d.label, d.needsAddressee
+        ? 'now asks who it is for' : 'now goes out to whom it may concern']);
+  }
+  const ready = !!(d.label || '').trim() && !!(d.body || '').trim() && changes.length;
+
+  const fields = '<div class="ltform">'
+    + '<label><span>Name of the letter</span>'
+      + '<input id="ltLab" value="' + esc(d.label || '') + '" placeholder="What you pick it by"></label>'
+    + '<label><span>Addressed to</span><select id="ltAdr">'
+      + '<option value="no"' + (d.needsAddressee ? '' : ' selected') + '>To whom it may concern</option>'
+      + '<option value="yes"' + (d.needsAddressee ? ' selected' : '') + '>Ask who it is for</option>'
+      + '</select></label>'
+    + '<label class="wide"><span>What the letter says</span>'
+      + '<textarea id="ltBody" rows="6" placeholder="The letter, with the fields below where the details go">'
+      + esc(d.body || '') + '</textarea></label>'
+    + '</div>'
+    + '<div class="ltfields">' + LTFIELDS.map(f =>
+        '<button class="ltchip" data-lt-put="' + f[0] + '" type="button" title="Put this in the letter">'
+        + '<code>' + f[0] + '</code> ' + f[1] + '</button>').join('') + '</div>'
+    + '<div class="ltpreview"><span class="ltpk">Reads as</span>'
+      + '<p id="ltPrev">' + esc(ltSample(d.body || '')) + '</p></div>';
+
+  const confirm = '<div class="edconf"><h4>' + (isNew ? 'Adding this letter does this'
+      : 'Changing &ldquo;' + esc(was.label) + '&rdquo; does this') + '</h4>'
+    + '<table class="edtab"><tbody>'
+    + changes.map(c => '<tr><td>' + c[0] + '</td><td><b>' + esc(c[1]) + '</b></td><td>' + c[2] + '</td></tr>').join('')
+    + (n ? '<tr><td>Already issued</td><td><b>' + n + '</b></td><td>'
+         + (n === 1 ? 'letter of this kind is' : 'letters of this kind are')
+         + ' on file and keep the wording they went out with</td></tr>' : '')
+    + '</tbody></table>'
+    + '<div class="edconfb"><button class="btn" id="ltGo" type="button">Yes, save '
+      + (changes.length === 1 ? 'it' : 'them') + '</button>'
+    + '<button class="btn ghost" id="ltBack" type="button">Back</button>'
+    + '<span>Nothing has been written yet.</span></div></div>';
+
+  return '<div class="lookwrap ltmodal">'
+    + '<div class="lookbg" data-ltclose="1"></div>'
+    + '<div class="look ltlook" role="dialog" aria-modal="true" aria-label="Letter template">'
+    + '<header><b>' + (isNew ? 'A new letter' : esc(was.label)) + '</b>'
+      + '<span>' + (n ? n + (n === 1 ? ' issued so far' : ' issued so far') : 'none issued yet') + '</span>'
+      + (isNew || n ? '' : '<button class="btn ghost" id="ltDel" type="button">Remove this letter</button>')
+      + '<button class="btn ghost" data-ltclose="1" type="button">Close</button></header>'
+    + '<div class="lookbody ltbody">'
+      + (state.ltOK ? confirm : fields)
+      + (state.ltOK ? '' : '<div class="btns" style="margin-top:16px">'
+          + '<button class="btn" id="ltSee" type="button"' + (ready ? '' : ' disabled') + '>'
+            + (changes.length ? 'Review the change' + (changes.length === 1 ? '' : 's') : 'Nothing changed') + '</button>'
+          + '<button class="btn ghost" data-ltclose="1" type="button">Cancel</button></div>')
+    + '</div></div></div>';
+}
+
+/* What the template will read as, against a real person, so a placeholder that
+   has been mistyped shows up as itself before it goes out on paper. */
+function ltSample(body){
+  if(!body.trim()) return 'nothing yet';
+  const who = (DATA.payroll.rows.filter(r => !r.dummy)[0] || {});
+  const P = salParts(who.name || '');
+  return body
+    .replace('{name}', legalOf(who.name || '') || 'the employee')
+    .replace('{legal}', (visaEnt(who.name || '') || {}).legal || 'the company')
+    .replace('{title}', who.title || 'their designation')
+    .replace('{doj}', who.doj || 'their joining date')
+    .replace('{salary}', money(P.salary, 2))
+    .replace('{basic}', money(P.basic, 2))
+    .replace('{allow}', money(P.allow, 2));
+}`,
+'the letter templates panel');
+
+/* The templates panel's own handlers. The draft lives in state so a re-render
+   does not throw away a half-written letter, and the preview under each box
+   updates as it is typed without a re-render taking the cursor with it. */
+app = swap(app,
+`  document.querySelectorAll('[data-frnew]').forEach(b=>b.onclick=()=>{`,
+`  /* Opening a letter, typing in it, and the two steps before anything is
+     written. The draft lives in state.ltD so a re-render redraws the popup
+     with what has been typed still in it. */
+  const ltShut = () => { state.ltWho = null; state.ltD = null; state.ltOK = false; render(); };
+  const ltDraft = () => {
+    const g = i => { const el = document.getElementById(i); return el ? el.value : undefined; };
+    if(!state.ltD) return;
+    const lab = g('ltLab'); if(lab !== undefined) state.ltD.label = lab;
+    const bod = g('ltBody'); if(bod !== undefined) state.ltD.body = bod;
+    const adr = g('ltAdr'); if(adr !== undefined) state.ltD.needsAddressee = adr === 'yes';
+    if(state.ltWho === '__new')
+      state.ltD.id = (state.ltD.label || '').toLowerCase().replace(/[^a-z0-9]+/g,'_')
+        .replace(/^[^a-z]+/,'').replace(/_+$/,'');
+    const pv = document.getElementById('ltPrev');
+    if(pv) pv.textContent = ltSample(state.ltD.body || '');
+    /* Re-enabled in place: a full redraw on every keystroke would take the
+       cursor out of the box being typed in. */
+    const see = document.getElementById('ltSee');
+    if(see) see.disabled = !((state.ltD.label||'').trim() && (state.ltD.body||'').trim());
+  };
+  const ltOpen = id => {
+    const t = (HR().letterTypes||[]).find(x => x.id === id);
+    state.ltWho = id; state.ltOK = false;
+    state.ltD = id === '__new'
+      ? {id:'', label:'', body:'', needsAddressee:false}
+      : (t ? {id:t.id, label:t.label, body:t.body, needsAddressee:!!t.needsAddressee} : null);
+    render();
+  };
+  document.querySelectorAll('[data-lt-open]').forEach(el=>{
+    el.onclick = ev => { ev.stopPropagation(); ltOpen(el.dataset.ltOpen); }; });
+  const ltN = document.getElementById('ltNew'); if(ltN) ltN.onclick = () => ltOpen('__new');
+  document.querySelectorAll('[data-ltclose]').forEach(b=>b.onclick = ltShut);
+  ['ltLab','ltBody'].forEach(i=>{ const el = document.getElementById(i);
+    if(el) el.oninput = ltDraft; });
+  const ltAdrEl = document.getElementById('ltAdr');
+  if(ltAdrEl) ltAdrEl.onchange = () => { ltDraft(); };
+  /* A placeholder is put in at the cursor rather than typed by hand, because
+     {allow} mistyped as {allowance} is a letter that goes out with a brace in
+     the middle of it. */
+  document.querySelectorAll('[data-lt-put]').forEach(b=>b.onclick=()=>{
+    const el = document.getElementById('ltBody'); if(!el) return;
+    const a = el.selectionStart ?? el.value.length, z = el.selectionEnd ?? a;
+    el.value = el.value.slice(0, a) + b.dataset.ltPut + el.value.slice(z);
+    el.focus(); el.selectionStart = el.selectionEnd = a + b.dataset.ltPut.length;
+    ltDraft(); });
+  const ltS2 = document.getElementById('ltSee');
+  if(ltS2) ltS2.onclick = () => { ltDraft(); state.ltOK = true; render(); };
+  const ltB2 = document.getElementById('ltBack');
+  if(ltB2) ltB2.onclick = () => { state.ltOK = false; render(); };
+  const ltD2 = document.getElementById('ltDel');
+  if(ltD2) ltD2.onclick = async () => {
+    const t = (HR().letterTypes||[]).find(x => x.id === state.ltWho); if(!t) return;
+    if(!confirm('Remove "' + t.label + '"?\\n\\nStaff will no longer be able to ask for it.')) return;
+    ltD2.disabled = true;
+    const out = await window.__db.setLetterTypes((HR().letterTypes||[])
+      .filter(x => !x.issueOnly && x.id !== state.ltWho)
+      .map(x => ({id:x.id, label:x.label, body:x.body, needsAddressee:!!x.needsAddressee})));
+    if(out) ltShut(); else render(); };
+  const ltG2 = document.getElementById('ltGo');
+  if(ltG2) ltG2.onclick = async () => { ltG2.disabled = true;
+    const d = state.ltD;
+    const rest = (HR().letterTypes||[]).filter(x => !x.issueOnly && x.id !== d.id)
+      .map(x => ({id:x.id, label:x.label, body:x.body, needsAddressee:!!x.needsAddressee}));
+    const mine = {id:d.id, label:d.label, body:d.body, needsAddressee:!!d.needsAddressee};
+    /* Kept where it was in the list, so editing a letter does not shuffle the
+       order somebody picks from. */
+    const at = (HR().letterTypes||[]).filter(x=>!x.issueOnly).findIndex(x => x.id === d.id);
+    const out = await window.__db.setLetterTypes(
+      at < 0 ? rest.concat([mine]) : [...rest.slice(0, at), mine, ...rest.slice(at)]);
+    if(out) ltShut(); else render(); };
+  document.querySelectorAll('[data-frnew]').forEach(b=>b.onclick=()=>{`,
+'letter template handlers');
+
+
+/* ==================== a letter keeps the words it went out with ============
+ *
+ *   'Can I edit the text in the letters as per our need?'             -- Avin
+ *
+ * Asking that found the fault. The wording was looked up from the template
+ * every time a letter was opened, so rewording a template would have reworded
+ * every letter of that kind already issued — the record of what the company
+ * certified, changed after the fact. Harmless while nothing could edit a
+ * template; the screen that now can is what makes it matter.
+ *
+ * Two halves. Issuing one writes down what it says, filled in, because the
+ * screen is the only place that knows how to fill a placeholder. And drawing
+ * one prefers what was written down over the template it came from.
+ */
+app = swap(app,
+`window.__db.decideLetter(x.id,'Issued'); state.ltOpen=x.id;`,
+`window.__db.decideLetter(x.id,'Issued',
+      {body: letterFill(x), label: LTYPE(x.type).label}); state.ltOpen=x.id;`,
+'a letter is issued with its words');
+
+app = swap(app,
+`function letterFill(l){`,
+`/* What a letter says. Once it has been issued that is a fact about the past,
+   so it is read off the letter; before then it follows the template, because a
+   draft has no wording of its own yet. */
+function letterSays(l){
+  return l.said || letterFill(l);
+}
+function letterTitle(l){
+  return l.saidLabel || LTYPE(l.type).label;
+}
+function letterFill(l){`,
+'and drawn from what it said');
+
+/* Every place a letter's own words or heading are drawn, rather than a queue
+   row describing a request. Three of them: the printed sheet, the panel it
+   sits in, and the row in the issued list. The request queue keeps the
+   template's current name, because a request is for a KIND of letter and has
+   not become a document yet. */
+app = swap(app,
+`      <h5 class="lttitle">\${esc(LTYPE(l.type).label)}</h5>
+      <p class="ltbody">\${esc(letterFill(l))}</p>`,
+`      <h5 class="lttitle">\${esc(letterTitle(l))}</h5>
+      <p class="ltbody">\${esc(letterSays(l))}</p>`,
+'the sheet');
+
+app = swap(app,
+`    <header><h3>\${esc(LTYPE(open.type).label)}</h3><span class="pill mute">\${esc(open.id)}</span>`,
+`    <header><h3>\${esc(letterTitle(open))}</h3><span class="pill mute">\${esc(open.id)}</span>`,
+'the panel around it');
+
+app = swap(app,
+`        <td class="n nw">\${esc(x.id)}</td><td class="nw">\${esc(LTYPE(x.type).label)}</td>`,
+`        <td class="n nw">\${esc(x.id)}</td><td class="nw">\${esc(letterTitle(x))}</td>`,
+'and the row in the list');
+
+/* ============================== the home page, after a page-by-page read ====
+ *
+ *   'Is away soon the right word?'
+ *   'Swap away soon and announcements'
+ *   'Notoification box for events coming up is not required. Just keep todays
+ *    events'
+ *   'The language on your profile is incomplete is not good'
+ *   'Top static header is not good looking'                          -- Avin
+ */
+
+/* 1. The box was called 'Away soon' and half the people in it were away
+ *    already — two rows marked 'away now' under a heading promising later. It
+ *    is a list of approved leave, in progress and booked, so it says so.
+ *    'Notification' was his word; it is not used because the bell and a whole
+ *    console section already carry it. */
+app = swap(app,
+`      <header><h3>Away soon</h3><span class="hint">everyone &middot; next two months</span></header>`,
+`      <header><h3>Who&rsquo;s on leave</h3><span class="hint">booked and away now &middot; next two months</span></header>`,
+'the leave box says what it holds');
+
+/* 2. 'Swap away soon and announcements'.
+ *
+ * The six boxes are a three-column grid in source order, so their positions
+ * are their order in the markup. Rather than retype two long blocks as swap
+ * anchors — and get one character wrong somewhere in the middle of them —
+ * the two sections are found by their headings and exchanged whole. */
+{
+  const panelAt = head => {
+    const h = app.indexOf(head);
+    if(h < 0) throw new Error('home panel not found: ' + head);
+    const start = app.lastIndexOf('<section class="panel">', h);
+    const end = app.indexOf('</section>', h);
+    if(start < 0 || end < 0) throw new Error('home panel has no edges: ' + head);
+    return {start, end: end + '</section>'.length};
+  };
+  const a = panelAt('<h3>Who&rsquo;s on leave</h3>');
+  const b = panelAt('<h3>Announcements</h3>');
+  if(!(a.end < b.start)) throw new Error('the home panels are not in the order this expects');
+  const A = app.slice(a.start, a.end), B = app.slice(b.start, b.end);
+  app = app.slice(0, a.start) + B + app.slice(a.end, b.start) + A + app.slice(b.end);
+  console.log('home        Announcements and the leave box changed places');
+}
+
+/* 3. 'Notoification box for events coming up is not required. Just keep todays
+ *     events'.
+ *
+ * The strip carried the next birthday or anniversary up to a week out, so on
+ * most days it announced something that had not happened — a standing notice
+ * that says nothing today. Today only, and on a day with nothing it is not
+ * there at all. The dates themselves are not lost: Birthdays and Work
+ * anniversaries are boxes of their own on the same page, which is where
+ * somebody looks when they want to know what is coming. */
+app = swap(app,
+`  const cTod = celebsOn(today), cSoon = celebsWithin(today, 7).filter(x=>x.in>0);
+  const celebStrip = (()=>{
+    if(!cTod.any && !cSoon.length) return '';`,
+`  const cTod = celebsOn(today);
+  const celebStrip = (()=>{
+    if(!cTod.any) return '';`,
+'the strip is today or nothing');
+
+app = swap(app,
+`    const whenOf = d => d.in===1 ? 'tomorrow' : d.in>=7 ? 'on '+esc(dayLabel(d.d)) : 'on '+esc(dayLong(d.d));
+    const soon = cSoon.slice(0,3).map(d=>{
+      const who = d.bdays.map(b=>\`\${first(b.n)}'s birthday\`)
+        .concat(d.annis.map(a=>\`\${first(a.n)} at \${a.years} year\${a.years===1?'':'s'}\`));
+      return \`\${who.join(' and ')} \${whenOf(d)}\`;
+    });
+    const soonHead = cSoon.length ? (()=>{ const d = cSoon[0];
+      const who = d.bdays.map(b=>\`<b>\${esc(b.n)}</b>'s birthday\`)
+        .concat(d.annis.map(a=>\`<b>\${esc(a.n)}</b>'s \${a.years} year\${a.years===1?'':'s'}\`));
+      return \`\${who.join(' and ')} \${who.length>1?'are':'is'} \${whenOf(d)}.\`; })() : '';`,
+``,
+'and the days-ahead lines go with it');
+
+app = swap(app,
+`      <span class="cmark">\${cmark(cTod.bdays.length?'cake':cTod.annis.length?'medal':'cal')}</span>
+      <div class="ctext">
+        <span class="ck">\${cTod.any?'Today':'Coming up'}</span>
+        <p>\${line.length?line.join(' '):soonHead}</p>
+        \${!line.length && soon.length>1?\`<span class="cnext">Then \${soon.slice(1).join(', then ')}.</span>\`:''}
+      </div>`,
+`      <span class="cmark">\${cmark(cTod.bdays.length?'cake':'medal')}</span>
+      <div class="ctext">
+        <span class="ck">Today</span>
+        <p>\${line.join(' ')}</p>
+      </div>`,
+'so the strip only ever says Today');
+
+/* The section carried a 'quiet' class for the days it was showing something
+   that had not happened yet. There are no such days now. */
+app = swap(app,
+`    return \`<section class="celeb\${cTod.any?'':' quiet'}">`,
+`    return \`<section class="celeb">`,
+'and is never the quiet version of itself');
+
+/* 4. 'The language on your profile is incomplete is not good'.
+ *
+ * It said 'Your file is 21% complete', then listed three of fifteen missing
+ * fields, then reached for a hospital at two in the morning to explain why it
+ * mattered. Three faults in four lines: 'your file' is what a case worker has
+ * on somebody rather than what a person has of their own; a percentage grades
+ * them; and the hospital is an emergency invoked to hurry somebody through a
+ * form, which is the kind of thing that gets a nudge dismissed for good.
+ *
+ * What it says now is what is actually true: some details are missing, here
+ * are the first few, it takes two minutes. The reason is given once, plainly,
+ * and only where it is real — the company is asked for these, by the people
+ * who renew a visa and by an insurer. */
+app = swap(app,
+`      <div><b>Your file is \${PD.pct}% complete</b>
+        <span>Still needed: \${first}\${rest}. It takes a couple of minutes, and it is what the
+          company has to show when somebody asks \\u2014 a visa renewal, an insurance claim, or a
+          hospital at two in the morning.</span></div>`,
+`      <div><b>\${n === 1 ? 'One detail is missing from your profile'
+                         : n + ' details are missing from your profile'}</b>
+        <span>\${first}\${rest}. Two minutes, and it saves being asked for them later &mdash;
+          these are what the company is asked for on a visa renewal or an insurance claim.</span></div>`,
+'the nudge asks rather than grades');
+
+/* And the banner shouted — a red edge and a heavier weight — at anybody under
+   60%, which on a new joiner is their first sight of the portal. It is the
+   same nudge whatever is left to fill in. */
+app = swap(app,
+`    return \`<div class="nudge\${PD.pct < 60 ? ' loud' : ''}">`,
+`    return \`<div class="nudge">`,
+'and does not shout at a new joiner');
+
+/* 5. 'Top static header is not good looking'.
+ *
+ * On a staff page it held the page name at the far left, then a gap the width
+ * of the screen, then the bell and Light/Dark pushed against the right edge —
+ * a rule across the page with almost nothing on it. The sales pages fill it
+ * with a year and quarter picker, which is why it was never noticed on those.
+ *
+ * Two things, no new furniture. The name gains the line it was already built
+ * to carry (.ttl small exists and the dashboard uses it) — the date and the
+ * company somebody is looking at, which is context they otherwise take from
+ * the welcome panel and cannot get anywhere else on the other pages. And the
+ * controls at the right are gathered into one group rather than two objects
+ * with a gap between them.
+ */
+app = swap(app,
+`  document.getElementById('pageTitle').innerHTML = \`\${esc(ttl)}\${(periodic && !MOBILE())?\`<small>\${esc(PLABEL[state.period]+' · '+state.year)}</small>\`:''}\`;`,
+`  /* What goes under the name. A period picker owns that line where there is
+     one; everywhere else it is the day and the company, which is the answer to
+     'where am I and as of when' that the bar was not giving. */
+  const sub = MOBILE() ? ''
+    : periodic ? PLABEL[state.period] + ' \\u00b7 ' + state.year
+    : state.mode === 'console' ? ''
+    : dLong(HDATE()) + ' \\u00b7 ' + companyOf(state.user).name;
+  document.getElementById('pageTitle').innerHTML =
+    \`\${esc(ttl)}\${sub ? \`<small>\${esc(sub)}</small>\` : ''}\`;`,
+'the bar says where you are and as of when');
+
+/* The bar now carries the day and the company on every page, so the welcome
+   panel saying both again two lines below it is the same fact twice. What is
+   left is what only this panel knows: who you are and what you do. */
+app = swap(app,
+`      <p>\${esc(titleOf(u) || ROLELABEL[role])} &middot; \${esc(companyOf(u).name)}\${orgDeptOf(u) ? ' \\u00b7 '+esc(orgDeptOf(u)) : ''} &nbsp;&middot;&nbsp; \${esc(dayName(today))} \${esc(dayLabel(today))} \${ty}</p>`,
+`      <p>\${esc(titleOf(u) || ROLELABEL[role])}\${orgDeptOf(u) ? ' &middot; '+esc(orgDeptOf(u)) : ''}</p>`,
+'the welcome panel stops repeating the bar');
+
+/* ==================== My commission, after a page-by-page read ==============
+ *
+ *   'Hero and settlement have the same details. Forfeited is missing in the
+ *    hero, you can add it there'
+ *   'Settlement box goes off'
+ *   'Commission, line by line | Your band | Money not counted — put the above
+ *    in the same row by fixing column width'                        -- Avin
+ *
+ * The Settlement panel held four lines: earned, paid, forfeited, balance. The
+ * strip along the top held three of the four already, and carried the fourth
+ * as a footnote under Paid — 'nothing forfeited' — which is the one figure
+ * somebody would look for and the only one they could not read as a number.
+ *
+ * So forfeited becomes a figure of its own and the panel goes. What was said
+ * twice is said once, and the three panels left fit one row.
+ */
+
+/* Forfeited earns a tile. It sits after Paid because that is the order the
+   money moves in: earned, paid, forfeited, and what is left owed. */
+app = swap(app,
+`    <div class="stat"><span class="k">Paid to date</span><span class="v"><span class="cur">AED</span>\${money(e.paid,2)}</span>
+      <span class="n">\${e.lost>0?\`<span class="pill bad"><span class="dt"></span>\${money(e.lost,2)} forfeited</span>\`:'nothing forfeited'}</span></div>`,
+`    <div class="stat"><span class="k">Paid to date</span><span class="v"><span class="cur">AED</span>\${money(e.paid,2)}</span>
+      <span class="n">\${e.paid>0&&e.comm>0?pct(e.paid/e.comm,0)+' of what was earned':'nothing paid yet'}</span></div>
+    <div class="stat\${e.lost>0?' bad':''}"><span class="k">Forfeited</span>
+      <span class="v"><span class="cur">AED</span>\${money(e.lost,2)}</span>
+      <span class="n">\${e.lost>0?'collections more than a month late':'every collection landed in time'}</span></div>`,
+'forfeited is a figure, not a footnote');
+
+/* The Settlement panel goes, and the three that are left become one row.
+ *
+ * Its 'why it was forfeited' note is the one thing in it that was not said
+ * elsewhere, so that moves under the figure it explains rather than being
+ * lost with the panel. */
+{
+  const start = app.indexOf(`    <section class="panel">
+      <header><h3>Settlement</h3></header>`);
+  if(start < 0) throw new Error('the Settlement panel is not where this expects it');
+  const end = app.indexOf('</section>', app.indexOf('</dl>', start));
+  if(end < 0) throw new Error('the Settlement panel has no end');
+  app = app.slice(0, start) + app.slice(end + '</section>'.length);
+  console.log('commission  Settlement panel removed — the strip already said it');
+}
+
+/* The two rows of two become one row of three. g2 is a pair; the three panels
+   want a row that will not squeeze the band table, which has five columns. */
+app = swap(app,
+`  <div class="grid g2">
+    <section class="panel">
+      <header><h3>\${fy?'2026 commission, bucket by bucket':p+' commission, line by line'}</h3></header>`,
+`  <div class="grid commrow">
+    <section class="panel">
+      <header><h3>\${fy?'2026 commission, bucket by bucket':p+' commission, line by line'}</h3></header>`,
+'the three panels open one row');
+
+app = swap(app,
+`  <div class="grid g2">
+    <section class="panel">
+      <header><h3>\${flat?'Your arrangement':'Your band'}</h3>\${fy?'<span class="hint">bands are set per quarter</span>':''}</header>`,
+`    <section class="panel">
+      <header><h3>\${flat?'Your arrangement':'Your band'}</h3>\${fy?'<span class="hint">bands are set per quarter</span>':''}</header>`,
+'the band panel joins it rather than starting a second');
+
+/* Removing the Settlement panel left the row it shared closing early, with the
+   band and the not-counted panels outside it. One row, three panels in it. */
+app = swap(app,
+`    </section>
+
+
+  </div>
+
+    <section class="panel">
+      <header><h3>\${flat?'Your arrangement':'Your band'}</h3>`,
+`    </section>
+
+    <section class="panel">
+      <header><h3>\${flat?'Your arrangement':'Your band'}</h3>`,
+'the row stays open for all three');
+
+app = swap(app,
+`  return \`
+  <div class="strip">
+    <div class="stat"><span class="k">Eligible net sales · \${fy?esc(state.year):p}</span>`,
+`  return \`
+  <div class="strip five">
+    <div class="stat"><span class="k">Eligible net sales · \${fy?esc(state.year):p}</span>`,
+'and My commission says it has five');
+
+/* The two columns that wrap get the treatment the people columns already had:
+   truncated, with the whole value on hover. */
+/* data-full, not title. The portal already has a hover for a cut cell — one
+   panel, styled like the rest of it, that works on a long-press too — and
+   checklook knows that attribute is what makes a clipped cell readable. A
+   browser tooltip would have looked the same to a person and invisible to the
+   check that exists to catch exactly this. */
+app = swap(app,
+`          <td class="n nw">\${esc(r[IC.pr])||'<span style="color:var(--ink3)">—</span>'}</td>`,
+`          <td class="n prno"\${full(r[IC.pr])}>\${esc(r[IC.pr])||'<span style="color:var(--ink3)">—</span>'}</td>`,
+'the PR number is hover');
+
+app = swap(app,
+`          <td class="cname">\${esc(r[IC.client])}\${r[IC.forfeit]>0?' <span class="pill bad"><span class="dt"></span>Late</span>':''}</td>`,
+`          <td class="cname"\${full(r[IC.client])}>\${esc(r[IC.client])}\${r[IC.forfeit]>0?' <span class="pill bad"><span class="dt"></span>Late</span>':''}</td>`,
+'and so is the company name');
+
+/* ===================================== the wider picture, narrowed =========
+ *
+ *   'My Mistake: The department and Team leaderboard was for Me, Miraziz and
+ *    Manager (Rana) only. Please revert this'                         -- Avin
+ *
+ * Both had been opened to everybody the department's figures reach, which
+ * since 0043 is every active sales employee.
+ *
+ * The gate does NOT ask what somebody's job title is. 'Any department
+ * manager' is the rule that looks right and quietly catches a fourth person —
+ * there is a manager of Accounting & Tax and a manager of POA Operations, and
+ * neither is on Avin's list of three. It asks instead which of the two
+ * company rows the database sent: 0032 keeps sales_company for accounts, the
+ * owner and the sales-viewers list, and hands everybody else
+ * sales_company_mine with the four things only this screen draws taken out.
+ * DATA.fullFigures is which one arrived, so the gate and the policy cannot
+ * drift apart, and 'who' is a list Avin can read and change rather than a
+ * rule he has to work out.
+ *
+ * Team performance is deliberately NOT touched. It was asked for separately
+ * and has not been withdrawn, so it keeps the gate it has: the department's
+ * figures arrived, and there is somebody in them besides you.
+ *
+ * The leaderboard is the honest exception. It ranks the same names and net
+ * sales that Team performance puts in a table, so hiding it is a decision
+ * about a page and nothing more. Said out loud rather than implied.
+ */
+app = swap(app,
+`  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
+   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+`  // Back to the few it was for. The roster test stays underneath it: a
+  // ranking of one person is not a ranking.
+  {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
+   gate:u => DATA.fullFigures && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
+  'the leaderboard is for whoever the database sends the whole company row');
+
+app = swap(app,
+`  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},`,
+`  // And the Department screen with it. 0032 takes the top clients, the client
+  // count, the status mix and the new/existing split out of what everybody
+  // else is sent, so the tab going is not the only thing keeping them out.
+  {id:'company',     group:'wider', label:'Department',       title:'Department',
+   gate:u => DATA.fullFigures && seesDeptSales(u)},`,
+  'and so is the Department screen');
+
+fs.writeFileSync(path.join(OUT,'index.html'),
+`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>CorpLex One</title>
+<!-- Installable to a home screen: an icon, no browser chrome, and — on
+     Android and on iOS 16.4 and later, once it has been added — notifications
+     that arrive while the app is closed. No store, no fee, no review queue. -->
+<link rel="manifest" href="manifest.webmanifest?v=${build}">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<meta name="theme-color" content="#2A1B33">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CorpLex One">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+</head>
+<body style="margin:0">
+${shell}
+<!-- The build number lives here, in the one file that is never cached, so a
+     new index.html is on its own enough to pull a new app.js. It used to live
+     only in config.js — which meant that forgetting to upload config.js left
+     app.js?v=1 pointing at a year-cached copy, and a deploy that changed
+     nothing. That is a mistake worth making unrepeatable. -->
+<script>window.__BUILD = '${build}';</script>
+<script src="config.js?v=${build}"></script>
+<script type="module" src="boot.js?v=${build}"></script>
+</body>
+</html>
+`);
+
+fs.writeFileSync(path.join(OUT,'app.js'), app);
+
+// map.js and boot.js are hand-written and live in web/ already.
+// config.js is written once and then left alone.
+const cfgPath = path.join(OUT,'config.js');
+if(!fs.existsSync(cfgPath)) fs.writeFileSync(cfgPath,
+`window.CORPLEX_ONE = {url:'', key:'', build:'${build}'};\n`);
+else fs.writeFileSync(cfgPath,
+  fs.readFileSync(cfgPath,'utf8').replace(/build:\s*'[^']*'/, `build: '${build}'`));
+
+/* Cloudflare Pages reads this. index.html and config.js name the build that
+   the rest of the files are cached under, so those two must always be checked
+   for a newer copy; everything else carries a build number in its address and
+   can be cached hard. Without this a stale index.html keeps loading the old
+   app.js and a deploy looks like it did nothing. */
+/* no-store rather than no-cache on the two files that name the build.
+ *
+ * no-cache means "keep a copy but ask before using it", which is correct and
+ * was not enough: Avin deployed a build, opened the portal, and did not get
+ * the new screen. Nothing was wrong with the deploy — his browser had served
+ * its stored index.html, which named the previous build, so app.js was
+ * fetched under the previous build's number and every new screen was missing.
+ * He reported the build as broken, which is exactly what it looked like, and
+ * clearing the cache fixed it.
+ *
+ * A revalidation that can be skipped is a revalidation that will be skipped.
+ * These two files are 128 KB and 158 bytes and are fetched once per visit, so
+ * refusing to store them at all costs nothing and removes a whole class of
+ * "the deploy did nothing" that has now cost three deploys. Everything else
+ * still caches hard, because everything else carries the build in its name. */
+fs.writeFileSync(path.join(OUT,'_headers'),
+`/index.html
+  Cache-Control: no-store, no-cache, must-revalidate
+/config.js
+  Cache-Control: no-store, no-cache, must-revalidate
+/sw.js
+  Cache-Control: no-cache, must-revalidate
+/manifest.webmanifest
+  Cache-Control: no-cache, must-revalidate
+/app.js
+  Cache-Control: public, max-age=31536000
+/boot.js
+  Cache-Control: public, max-age=31536000
+/map.js
+  Cache-Control: public, max-age=31536000
+/sales.js
+  Cache-Control: public, max-age=31536000
+`);
+
+const kb = f => (fs.statSync(path.join(OUT,f)).size/1024).toFixed(0)+' KB';
+console.log(`index.html  ${kb('index.html')}`);
+console.log(`app.js      ${kb('app.js')}`);
+console.log(`build       ${build}`);
+
+// A last check on the thing that matters most: no pay data in what ships.
+const bundle = fs.readFileSync(path.join(OUT,'app.js'),'utf8')
+             + fs.readFileSync(path.join(OUT,'index.html'),'utf8');
+const leaks = [];
+for(const probe of ['"salary":', '"basic":', '"net":', 'gratuity":{"policy"'])
+  if(bundle.includes(probe)) leaks.push(probe);
+if(leaks.length) throw new Error('pay data found in the bundle: ' + leaks.join(', '));
+console.log('no pay data in the bundle');
+
+/* And that it parses at all. A stray duplicate `const` shipped an app.js that
+ * threw on load, and the only reason it was caught was that a screenshot came
+ * out blank — nothing in the build noticed. */
+{
+  const {execFileSync} = await import('node:child_process');
+  try{ execFileSync(process.execPath, ['--check', path.join(OUT, 'app.js')], {stdio:'pipe'}); }
+  catch(e){ throw new Error('app.js does not parse:\n' + String(e.stderr || e.message)); }
+  console.log('syntax       app.js parses');
+}
+
+// And the thing that has now cost two deploys: if the page does not carry
+// this build's number, every browser keeps the app.js it already has.
+{
+  const html = fs.readFileSync(path.join(OUT,'index.html'),'utf8');
+  if(!html.includes(`window.__BUILD = '${build}'`))
+    throw new Error('index.html does not carry the build number — every deploy would be cached away');
+  console.log(`cache        index.html carries ${build}`);
+  // map.js was imported by a bare name while being cached for a year, so a
+  // browser that had it once could never be given a newer one.
+  const boot = fs.readFileSync(path.join(OUT,'boot.js'),'utf8');
+  if(!/import\(\s*'\.\/map\.js\?v='/.test(boot))
+    throw new Error('boot.js imports map.js without a build number — it would be cached forever');
+  console.log('cache        map.js is fetched by build, not by name');
+}

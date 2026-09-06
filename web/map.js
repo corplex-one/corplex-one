@@ -1054,14 +1054,40 @@ function buildSales(db, byId, name, companies){
     docs: (filesOf[r.id] || []).length
   })).sort((a, b) => String(b.at).localeCompare(String(a.at)));
 
+  /* The company aggregate, whole or narrowed.
+   *
+   * sales_company is the Department screen: the monthly series and the target,
+   * but also the top clients, the client count, the status mix and the new/
+   * existing split. Since 0032 it is read by accounts, the owner, the
+   * sales-viewers list and a manager of a department that earns revenue —
+   * which is who the Department screen is for.
+   *
+   * Everybody else is sent sales_company_mine, the same row with those four
+   * things removed. It is what Team performance's headline is made of, so a
+   * consultant still gets their department's name, its net sales and its
+   * target — and no client book beyond the one the payment request form has
+   * always shown them.
+   *
+   * Whole first: somebody who reads both must not be given the narrow one. */
+  const coRows = (db.sales_company && db.sales_company.length)
+    ? db.sales_company
+    : (db.sales_company_mine || []);
+
+  /* Which of the two arrived. The Department screen and the leaderboard ask
+   * this rather than asking what somebody's job title is: the database
+   * decided, and a gate that reads the answer cannot drift away from it. A
+   * rule the screen works out for itself is how the Department screen quietly
+   * opened for a fourth person the first time round. */
+  out.fullFigures = !!(db.sales_company && db.sales_company.length);
+
   out.yearFigures = {};
-  (db.sales_company || []).forEach(a => { out.yearFigures[String(a.year)] = a.figures || {}; });
-  const agg = (db.sales_company || []).slice().sort((a,b) => b.year - a.year)[0];
+  coRows.forEach(a => { out.yearFigures[String(a.year)] = a.figures || {}; });
+  const agg = coRows.slice().sort((a,b) => b.year - a.year)[0];
   if(agg) Object.assign(out, agg.figures || {});
   out.figureKeys = agg ? Object.keys(agg.figures || {}) : [];
 
   Object.values(companies).forEach(c => { c.sales = false; });
-  (db.sales_company || []).forEach(a => {
+  coRows.forEach(a => {
     if(companies[a.company]) companies[a.company].sales = true;
   });
 

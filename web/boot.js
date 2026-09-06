@@ -111,6 +111,12 @@ const TABLES = {
   ticket_rates:     ['ticket_rates', 'country', true],
   sales_members:    ['sales_members', null, true],
   sales_company:    ['sales_company'],
+  /* The same row with the four things only the Department screen draws taken
+     out — the top clients, the client count, the status mix and the new/
+     existing split. Everybody reads this; only accounts, the owner and a
+     manager of a revenue department read the table above. Optional, because
+     it is created by 0032 and the code goes up first. */
+  sales_company_mine: ['sales_company_mine', null, true],
   sales_bands:      ['sales_bands'],
   sales_uploads:    ['sales_uploads'],
   payment_requests: ['payment_requests'],

@@ -9165,9 +9165,15 @@ const TABS = [
   // is anybody in them besides you.
   {id:'team',        group:'wider', label:'Team performance', title:'Team performance',
    gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},
+  // Back to the few it was for. The roster test stays underneath it: a
+  // ranking of one person is not a ranking.
   {id:'leaderboard', group:'wider', label:'Team leaderboard', title:'Leaderboard',
-   gate:u => seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},
-  {id:'company',     group:'wider', label:'Department',       title:'Department', gate:seesDeptSales},
+   gate:u => DATA.fullFigures && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},
+  // And the Department screen with it. 0032 takes the top clients, the client
+  // count, the status mix and the new/existing split out of what everybody
+  // else is sent, so the tab going is not the only thing keeping them out.
+  {id:'company',     group:'wider', label:'Department',       title:'Department',
+   gate:u => DATA.fullFigures && seesDeptSales(u)},
   {id:'tools',       group:'other', label:'Calculator', title:'Calculator'},
   // payment requests are a CorpLex process; POA and Lex do not use them
   {id:'payment',     group:'other', label:'Payment request',  title:'Payment request', gate:u=>coInView(u)==='corplex'},
