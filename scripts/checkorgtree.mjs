@@ -36,7 +36,7 @@ const T = {companies:'companies', employees:'staff_directory', private:'employee
  gratuity_rows:'gratuity_rows', gratuity_basic:'gratuity_basic', loans:'loans', letters:'letters',
  employee_files:'employee_files', company_docs:'company_docs', exits:'exits',
  tickets:'ticket_entitlements', ticket_history:'ticket_history', ticket_rates:'ticket_rates',
- sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company', sales_company_mine:'sales_company_mine',
+ sales_invoices:'sales_invoices', sales_commission:'sales_commission', sales_company:'sales_company',
  sales_bands:'sales_bands', sales_uploads:'sales_uploads',
  payment_requests:'payment_requests', payment_files:'payment_files'};
 const AVIN = json(`select coalesce(json_agg(t),'[]') from (select id,auth_user_id from employees where full_name='Avin Mascarenhas') t`)[0];
@@ -138,17 +138,15 @@ for(const t of T2.trees){
 ok('and the page explains why the owner is on every tree',
    /heads all three companies/.test(T2.text), T2.text.slice(-260));
 
-/* And the group that only exists when it has to. */
-const noneCos = ['corplex', 'poa', 'lex'].filter(k =>
-  T2.roster.some(r => T2.coOf[r] === k && !T2.deptOfAll[r]));
-ok('"No department set" is shown exactly where somebody has none',
-   ['corplex', 'poa', 'lex'].every(k => {
-     const t = T2.trees[['corplex','poa','lex'].indexOf(k)];
-     if(!t) return true;
-     const drawn = /No department set/.test(t.depts.join(' | '));
-     return drawn === noneCos.includes(k);
-   }),
-   {expected: noneCos, drawn: T2.trees.map(t => [t.co, /No department set/.test(t.depts.join(' | '))])});
+/* This used to assert that a group called 'No department set' appeared on
+   exactly the trees that needed one. Avin: 'remove no department set (i have
+   asked this a 1000 times)'. It was never a department — it was a heading the
+   chart invented over people whose record is simply incomplete, which labels
+   the person rather than the gap. So the assertion is inverted: no tree has
+   one, on any company, whoever is missing a department. */
+ok('no tree invents a department to file people under',
+   T2.trees.every(t => !/No department/i.test(t.depts.join(' | '))),
+   T2.trees.map(t => [t.co, t.depts]));
 
 /* ------------------------------------------------- #26, study leave is paid */
 await page.evaluate(() => { state.mode = 'console'; state.tab = 'leaverules'; render(); });
@@ -165,6 +163,71 @@ ok('and it is not described as unpaid',
 ok('and the portal itself has it as paid',
    await page.evaluate(() => (REQTYPES.find(t => t.id === 'Study') || {}).pay) === 'full',
    await page.evaluate(() => (REQTYPES.find(t => t.id === 'Study') || {}).pay));
+
+/* ================================================ what the chart may not say
+ *
+ *   'And why the hell have you put "left the firm" below Miraziz name. Are you
+ *    alright? You want me kicked out of the company?'
+ *   'remove the orange color on sales employees and department - it creates
+ *    negative impression on the staff'
+ *   'remove no department set (i have asked this a 1000 times)'
+ *   'Remove "earns revenue — appears in that company's performance pages ,
+ *    support — does not sell, and never shows a sales figure"'        -- Avin
+ *
+ * The libel is the one that matters. roleOf fell back to 'former' when a name
+ * was not in the roles map, ROLELABEL['former'] is 'Left the firm', and the
+ * card printed the role label whenever somebody had no designation — so a
+ * missing job title on the owner's record announced, to everybody, that he had
+ * gone. Asserted from two directions: the words are not on the page, and the
+ * function that produced them cannot produce them for anybody on the roster.
+ */
+console.log('\nwhat the chart says about people');
+await page.evaluate(() => { state.mode = 'staff'; state.tab = 'people'; state.peopleTab = 'org'; render(); });
+await page.waitForTimeout(250);
+{
+  const r = await page.evaluate(() => {
+    const roster = USERS.map(u => u.name);
+    return {
+      txt: document.getElementById('view').innerText,
+      rev: document.querySelectorAll('#view .rev').length,
+      legend: document.querySelectorAll('#view .orglgd').length,
+      formerOnRoster: roster.filter(x => roleOf(x) === 'former'),
+      strangerIsFormer: roleOf('Somebody Who Never Worked Here') === 'former',
+      /* everybody the chart should carry, by the name it shows them under */
+      missing: roster.filter(x => x !== (USERS.find(u => u.role === 'owner') || {}).name)
+                 .map(x => nm(x).replace(/<[^>]*>/g, ''))
+                 .filter(shown => !document.getElementById('view').innerText.includes(shown))
+    };
+  });
+  ok('nobody on the chart is told they left the firm', !/Left the firm/i.test(r.txt));
+  ok('and roleOf cannot say it about anybody on the roster',
+     r.formerOnRoster.length === 0, r.formerOnRoster);
+  ok('while a name that is not on the roster still reads as former',
+     r.strangerIsFormer === true);
+  ok('no department or person is coloured for earning revenue', r.rev === 0, r.rev);
+  ok('and the legend that explained the colour is gone', r.legend === 0, r.legend);
+  ok('nothing is filed under a department called No department set',
+     !/No department set/i.test(r.txt));
+  ok('nor does the caption still describe either', !/earns revenue|does not sell/i.test(r.txt));
+  ok('and nobody has dropped off the chart', r.missing.length === 0, r.missing);
+}
+{
+  /* Taking somebody's department away must not take them off the chart — that
+     was what the invented department was holding up. */
+  const r = await page.evaluate(() => {
+    const victim = USERS.map(u => u.name).find(x => orgDeptOf(x)
+      && x !== (USERS.find(u => u.role === 'owner') || {}).name);
+    const hr = HR();
+    if(hr.staff && hr.staff[victim]) hr.staff[victim].dept = '';
+    if(hr.orgDept) hr.orgDept[victim] = '';
+    render();
+    const t = document.getElementById('view').innerText;
+    return {victim, shown: t.includes(nm(victim).replace(/<[^>]*>/g, '')),
+            heading: /No department/i.test(t)};
+  });
+  ok('somebody with no department is still on the chart', r.shown === true, r);
+  ok('and no heading is invented for them', r.heading === false, r);
+}
 
 fs.mkdirSync('/tmp/look', {recursive: true});
 await page.evaluate(() => { state.mode = 'staff'; state.tab = 'people'; state.peopleTab = 'org'; render(); });

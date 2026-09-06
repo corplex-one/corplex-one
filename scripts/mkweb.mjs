@@ -17082,6 +17082,134 @@ app = swap(app,
    gate:u => canSeeTeam(u) && seesDeptSales(u) && Object.keys(DATA.engine || {}).length > 1},`,
   'and so does the leaderboard');
 
+/* ======================= the organisation chart, and a libel ==============
+ *
+ *   'And why the hell have you put "left the firm" below Miraziz name. Are you
+ *    alright? You want me kicked out of the company? There is no designation
+ *    on his staff records - hence you show it as left the firm?'      -- Avin
+ *
+ * Yes — that is exactly why, and it is indefensible. roleOf falls back to
+ * 'former' when a name is not in the roles map, ROLELABEL['former'] is 'Left
+ * the firm', and the org card prints the role label whenever somebody has no
+ * designation. So a missing job title on the OWNER's record printed, under his
+ * name, on a chart the whole company can open, that he had left.
+ *
+ * Two things were wrong and both are fixed.
+ *
+ * FIRST, 'former' is a fallback and should never have been. Somebody on the
+ * staff roster with no role row is staff — not a leaver. 'Former' means one
+ * thing only: a name that appears in the sales figures and is not on the
+ * roster at all, which is how a person who has actually left still shows
+ * against last year's invoices. That is now the only way to be told apart.
+ *
+ * SECOND, the org card should not invent a subtitle. A card with a name and no
+ * designation is a card with no designation. It does not guess.
+ */
+app = swap(app,
+`const roleOf = u => ROLE[u] || 'former';`,
+`/* Not 'former' as a fallback. A name on the staff roster with no role row is
+   staff; only a name that is NOT on the roster — one that appears in the sales
+   figures and nowhere else — has left. A missing lookup must never be able to
+   say somebody has gone. */
+const ONROSTER = new Set(USERS.map(u => u.name));
+const roleOf = u => ROLE[u] || (ONROSTER.has(u) ? 'staff' : 'former');`,
+  'a missing role no longer says somebody left the firm');
+
+app = swap(app,
+`      <span class="otn2">\${esc(titleOf(n) || ROLELABEL[roleOf(n)])}</span>`,
+`      \${titleOf(n) ? \`<span class="otn2">\${esc(titleOf(n))}</span>\` : ''}`,
+  'and the org card does not invent one');
+
+/* ---- the colour, the pseudo-department and the legend.
+ *
+ *   'remove the orange color on sales employees and department - it creates
+ *    negative impression on the staff'
+ *   'remove no department set (i have asked this a 1000 times)'
+ *   'Remove "earns revenue — appears in that company's performance pages ,
+ *    support — does not sell, and never shows a sales figure"'        -- Avin
+ *
+ * The orange said 'this department earns and that one does not', which on an
+ * organisation chart everybody can open reads as a ranking of people rather
+ * than a note about reporting. It is the sort of thing that is defensible on a
+ * dashboard and unkind on a chart of names. It goes, and the legend explaining
+ * it goes with it — there is nothing left to explain.
+ *
+ * 'No department set' was never a department. It was a box the chart invented
+ * for people who have not been given one, which put a label on somebody rather
+ * than on a gap in the record. Those people now hang from the company itself,
+ * as cards, with no heading over them: nobody disappears and nothing is named
+ * that does not exist.
+ */
+app = swap(app,
+`  const rev = REVDEPT(co).includes(d) || !!SALESEXTRA(n);
+  return \`<button class="otn\${cls?' '+cls:''}" data-who="\${esc(n)}" type="button">`,
+`  return \`<button class="otn\${cls?' '+cls:''}" data-who="\${esc(n)}" type="button">`,
+  'no colour on a person for the department they are in');
+
+app = swap(app,
+`    \${(d && !hideDept) ? \`<span class="otd\${rev?' rev':''}">\${esc(d)}</span>\` : ''}`,
+`    \${(d && !hideDept) ? \`<span class="otd">\${esc(d)}</span>\` : ''}`,
+  'nor on the department tag under their name');
+
+app = swap(app,
+`function orgDeptNode(co, dept, people, owner){
+  const rev = REVDEPT(co).includes(dept);
+  const list = people.filter(n => n !== owner).sort((a,b)=>{`,
+`function orgDeptNode(co, dept, people, owner){
+  const list = people.filter(n => n !== owner).sort((a,b)=>{`,
+  'and none on the department itself');
+
+app = swap(app,
+`    <div class="otdept\${rev?' rev':''}">`,
+`    <div class="otdept">`,
+  'the department box is one colour, whatever it earns');
+
+/* The legend explained the colour. There is no colour. */
+app = swap(app,
+`  /* The colours, said where they are being looked at rather than in a caption
+   * under the whole page. Orange earns; grey supports. */
+  const legend = \`<div class="orglgd">
+    <span><i class="rev"></i>earns revenue &mdash; appears in that company&rsquo;s performance pages</span>
+    <span><i></i>support &mdash; does not sell, and never shows a sales figure</span>
+  </div>\`;`,
+`  const legend = '';`,
+  'and there is no legend for it either');
+
+/* 'No department set' stops being a department. */
+app = swap(app,
+`    roll.forEach(n => { const d = orgDeptOf(n) || 'No department set'; (byDept[d]=byDept[d]||[]).push(n); });`,
+`    /* Somebody with no department is not in a department called 'No
+       department set'. They are held aside and shown under the company
+       itself, so the chart names nothing that does not exist. */
+    const loose = [];
+    roll.forEach(n => { const d = orgDeptOf(n);
+      if(d) (byDept[d]=byDept[d]||[]).push(n); else if(n !== owner) loose.push(n); });`,
+  'nobody is filed under a department that does not exist');
+
+app = swap(app,
+`          <li>\${orgBox(owner, 'col', true)}
+            \${order.length ? \`<ul>\${order.map(d=>orgDeptNode(c.key, d, byDept[d], owner)).join('')}</ul>\` : ''}
+          </li>`,
+`          <li>\${orgBox(owner, 'col', true)}
+            \${(order.length || loose.length) ? \`<ul>\${
+              order.map(d=>orgDeptNode(c.key, d, byDept[d], owner)).join('')
+              + loose.sort().map(n=>\`<li>\${orgBox(n, '', true)}</li>\`).join('')
+            }</ul>\` : ''}
+          </li>`,
+  'and they hang from the company instead');
+
+app = swap(app,
+`  }).join('') + \`
+  <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Grouped by department. A department in the accent colour earns revenue and appears in that company&rsquo;s performance pages; a grey one is support. Managers are listed first within their department. \${esc(owner)} heads all three companies, so he sits at the top of each tree rather than inside a department. Click anyone to open their page &mdash; their card shows who they report to.
+  <b>No department set</b> is not a department: it is everyone who has not been given one yet, and it disappears
+  as they are.</p>\`;`,
+`  }).join('') + \`
+  <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Grouped by department, managers first.
+  \${esc(owner)} heads all three companies, so he sits at the top of each tree rather than inside a department.
+  Anyone without a department yet sits under the company. Click anyone to open their page &mdash; their card
+  shows who they report to.</p>\`;`,
+  'and the caption says what is there');
+
 /* ---- a count is a queue, not a filing cabinet.
  *
  *   'Do not show numbers next to past payments, its just for approve

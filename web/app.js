@@ -45,7 +45,12 @@ const ROLE = Object.fromEntries(Object.entries(DATA._roles || {}).map(([n, rs]) 
         .sort((a,b) => RANK.indexOf(b) - RANK.indexOf(a))[0] || 'staff']));
 const COMPANIES = ['CorpLex','POA','Lex Estates'];
 const ROLELABEL = {staff:'Consultant', manager:'Department manager', admin:'Accounts manager', owner:'Owner', former:'Left the firm'};
-const roleOf = u => ROLE[u] || 'former';
+/* Not 'former' as a fallback. A name on the staff roster with no role row is
+   staff; only a name that is NOT on the roster — one that appears in the sales
+   figures and nowhere else — has left. A missing lookup must never be able to
+   say somebody has gone. */
+const ONROSTER = new Set(USERS.map(u => u.name));
+const roleOf = u => ROLE[u] || (ONROSTER.has(u) ? 'staff' : 'former');
 const FORMER = Object.keys(DATA.engine).filter(n=>!ROLE[n]).sort();
 /* The department's figures: the sales_company aggregate arrived, so this
    person may read what the whole department did. */
@@ -1997,26 +2002,24 @@ function orgKids(n, coKey){
 function orgBox(n, cls, hideDept){
   const co = ((HR().orgCo||{})[n]) || companyOf(n).key;
   const d = orgDeptOf(n);
-  const rev = REVDEPT(co).includes(d) || !!SALESEXTRA(n);
   return `<button class="otn${cls?' '+cls:''}" data-who="${esc(n)}" type="button">
     ${avatar(n)}
     <span class="otwho">
       <span class="otn1">${nm(n)}</span>
-      <span class="otn2">${esc(titleOf(n) || ROLELABEL[roleOf(n)])}</span>
+      ${titleOf(n) ? `<span class="otn2">${esc(titleOf(n))}</span>` : ''}
     </span>
-    ${(d && !hideDept) ? `<span class="otd${rev?' rev':''}">${esc(d)}</span>` : ''}
+    ${(d && !hideDept) ? `<span class="otd">${esc(d)}</span>` : ''}
   </button>`;
 }
 /* The tree groups by department. The owner sits above all three companies, so he
    is shown once at the head of each and left out of his own department stack. */
 function orgDeptNode(co, dept, people, owner){
-  const rev = REVDEPT(co).includes(dept);
   const list = people.filter(n => n !== owner).sort((a,b)=>{
     const lead = n => (['manager','owner'].includes(roleOf(n)) || salesLead(n)) ? 0 : 1;
     return lead(a)-lead(b) || a.localeCompare(b);
   });
   return `<li>
-    <div class="otdept${rev?' rev':''}">
+    <div class="otdept">
       <span class="odn">${esc(dept)}</span>
       <span class="odc">${list.length}</span>
     </div>
@@ -2025,17 +2028,17 @@ function orgDeptNode(co, dept, people, owner){
 }
 function vOrg(){
   const owner = (USERS.find(u=>u.role==='owner')||{}).name;
-  /* The colours, said where they are being looked at rather than in a caption
-   * under the whole page. Orange earns; grey supports. */
-  const legend = `<div class="orglgd">
-    <span><i class="rev"></i>earns revenue &mdash; appears in that company&rsquo;s performance pages</span>
-    <span><i></i>support &mdash; does not sell, and never shows a sales figure</span>
-  </div>`;
+  const legend = '';
   const coOfOrg = n => ((HR().orgCo||{})[n]) || companyOf(n).key;
   return ['corplex','poa','lex'].map(k=>DATA.companies[k]).filter(Boolean).map(c=>{
     const roll = USERS.map(x=>x.name).filter(n => coOfOrg(n) === c.key);
     const byDept = {};
-    roll.forEach(n => { const d = orgDeptOf(n) || 'No department set'; (byDept[d]=byDept[d]||[]).push(n); });
+    /* Somebody with no department is not in a department called 'No
+       department set'. They are held aside and shown under the company
+       itself, so the chart names nothing that does not exist. */
+    const loose = [];
+    roll.forEach(n => { const d = orgDeptOf(n);
+      if(d) (byDept[d]=byDept[d]||[]).push(n); else if(n !== owner) loose.push(n); });
     const rev = REVDEPT(c.key);
     const order = Object.keys(byDept).filter(d => byDept[d].length).sort((a,b)=>{
       const r = d => rev.includes(d) ? 0 : 1;
@@ -2049,15 +2052,19 @@ function vOrg(){
       <div class="pad orgwrap">
         <ul class="ot">
           <li>${orgBox(owner, 'col', true)}
-            ${order.length ? `<ul>${order.map(d=>orgDeptNode(c.key, d, byDept[d], owner)).join('')}</ul>` : ''}
+            ${(order.length || loose.length) ? `<ul>${
+              order.map(d=>orgDeptNode(c.key, d, byDept[d], owner)).join('')
+              + loose.sort().map(n=>`<li>${orgBox(n, '', true)}</li>`).join('')
+            }</ul>` : ''}
           </li>
         </ul>
       </div>
     </section>`;
   }).join('') + `
-  <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Grouped by department. A department in the accent colour earns revenue and appears in that company&rsquo;s performance pages; a grey one is support. Managers are listed first within their department. ${esc(owner)} heads all three companies, so he sits at the top of each tree rather than inside a department. Click anyone to open their page &mdash; their card shows who they report to.
-  <b>No department set</b> is not a department: it is everyone who has not been given one yet, and it disappears
-  as they are.</p>`;
+  <p class="cap" style="color:var(--ink3);font-size:13px;margin:0">Grouped by department, managers first.
+  ${esc(owner)} heads all three companies, so he sits at the top of each tree rather than inside a department.
+  Anyone without a department yet sits under the company. Click anyone to open their page &mdash; their card
+  shows who they report to.</p>`;
 }
 
 function vPeople(){
